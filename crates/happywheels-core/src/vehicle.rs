@@ -5379,6 +5379,8 @@ pub struct Santa {
     pub wheels_gone: bool,
     /// Pieces born from smashes (broken sleigh / ski).
     pub debris: Vec<BodyId>,
+    /// Clip name of each `debris` body (`sleigh1..7`, `ski1..3`, `stem`).
+    pub debris_names: Vec<String>,
 }
 
 impl Santa {
@@ -5542,6 +5544,7 @@ impl Santa {
             sleigh_gone: false,
             wheels_gone: false,
             debris: Vec::new(),
+            debris_names: Vec::new(),
         };
         s.create_straps(world, guide, start)?;
         Some(s)
@@ -5828,6 +5831,7 @@ impl Santa {
         self.anti_grav.retain(|id| !self.wheels.contains(id));
         let ski = self.broken_ski.clone();
         let pieces = self.spawn_pieces(world, &src, &ski);
+        self.debris_names.extend((1..=pieces.len()).map(|i| format!("ski{i}")));
         self.debris.extend(&pieces);
         if !self.sleigh_gone {
             if let Some(old) = self.ski_shape.take() {
@@ -5872,6 +5876,7 @@ impl Santa {
         let lc = b.body(piece).sweep.local_center;
         b.body_mut(piece).linear_velocity = src.linear_velocity_from_local_point(lc);
         self.debris.push(piece);
+        self.debris_names.push("stem".into());
         if !self.sleigh_gone {
             for s in std::mem::take(&mut self.stem_shapes) {
                 world.b2_mut().destroy_shape(s);
@@ -5921,6 +5926,7 @@ impl Santa {
         self.sleigh_gone = true;
         let broken = self.broken_sleigh.clone();
         let pieces = self.spawn_pieces(world, &src, &broken);
+        self.debris_names.extend((1..=pieces.len()).map(|i| format!("sleigh{i}")));
         self.debris.extend(pieces);
         self.ski_smash(world);
         self.stem_smash(world, false);

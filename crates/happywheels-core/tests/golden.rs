@@ -2493,7 +2493,7 @@ fn sprites_draw_bike_frame_smash() {
 #[test]
 fn sprites_draw_dirt_and_pogo_smash() {
     let assets = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../assets-99tnk64n1mubaoc8w");
-    for (n, name) in [(5u32, "dirt"), (9, "pogo"), (6, "mower"), (1, "chair"), (10, "family"), (11, "heli"), (4, "cart")] {
+    for (n, name) in [(5u32, "dirt"), (9, "pogo"), (6, "mower"), (1, "chair"), (10, "family"), (11, "heli"), (4, "cart"), (8, "santa")] {
         let Some(mut sprites) = happywheels_core::sprites::Sprites::open(&assets, n) else { continue };
         let level = level::parse(
             "<levelXML><info v='1.99' x='1000' y='250'/><shapes>\
@@ -2516,6 +2516,7 @@ fn sprites_draw_dirt_and_pogo_smash() {
             Some(happywheels_core::vehicle::Vehicle::Heli(b)) => b.copter_smash(&mut w, &mut doll, box2d::math::Vec2::new(16.0, 6.0)),
             Some(happywheels_core::vehicle::Vehicle::Family(f)) => f.dad.frame_smash(&mut w, &mut doll),
             Some(happywheels_core::vehicle::Vehicle::Cart(c)) => c.main_smash(&mut w, &mut doll),
+            Some(happywheels_core::vehicle::Vehicle::Santa(s)) => s.sleigh_smash(&mut w, &mut doll),
             _ => panic!("unexpected vehicle"),
         }
         w.bike = bike;

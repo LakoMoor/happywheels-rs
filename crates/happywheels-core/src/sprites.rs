@@ -104,6 +104,8 @@ pub struct Sprites {
     shift: [f64; 2],
     /// City backdrop layers (bottom → top, with their parallax multiplier): baked buildings (`drawBuilding`).
     city: Vec<(f64, Vec<Building>)>,
+    /// Extra node names hidden for the current `draw` (Santa's `ski`/`stem` children after those parts broke off).
+    hidden: std::cell::RefCell<Vec<&'static str>>,
 }
 
 /// One baked `drawBuilding` result: the top `W` rows drawn once (and again `dup` px to the right) and `k` tiled rows below them.
@@ -159,7 +161,7 @@ impl Sprites {
         if pages.is_empty() {
             return None;
         }
-        Some(Self { clip, pages, bindings: Vec::new(), shift: [0.0, 0.0], city: Vec::new() })
+        Some(Self { clip, pages, bindings: Vec::new(), shift: [0.0, 0.0], city: Vec::new(), hidden: Default::default() })
     }
 
     /// Binds clip part `name` to `body`. The original's `paint` puts the clip at the body's centre of mass with the body's angle, so
@@ -214,7 +216,7 @@ impl Sprites {
         if pages.is_empty() {
             return None;
         }
-        Some(Self { clip, pages, bindings: Vec::new(), shift: [0.0, 0.0], city: Vec::new() })
+        Some(Self { clip, pages, bindings: Vec::new(), shift: [0.0, 0.0], city: Vec::new(), hidden: Default::default() })
     }
 
     /// City backdrop (`bg='2'`): `city_bd1` (fixed sky/clouds) below two layers of baked buildings (`backdrop2`: multiplier .25, blur 5;
@@ -531,6 +533,18 @@ impl Sprites {
 
     /// Draws every bound part plus the debris a smash leaves (chunks, brain, heart, helmet); `camera_offset` translates world px to image px.
     pub fn draw(&self, img: &mut RgbaImage, world: &World, camera_offset: (f32, f32)) {
+        {
+            let mut h = self.hidden.borrow_mut();
+            h.clear();
+            if let Some(crate::vehicle::Vehicle::Santa(s)) = world.bike.as_ref() {
+                if s.wheels_gone {
+                    h.push("ski");
+                }
+                if s.stem_gone {
+                    h.push("stem");
+                }
+            }
+        }
         for b in &self.bindings {
             self.draw_binding(img, world, camera_offset, b);
         }
@@ -582,6 +596,11 @@ impl Sprites {
                     self.draw_loose(img, world, camera_offset, name, body);
                 }
             }
+            Some(crate::vehicle::Vehicle::Santa(s)) => {
+                for (&body, name) in s.debris.iter().zip(&s.debris_names) {
+                    self.draw_loose(img, world, camera_offset, name, body);
+                }
+            }
             Some(crate::vehicle::Vehicle::Pogo(p)) => {
                 for (&body, name) in p.pieces.iter().zip(["brokenframe1", "brokenframe2", "spring"]) {
                     self.draw_loose(img, world, camera_offset, name, body);
@@ -626,7 +645,7 @@ impl Sprites {
     }
 
     fn draw_node(&self, img: &mut RgbaImage, n: &Node, parent: M) {
-        if HIDDEN.contains(&n.n.as_str()) {
+        if HIDDEN.contains(&n.n.as_str()) || self.hidden.borrow().contains(&n.n.as_str()) {
             return;
         }
         let m = mul(parent, local(n.x, n.y, n.r, n.sx, n.sy));
