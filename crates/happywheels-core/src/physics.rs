@@ -254,6 +254,8 @@ struct Glass {
     done: bool,
     /// Triangle pieces: (body, vertices in the body frame, px).
     pieces: Vec<(BodyId, [(f64, f64); 3])>,
+    /// Per piece (`nd`): (body, shape, shatter impulse 10·mass, particles, sound suffix); a Result above the impulse shatters the piece too.
+    shards: Vec<(BodyId, ShapeId, f64, u32, &'static str)>,
 }
 
 /// Toilet special (`$e`): a Result above 12 on the back breaks off the back (two pieces), on the base or bowl the base (two pieces).
@@ -971,7 +973,7 @@ impl World {
             let (suffix, particles) = if mass < 0.75 { ("Light", 100) } else if mass < 4.0 { ("Mid", 150) } else { ("Heavy", 200) };
             let strength = f64::from(sp.num("shatterStrength").unwrap_or(10.0));
             let half = (f64::from(sp.num("shapeWidth").unwrap_or(10.0)) / 2.0 / PS, f64::from(sp.num("shapeHeight").unwrap_or(100.0)) / 2.0 / PS);
-            self.glasses.push(Glass { body, shape: first, half, smash_impulse: (mass * strength).round(), particles, suffix, done: false, pieces: Vec::new() });
+            self.glasses.push(Glass { body, shape: first, half, smash_impulse: (mass * strength).round(), particles, suffix, done: false, pieces: Vec::new(), shards: Vec::new() });
         }
         if sp.kind == 19 && sp.flag("interactive") != Some(false) {
             self.b.c.report_results = true;
@@ -3481,6 +3483,19 @@ impl World {
     /// `Glass.checkContact` / `shatter`: the contact point (in the pane's frame) is clamped to an edge when within 5 cm of it (that side then has no
     /// triangles); every remaining side contributes two triangles (impact point, side point k, side point k+1) as bodies at the pane's centre.
     fn glass_events(&mut self, events: &[box2d::world::ContactEvent]) {
+        // Shards (`nd.singleAction`): a Result above 10·mass destroys the piece with a glass burst (50/100/200 by mass < .75 / < 4 / heavier) and Glass sound.
+        for k in 0..self.glasses.len() {
+            for s in 0..self.glasses[k].shards.len() {
+                let (b, shape, limit, particles, suffix) = self.glasses[k].shards[s];
+                if !self.b.body(b).alive || !events.iter().any(|e| e.kind == ContactEventKind::Result && (e.shape1 == shape || e.shape2 == shape) && e.normal_impulse > limit) {
+                    continue;
+                }
+                let src = self.b.body(b).clone();
+                self.rect_burst(&src, b, crate::blood::ShardKind::Food(5), 10.0, particles);
+                self.play(&format!("Glass{suffix}{}", 1 + (s % 2)), 2, src.sweep.c);
+                self.b.destroy_body(b);
+            }
+        }
         for k in 0..self.glasses.len() {
             if self.glasses[k].done {
                 continue;
@@ -3523,8 +3538,12 @@ impl World {
                     sd.friction = 0.3;
                     sd.restitution = 0.1;
                     sd.filter = Filter { category_bits: 8, mask_bits: 0xFFFF, group_index: 0 };
-                    self.b.create_shape(piece, &sd);
+                    let psh = self.b.create_shape(piece, &sd);
                     self.b.set_mass_from_shapes(piece);
+                    let pm = self.b.body(piece).mass;
+                    let (psuffix, pparticles) = if pm < 0.75 { ("Light", 50) } else if pm < 4.0 { ("Mid", 100) } else { ("Heavy", 200) };
+                    self.b.c.report_results = true;
+                    self.glasses[k].shards.push((piece, psh, 10.0 * pm, pparticles, psuffix));
                     let com = self.b.body(piece).sweep.c;
                     self.b.body_mut(piece).angular_velocity = w;
                     self.b.body_mut(piece).linear_velocity = src.linear_velocity_from_world_point(com);
@@ -4575,6 +4594,28 @@ mod tests {
         assert!(w.b.c.bodies[soft].alive);
         assert_eq!(w.log_halves().count(), 2, "{:?}", w.b.c.bodies[hard].alive);
         assert!(!w.b.c.bodies[hard].alive);
+    }
+
+    /// Glass pieces are shards too: a hard hit on a piece (Result above 10·its mass) destroys it with a burst of glass.
+    #[test]
+    fn glass_pieces_shatter_again() {
+        let xml = "<levelXML><info v='1.99'/><shapes><sh t='0' p0='1000' p1='450' p2='3000' p3='50' p4='0' p5='t' p6='f' p7='1' p8='0' p9='-1' p10='100' p11='1'/></shapes><specials><sp t='18' p0='900' p1='380' p2='100' p3='20' p4='0' p5='f' p6='10' p7='t'/></specials></levelXML>";
+        let mut w = World::from_level(&crate::level::parse(xml).unwrap());
+        let pane = w.special_bodies[0].unwrap();
+        w.b.body_mut(pane).linear_velocity = Vec2::new(0.0, 60.0);
+        for _ in 0..4 {
+            w.step();
+        }
+        let pieces: Vec<_> = w.glass_pieces().map(|p| p.0).collect();
+        assert!(!pieces.is_empty());
+        for &p in &pieces {
+            w.b.body_mut(p).linear_velocity = Vec2::new(0.0, 120.0);
+        }
+        for _ in 0..40 {
+            w.step();
+        }
+        let alive = pieces.iter().filter(|&&p| w.b.c.bodies[p].alive).count();
+        assert!(alive < pieces.len(), "some pieces break again ({alive}/{})", pieces.len());
     }
 
     /// A smashed food item leaves four circle chunks and 30 juice particles, and its body is gone.

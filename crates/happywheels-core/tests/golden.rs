@@ -3177,3 +3177,26 @@ fn log_shot() {
     let sp = happywheels_core::sprites::Sprites::open(&assets, 1).unwrap();
     happywheels_core::render::render_level_scene(&level, &w, 600, 360, [best.1[0], best.1[1].min(380.0)], Some(&sp), None).save(path).unwrap();
 }
+
+/// HW_SHOT_GLASS=<png>: a pane shatters into triangles, then the triangles hit the floor hard and break again into shards.
+#[test]
+fn glass_shot() {
+    use box2d::math::Vec2;
+    let Some(path) = std::env::var_os("HW_SHOT_GLASS") else { return };
+    let Some(assets) = Some(std::path::PathBuf::from("../../../assets-99tnk64n1mubaoc8w")).filter(|p| p.join("animate/game/l").exists()) else { return };
+    let level = level::parse("<levelXML><info v='1.99'/><shapes><sh t='0' p0='1000' p1='450' p2='3000' p3='50' p4='0' p5='t' p6='f' p7='1' p8='0' p9='-1' p10='100' p11='1'/></shapes><specials><sp t='18' p0='900' p1='380' p2='100' p3='20' p4='0' p5='f' p6='10' p7='t'/><sp t='18' p0='1100' p1='380' p2='100' p3='20' p4='0' p5='f' p6='10' p7='t'/></specials></levelXML>").unwrap();
+    let mut w = World::from_level(&level);
+    let pane = w.special_bodies[0].unwrap();
+    w.b2_mut().body_mut(pane).linear_velocity = Vec2::new(0.0, 60.0);
+    for _ in 0..4 {
+        w.step();
+    }
+    for p in w.glass_pieces().map(|p| p.0).collect::<Vec<_>>() {
+        w.b2_mut().body_mut(p).linear_velocity = Vec2::new(0.0, 120.0);
+    }
+    for _ in 0..8 {
+        w.step();
+    }
+    let sp = happywheels_core::sprites::Sprites::open(&assets, 1).unwrap();
+    happywheels_core::render::render_level_scene(&level, &w, 700, 360, [1000.0, 300.0], Some(&sp), None).save(path).unwrap();
+}
