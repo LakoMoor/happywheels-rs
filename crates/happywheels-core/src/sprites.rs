@@ -605,6 +605,7 @@ impl Sprites {
             15 => "harpoon-gun-base-2.png",
             28 => "jet-ref.png",
             35 => "paddle-paddle.png",
+            12 => "boost-1718.png",
             25 => "homing-mine-jet.png",
             29 => "arrow-asset-1650.png",
             _ => return false,
@@ -775,6 +776,35 @@ impl Sprites {
                 place(self, img, &clips[0], mul(cam, local(x, y, a, 1.0, 1.0)));
                 let pad = world.special_bodies.get(i).copied().flatten().filter(|&b| world.body_center_px(b).is_some());
                 place(self, img, &clips[1], mul(cam, pad.map_or_else(|| local(x, y, a, 1.0, 1.0), |b| body_matrix(world, b))));
+                continue;
+            }
+            // Boost pad: `numPanels` `BoostPanelMC` (18 frames) 180 px apart centred on (x, y), rotated by the level angle; panel k starts at frame
+            // `1 − 4k (mod 18)` and plays one frame per step (`gotoAndPlay`). Frame phase vs. the original's timeline start is not verified.
+            if sp.kind == 12 {
+                #[derive(Deserialize)]
+                struct Frames {
+                    frames: Vec<Vec<Node>>,
+                }
+                static PANEL: std::sync::OnceLock<Vec<Vec<Node>>> = std::sync::OnceLock::new();
+                let panel = PANEL.get_or_init(|| serde_json::from_str::<Frames>(include_str!("../data/game-BoostPanelMC.json")).map(|f| f.frames).unwrap_or_default());
+                if panel.is_empty() {
+                    continue;
+                }
+                let (x, y, a) = (f64::from(sp.num("x").unwrap_or(0.0)), f64::from(sp.num("y").unwrap_or(0.0)), f64::from(sp.num("angle").unwrap_or(0.0)).to_radians());
+                let num = sp.num("numPanels").unwrap_or(2.0).max(1.0) as i64;
+                let (mut e, mut start) = (-90.0 * num as f64, 1_i64);
+                for _ in 0..num {
+                    let f = ((start - 1 + i64::from(world.frame())).rem_euclid(18)) as usize;
+                    let m = mul(cam, mul(local(x, y, a, 1.0, 1.0), local(e, 0.0, 0.0, 1.0, 1.0)));
+                    for n in &panel[f.min(panel.len() - 1)] {
+                        self.draw_node(img, n, m);
+                    }
+                    e += 180.0;
+                    start -= 4;
+                    if start <= 0 {
+                        start += 18;
+                    }
+                }
                 continue;
             }
             // SignPost: static `SignMC` frame `signPostType` (a single sign texture per frame) with `PostMC` behind it when `signPost` is set.
