@@ -2107,6 +2107,17 @@ impl World {
         self.npcs.iter().find(|n| n.bodies[0] == chest).map(|n| n.bodies)
     }
 
+    /// `grindShape` on an NPC: a mower took its head / chest / pelvis, so the shape's Result listener is deleted and it can no longer smash.
+    pub fn npc_grind(&mut self, body: BodyId) {
+        for n in &mut self.npcs {
+            for (part, idx) in [(0, 1), (1, 0), (2, 2)] {
+                if n.bodies[idx] == body {
+                    n.smashed[part] = true;
+                }
+            }
+        }
+    }
+
     /// Bodies of the NPCs' eleven main parts (those a sprite set draws; detached pieces are not included).
     pub fn npc_main_bodies(&self) -> Vec<BodyId> {
         self.npcs.iter().flat_map(|n| n.bodies).collect()
@@ -3889,6 +3900,29 @@ mod tests {
             w.step();
         }
         assert!(w.arrows[0].armed, "blade never pinned to the floor");
+    }
+
+    /// `grindShape` on an NPC deletes its smash listeners: slammed into the floor at 60 m/s it breaks into pieces, but a ground one stays whole.
+    #[test]
+    fn ground_npc_parts_do_not_smash() {
+        let xml = "<levelXML><info v='1.99'/><shapes><sh t='0' p0='1000' p1='600' p2='3000' p3='50' p4='0' p5='t' p6='f' p7='1' p8='0' p9='-1' p10='100' p11='1'/></shapes><specials><sp t='17' p0='1000' p1='400' p2='0' p3='1' p4='f' p5='f'/></specials></levelXML>";
+        let run = |grind: bool| {
+            let mut w = World::from_level(&crate::level::parse(xml).unwrap());
+            if grind {
+                for b in w.npc_main_bodies() {
+                    w.npc_grind(b);
+                }
+            }
+            for b in w.npc_main_bodies() {
+                w.b.body_mut(b).linear_velocity = Vec2::new(0.0, 60.0);
+            }
+            for _ in 0..60 {
+                w.step();
+            }
+            w.npcs[0].pieces.len()
+        };
+        assert!(run(false) > 0, "control: a 60 m/s impact smashes the NPC");
+        assert_eq!(run(true), 0);
     }
 
     /// Free fall of NPC 1/5 (plain and mirrored) compared with the original class running in the oracle (tests/golden/npc_fall.json, every 10th step).

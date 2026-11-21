@@ -1903,6 +1903,7 @@ impl Mower {
             doll.grind_shape(world, body);
             world.character = Some(doll);
         }
+        world.npc_grind(body);
         let b = world.b2_mut();
         let angle = b.body(self.body).sweep.a;
         let rising = b.create_body(&BodyDef { position: at, angle, ..Default::default() });
