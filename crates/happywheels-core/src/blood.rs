@@ -42,9 +42,44 @@ pub struct Flow {
     pub finished: bool,
 }
 
+/// A sprite particle (`MA`): one frame of a debris clip flying under gravity (`createPointBurst`).
+#[derive(Clone, Copy)]
+pub struct SpriteParticle {
+    pub kind: ShardKind,
+    pub frame: usize,
+    /// Centre of the bitmap in world px.
+    pub pos: [f64; 2],
+    vel: [f64; 2],
+}
+
+/// Which debris clip a burst uses: (clip name, enclosing clip, frame count) — `createBMDArray` sources of the original.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ShardKind {
+    Basket,
+    Copter,
+    Cart,
+    Crackers,
+    Sleigh,
+    Mower,
+}
+
+impl ShardKind {
+    pub fn clip(self) -> (&'static str, Option<&'static str>, usize) {
+        match self {
+            Self::Basket => ("basketPieces", Some("son"), 15),
+            Self::Copter => ("copterShards", None, 16),
+            Self::Cart => ("cartPieces", None, 10),
+            Self::Crackers => ("crackers", None, 11),
+            Self::Sleigh => ("sleighShards", None, 8),
+            Self::Mower => ("mowerShards", None, 12),
+        }
+    }
+}
+
 #[derive(Default)]
 pub struct Blood {
     pub particles: Vec<Particle>,
+    pub sprites: Vec<SpriteParticle>,
     pub flows: Vec<Flow>,
     rng: u64,
 }
@@ -78,6 +113,34 @@ impl Blood {
         if self.particles.len() < MAX_PARTICLES {
             self.particles.push(Particle::new(at[0], at[1], vel[0], vel[1]));
         }
+    }
+
+    /// `Mw` point burst of `total` sprite particles (`MA`): random frame, speeds `rand·(rand·speed − speed/2)` (x) and `rand·(rand·speed − ¾·speed)` (y)
+    /// in units of 62.5/30 px per step, gravity 62.5/90 px per step².
+    pub fn sprite_burst(&mut self, kind: ShardKind, start: [f64; 2], range: f64, speed: f64, total: u32) {
+        let frames = kind.clip().2;
+        for _ in 0..total {
+            if self.particles.len() + self.sprites.len() >= MAX_PARTICLES {
+                return;
+            }
+            let vx = self.rand() * (self.rand() * speed - speed / 2.0);
+            let vy = self.rand() * (self.rand() * speed - speed * 0.75);
+            let frame = (self.rand() * frames as f64).floor() as usize;
+            let x = start[0] + self.rand() * range - range / 2.0;
+            let y = start[1] + self.rand() * range - range / 2.0;
+            let k = 62.5 / 30.0;
+            self.sprites.push(SpriteParticle { kind, frame: frame.min(frames - 1), pos: [x, y], vel: [vx * k, vy * k] });
+        }
+    }
+
+    /// Advances the sprite particles one step (dropped below `Y_LIMIT`).
+    pub fn step_sprites(&mut self) {
+        self.sprites.retain_mut(|p| {
+            p.pos[1] += p.vel[1];
+            p.pos[0] += p.vel[0];
+            p.vel[1] += 62.5 / 90.0;
+            p.pos[1] <= Y_LIMIT
+        });
     }
 
     /// Advances every particle one frame and drops the dead ones.

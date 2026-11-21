@@ -2221,6 +2221,11 @@ impl World {
         self.blood.burst([start.x * PS, start.y * PS], vel, range, speed, total);
     }
 
+    /// `createPointBurst(kind, x, y, range, speed, total)` at a world point (metres).
+    pub fn shard_burst(&mut self, kind: crate::blood::ShardKind, at: Vec2, range: f64, speed: f64, total: u32) {
+        self.blood.sprite_burst(kind, [at.x * PS, at.y * PS], range, speed, total);
+    }
+
     /// `createBloodFlow(min, max, body, offset (local), angle°, total)`: one particle per step until `total` is exceeded. Returns the flow's index.
     pub fn blood_flow(&mut self, min: f64, max: f64, body: BodyId, offset: Vec2, angle_deg: f64, total: u32) -> usize {
         self.blood.flows.push(crate::blood::Flow { body, offset, angle: angle_deg.to_radians(), min_speed: min, speed_range: max - min, total, count: 0, finished: false });
@@ -2237,6 +2242,7 @@ impl World {
     /// Per-step blood update: particles advance, then every running flow emits one particle (the original's emitter `step` order).
     fn step_blood(&mut self) {
         self.blood.step_particles();
+        self.blood.step_sprites();
         for i in 0..self.blood.flows.len() {
             let (body, offset, angle, min, range, total, count, finished) = {
                 let f = &self.blood.flows[i];

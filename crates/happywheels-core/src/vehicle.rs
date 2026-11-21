@@ -1799,6 +1799,7 @@ impl Mower {
         {
             let at = world.b2().body(self.body).sweep.c;
             world.play("MetalSmashHeavy3", 1, at);
+            world.shard_burst(crate::blood::ShardKind::Mower, at, 30.0, 30.0, 70);
         }
         self.eject(world, doll);
         let zero = Filter { category_bits: 260, mask_bits: 0xFFFF, group_index: 0 };
@@ -2661,6 +2662,7 @@ impl Cart {
         {
             let at = world.b2().body(self.body).sweep.c;
             world.play("MetalSmashLight", 1, at);
+            world.shard_burst(crate::blood::ShardKind::Cart, at, 30.0, 30.0, 20);
         }
         let b = world.b2_mut();
         if let Some(&s) = b.body(self.body).shapes.get(2) {
@@ -3581,6 +3583,7 @@ impl Heli {
         let blade = self.shapes[0];
         b.destroy_shape(blade);
         let c = b.body(self.copter).sweep.c;
+        world.shard_burst(crate::blood::ShardKind::Copter, at, 30.0, 60.0, 70);
         world.play("MetalSmashHeavy4", 1, c);
     }
 
@@ -3628,6 +3631,7 @@ impl Heli {
             self.debris.push(piece);
             self.debris_names.push(format!("broken{}", i + 1));
         }
+        world.shard_burst(crate::blood::ShardKind::Copter, c, 30.0, 30.0, 70);
         world.play("MetalSmashHeavy2", 1, c);
     }
 
@@ -4578,6 +4582,7 @@ impl Son {
         }
         let c = world.b2().body(self.basket).sweep.c;
         world.b2_mut().destroy_body(self.basket);
+        world.shard_burst(crate::blood::ShardKind::Basket, c, 5.0, 20.0, 30);
         world.play("BasketSmash", 1, c);
     }
 
@@ -5938,6 +5943,7 @@ impl Santa {
         }
         self.eject_elf(world, 1);
         self.eject_elf(world, 2);
+        world.shard_burst(crate::blood::ShardKind::Sleigh, src.sweep.c, 100.0, 30.0, 20);
         world.play("SleighSmash", 1, src.sweep.c);
     }
 

@@ -616,6 +616,7 @@ impl Sprites {
         if let Some(doll) = world.character.as_ref() {
             self.draw_doll_extras(img, world, camera_offset, doll, None);
         }
+        self.draw_shards(img, world, camera_offset);
         if let Some(crate::vehicle::Vehicle::Family(f)) = world.bike.as_ref() {
             for (&body, name) in f.daughter.debris.iter().zip(["fork", "brokenFrame", "seat"]) {
                 self.draw_loose_in(img, world, camera_offset, "daughter", name, body);
@@ -624,6 +625,27 @@ impl Sprites {
         for name in ["kid", "girl", "daughter", "son", "elf1", "elf2"] {
             if let Some(doll) = Self::npc_doll(world, name) {
                 self.draw_doll_extras(img, world, camera_offset, doll, Some(name));
+            }
+        }
+    }
+
+    /// Sprite particles of the shard bursts (`createPointBurst`): the particle's frame of its debris clip, centred on the particle, natural clip scale.
+    fn draw_shards(&self, img: &mut RgbaImage, world: &World, camera_offset: (f32, f32)) {
+        for p in &world.blood.sprites {
+            let (name, parent, _) = p.kind.clip();
+            let nodes = match parent {
+                Some(par) => self.clip.iter().find(|c| c.n == par).map(|c| &c.k),
+                None => Some(&self.clip),
+            };
+            let Some(node) = nodes.and_then(|n| n.iter().find(|c| c.n == name)) else { continue };
+            let children = if p.frame > 0 { node.alt.get(&(p.frame + 1).to_string()).unwrap_or(&node.k) } else { &node.k };
+            let mut ext = (0.0, 0.0);
+            for c in children {
+                self.extent(c, local(0.0, 0.0, 0.0, 1.0, 1.0), &mut ext);
+            }
+            let m = local(p.pos[0] - ext.0 / 2.0 + f64::from(camera_offset.0), p.pos[1] - ext.1 / 2.0 + f64::from(camera_offset.1), 0.0, 1.0, 1.0);
+            for c in children {
+                self.draw_node(img, c, m);
             }
         }
     }
