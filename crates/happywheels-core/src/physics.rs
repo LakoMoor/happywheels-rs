@@ -242,6 +242,20 @@ struct BreakChair {
     pieces: Vec<(BodyId, u8, f64)>,
 }
 
+/// Glass pane (`Glass`): a Result above `round(mass·shatterStrength)` shatters it into triangles fanned from the impact point.
+struct Glass {
+    body: BodyId,
+    shape: ShapeId,
+    /// Half extents (m).
+    half: (f64, f64),
+    smash_impulse: f64,
+    particles: u32,
+    suffix: &'static str,
+    done: bool,
+    /// Triangle pieces: (body, vertices in the body frame, px).
+    pieces: Vec<(BodyId, [(f64, f64); 3])>,
+}
+
 /// A special's `checkAdd`: a contact starting on one of its shapes with a non-sensor body that is static or at least as heavy, closing speed along the
 /// normal above `threshold`, plays `name` (`variants` picks `name1..n`). `lock_frames` > 0 = the original keeps a handle until the sound ends (toilet, trash can).
 struct HitSound {
@@ -419,6 +433,7 @@ pub struct World {
     food_chunks: Vec<(BodyId, u8, u8)>,
     boomboxes: Vec<Boombox>,
     chairs: Vec<BreakChair>,
+    glasses: Vec<Glass>,
     cans: Vec<TrashCan>,
     hit_sounds: Vec<HitSound>,
     /// Bodies born from specials (trash, hollow cans…) that only the renderer cares about.
@@ -490,6 +505,7 @@ impl World {
             food_chunks: Vec::new(),
             boomboxes: Vec::new(),
             chairs: Vec::new(),
+            glasses: Vec::new(),
             cans: Vec::new(),
             hit_sounds: Vec::new(),
             loose: Vec::new(),
@@ -912,6 +928,16 @@ impl World {
         if let Some((name, variants, threshold, lock_frames)) = hit {
             let first = self.b.body(body).shapes[0];
             self.hit_sounds.push(HitSound { body, shapes: vec![first], name, variants, threshold, lock_frames, free_at: 0 });
+        }
+        if sp.kind == 18 {
+            let first = self.b.body(body).shapes[0];
+            self.b.c.report_results = true;
+            self.b.set_mass_from_shapes(body);
+            let mass = self.b.body(body).mass;
+            let (suffix, particles) = if mass < 0.75 { ("Light", 100) } else if mass < 4.0 { ("Mid", 150) } else { ("Heavy", 200) };
+            let strength = f64::from(sp.num("shatterStrength").unwrap_or(10.0));
+            let half = (f64::from(sp.num("shapeWidth").unwrap_or(10.0)) / 2.0 / PS, f64::from(sp.num("shapeHeight").unwrap_or(100.0)) / 2.0 / PS);
+            self.glasses.push(Glass { body, shape: first, half, smash_impulse: (mass * strength).round(), particles, suffix, done: false, pieces: Vec::new() });
         }
         if sp.kind == 19 && sp.flag("interactive") != Some(false) {
             self.b.c.report_results = true;
@@ -1873,6 +1899,7 @@ impl World {
         self.food_events(&events);
         self.boombox_events(&events);
         self.chair_events(&events);
+        self.glass_events(&events);
         self.mine_events(&events);
         self.arrow_events(&events);
         self.spike_events(&events);
@@ -3399,6 +3426,68 @@ impl World {
         }
     }
 
+    /// `Glass.checkContact` / `shatter`: the contact point (in the pane's frame) is clamped to an edge when within 5 cm of it (that side then has no
+    /// triangles); every remaining side contributes two triangles (impact point, side point k, side point k+1) as bodies at the pane's centre.
+    fn glass_events(&mut self, events: &[box2d::world::ContactEvent]) {
+        for k in 0..self.glasses.len() {
+            if self.glasses[k].done {
+                continue;
+            }
+            let (body, shape, limit) = (self.glasses[k].body, self.glasses[k].shape, self.glasses[k].smash_impulse);
+            let Some(hit) = events.iter().filter(|e| e.kind == ContactEventKind::Result && (e.shape1 == shape || e.shape2 == shape) && e.normal_impulse > limit).max_by(|a, b| a.normal_impulse.total_cmp(&b.normal_impulse)) else { continue };
+            let src = self.b.body(body).clone();
+            let mut impact = src.local_point(hit.position);
+            self.glasses[k].done = true;
+            let (hx, hy) = self.glasses[k].half;
+            let (l, r, tp, bt) = (-hx, hx, -hy, hy);
+            let mut sides: [Option<[(f64, f64); 3]>; 4] = [Some([(l, tp), (0.0, tp), (r, tp)]), Some([(r, tp), (r, 0.0), (r, bt)]), Some([(r, bt), (0.0, bt), (l, bt)]), Some([(l, bt), (l, 0.0), (l, tp)])];
+            let min_edge = 0.05;
+            if impact.x - (l + min_edge) <= 0.0 {
+                impact.x = l;
+                sides[3] = None;
+            } else if impact.x - (r - min_edge) >= 0.0 {
+                impact.x = r;
+                sides[1] = None;
+            }
+            if impact.y - (tp + min_edge) <= 0.0 {
+                impact.y = tp;
+                sides[0] = None;
+            } else if impact.y - (bt - min_edge) >= 0.0 {
+                impact.y = bt;
+                sides[2] = None;
+            }
+            let at = src.sweep.c;
+            self.rect_burst(&src, body, crate::blood::ShardKind::Food(5), 10.0, self.glasses[k].particles);
+            self.play(&format!("Glass{}", self.glasses[k].suffix), 2, at);
+            let (ang, w) = (src.sweep.a, src.angular_velocity);
+            self.b.destroy_body(body);
+            for side in sides.into_iter().flatten() {
+                for g in 0..2 {
+                    let (a, b) = (side[g], side[g + 1]);
+                    let piece = self.b.create_body(&BodyDef { position: at, angle: ang, ..Default::default() });
+                    let verts = vec![impact, Vec2::new(a.0, a.1), Vec2::new(b.0, b.1)];
+                    let mut sd = ShapeDef::new(Geometry::Polygon(verts));
+                    sd.density = 2.0;
+                    sd.friction = 0.3;
+                    sd.restitution = 0.1;
+                    sd.filter = Filter { category_bits: 8, mask_bits: 0xFFFF, group_index: 0 };
+                    self.b.create_shape(piece, &sd);
+                    self.b.set_mass_from_shapes(piece);
+                    let com = self.b.body(piece).sweep.c;
+                    self.b.body_mut(piece).angular_velocity = w;
+                    self.b.body_mut(piece).linear_velocity = src.linear_velocity_from_world_point(com);
+                    self.glasses[k].pieces.push((piece, [(impact.x * PS, impact.y * PS), (a.0 * PS, a.1 * PS), (b.0 * PS, b.1 * PS)]));
+                    self.loose.push(piece);
+                }
+            }
+        }
+    }
+
+    /// Triangle pieces of shattered glass panes: (body, vertices in the body frame in px).
+    pub fn glass_pieces(&self) -> impl Iterator<Item = (BodyId, [(f64, f64); 3])> + '_ {
+        self.glasses.iter().flat_map(|g| g.pieces.iter().copied())
+    }
+
     /// Pieces of broken chairs: (body, 0 leg / 1 back / 2 seat, mirror).
     pub fn chair_pieces(&self) -> impl Iterator<Item = (BodyId, u8, f64)> + '_ {
         self.chairs.iter().flat_map(|c| c.pieces.iter().copied())
@@ -4267,6 +4356,25 @@ mod tests {
         assert!(!w.b.c.bodies[hard].alive, "a hard hit breaks it");
         assert_eq!(w.chair_pieces().count(), 4);
         assert!(w.chair_pieces().all(|(b, _, _)| w.b.c.bodies[b].alive));
+    }
+
+    /// A glass pane hit above `round(mass·shatterStrength)` breaks into triangles (the pane's body is gone) with glass shards flying; a soft landing keeps it.
+    #[test]
+    fn glass_shatters_into_triangles() {
+        let xml = "<levelXML><info v='1.99'/><shapes><sh t='0' p0='1000' p1='450' p2='3000' p3='50' p4='0' p5='t' p6='f' p7='1' p8='0' p9='-1' p10='100' p11='1'/></shapes><specials><sp t='18' p0='900' p1='380' p2='100' p3='20' p4='0' p5='f' p6='10' p7='t'/><sp t='18' p0='1200' p1='380' p2='100' p3='20' p4='0' p5='f' p6='10' p7='t'/></specials></levelXML>";
+        let mut w = World::from_level(&crate::level::parse(xml).unwrap());
+        let (soft, hard) = (w.special_bodies[0].unwrap(), w.special_bodies[1].unwrap());
+        w.b.body_mut(soft).linear_velocity = Vec2::new(0.0, 1.0);
+        w.b.body_mut(hard).linear_velocity = Vec2::new(0.0, 60.0);
+        for _ in 0..30 {
+            w.step();
+        }
+        assert!(w.b.c.bodies[soft].alive, "soft landing: whole pane");
+        assert!(!w.b.c.bodies[hard].alive, "hard hit: pane gone");
+        let n = w.glass_pieces().count();
+        assert!((4..=8).contains(&n), "2 triangles per intact side (6 when the impact is on an edge, 8 mid-pane), got {n}");
+        assert!(w.glass_pieces().all(|(b, _)| w.b.c.bodies[b].alive));
+        assert!(w.blood.sprites.iter().any(|p| matches!(p.kind, crate::blood::ShardKind::Food(5))));
     }
 
     /// A smashed food item leaves four circle chunks and 30 juice particles, and its body is gone.

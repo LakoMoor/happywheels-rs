@@ -791,11 +791,39 @@ impl Sprites {
         }
     }
 
+    /// Triangular pieces of shattered glass panes: a 0x66CCFF fill at alpha .35 (vertices in the body's frame, px).
+    fn draw_glass_pieces(&self, img: &mut RgbaImage, world: &World, cam: M) {
+        for (b, tri) in world.glass_pieces() {
+            if world.body_center_px(b).is_none() {
+                continue;
+            }
+            let bd = world.b2().body(b);
+            let m = mul(cam, local(bd.xf.position.x * 62.5, bd.xf.position.y * 62.5, bd.sweep.a, 1.0, 1.0));
+            let pts = tri.map(|(x, y)| (m[0] * x + m[2] * y + m[4], m[1] * x + m[3] * y + m[5]));
+            let (x0, x1) = (pts.iter().map(|p| p.0).fold(f64::MAX, f64::min).floor().max(0.0) as i64, pts.iter().map(|p| p.0).fold(f64::MIN, f64::max).ceil().min(f64::from(img.width())) as i64);
+            let (y0, y1) = (pts.iter().map(|p| p.1).fold(f64::MAX, f64::min).floor().max(0.0) as i64, pts.iter().map(|p| p.1).fold(f64::MIN, f64::max).ceil().min(f64::from(img.height())) as i64);
+            let edge = |a: (f64, f64), b: (f64, f64), p: (f64, f64)| (b.0 - a.0) * (p.1 - a.1) - (b.1 - a.1) * (p.0 - a.0);
+            for py in y0..y1 {
+                for px in x0..x1 {
+                    let p = (px as f64 + 0.5, py as f64 + 0.5);
+                    let (e0, e1, e2) = (edge(pts[0], pts[1], p), edge(pts[1], pts[2], p), edge(pts[2], pts[0], p));
+                    if (e0 >= 0.0 && e1 >= 0.0 && e2 >= 0.0) || (e0 <= 0.0 && e1 <= 0.0 && e2 <= 0.0) {
+                        let dst = img.get_pixel_mut(px as u32, py as u32);
+                        for (c, s) in dst.0.iter_mut().zip([0x66_u8, 0xCC, 0xFF]) {
+                            *c = (f64::from(*c) * 0.65 + f64::from(s) * 0.35).round() as u8;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     pub fn draw_specials(&self, img: &mut RgbaImage, level: &crate::level::Level, world: &World, camera_offset: (f32, f32)) {
         let cam = local(f64::from(camera_offset.0), f64::from(camera_offset.1), 0.0, 1.0, 1.0);
         self.draw_food_chunks(img, world, cam);
         self.draw_boombox_pieces(img, world, cam);
         self.draw_chair_pieces(img, world, cam);
+        self.draw_glass_pieces(img, world, cam);
         for (i, sp) in level.specials.iter().enumerate() {
             if sp.kind == 0 {
                 self.draw_van(img, sp, world.special_parts.get(i).map(Vec::as_slice).unwrap_or(&[]), world, cam);
@@ -1521,12 +1549,12 @@ impl Sprites {
                 struct Frames {
                     frames: Vec<Vec<Node>>,
                 }
-                static FRAMES: std::sync::OnceLock<[Vec<Vec<Node>>; 5]> = std::sync::OnceLock::new();
+                static FRAMES: std::sync::OnceLock<[Vec<Vec<Node>>; 6]> = std::sync::OnceLock::new();
                 let frames = FRAMES.get_or_init(|| {
                     let f = |s: &str| serde_json::from_str::<Frames>(s).map(|f| f.frames).unwrap_or_default();
-                    [f(include_str!("../data/game-WatermelonParticlesMC.json")), f(include_str!("../data/game-PumpkinParticlesMC.json")), f(include_str!("../data/game-PineappleParticlesMC.json")), f(include_str!("../data/game-BoomboxShardsMC.json")), f(include_str!("../data/game-TVShardsMC.json"))]
+                    [f(include_str!("../data/game-WatermelonParticlesMC.json")), f(include_str!("../data/game-PumpkinParticlesMC.json")), f(include_str!("../data/game-PineappleParticlesMC.json")), f(include_str!("../data/game-BoomboxShardsMC.json")), f(include_str!("../data/game-TVShardsMC.json")), f(include_str!("../data/game-GlassShardsMC.json"))]
                 });
-                let Some(children) = frames[usize::from(ty) % 5].get(p.frame) else { continue };
+                let Some(children) = frames[usize::from(ty) % 6].get(p.frame) else { continue };
                 let mut ext = (0.0, 0.0);
                 for c in children {
                     self.extent(c, local(0.0, 0.0, 0.0, 1.0, 1.0), &mut ext);

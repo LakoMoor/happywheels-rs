@@ -69,7 +69,7 @@ pub enum ShardKind {
     Cola,
     /// Snow thrown off the boosting sleigh (`snowflakes`, class `Mb`: half gravity).
     Snow,
-    /// Juice/flesh particles of a smashed food item (`WatermelonParticlesMC` / `PumpkinParticlesMC` / `PineappleParticlesMC`); 3 = `BoomboxShardsMC`, 4 = `TVShardsMC`.
+    /// Juice/flesh particles of a smashed food item (`WatermelonParticlesMC` / `PumpkinParticlesMC` / `PineappleParticlesMC`); 3 = `BoomboxShardsMC`, 4 = `TVShardsMC`, 5 = `GlassShardsMC`.
     Food(u8),
 }
 
@@ -85,7 +85,7 @@ impl ShardKind {
             Self::Metal => ("metalShards", None, 12),
             Self::Cola => ("cola", None, 13),
             Self::Snow => ("snowflakes", None, 7),
-            Self::Food(ty) => ("", None, [15, 9, 8, 6, 9][ty as usize % 5]),
+            Self::Food(ty) => ("", None, [15, 9, 8, 6, 9, 11][ty as usize % 6]),
         }
     }
 }
