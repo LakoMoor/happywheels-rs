@@ -818,12 +818,38 @@ impl Sprites {
         }
     }
 
+    /// Pieces of broken toilets (`ToiletBasePiece1/2MC`, `ToiletBackPiece1/2MC`) at the piece body's origin, mirrored with `reverse`.
+    fn draw_toilet_pieces(&self, img: &mut RgbaImage, world: &World, cam: M) {
+        #[derive(Deserialize)]
+        struct File {
+            k: Vec<Node>,
+        }
+        static PARTS: std::sync::OnceLock<[Vec<Node>; 4]> = std::sync::OnceLock::new();
+        let parts = PARTS.get_or_init(|| {
+            let f = |s: &str| serde_json::from_str::<File>(s).map(|f| f.k).unwrap_or_default();
+            [
+                f(include_str!("../data/game-ToiletBasePiece1MC.json")),
+                f(include_str!("../data/game-ToiletBasePiece2MC.json")),
+                f(include_str!("../data/game-ToiletBackPiece1MC.json")),
+                f(include_str!("../data/game-ToiletBackPiece2MC.json")),
+            ]
+        });
+        for (b, kind, mirror) in world.toilet_pieces() {
+            let Some([x, y]) = world.body_position_px(b) else { continue };
+            let m = mul(cam, local(f64::from(x), f64::from(y), f64::from(world.body_angle(b)), mirror, 1.0));
+            for k in &parts[usize::from(kind)] {
+                self.draw_node(img, k, m);
+            }
+        }
+    }
+
     pub fn draw_specials(&self, img: &mut RgbaImage, level: &crate::level::Level, world: &World, camera_offset: (f32, f32)) {
         let cam = local(f64::from(camera_offset.0), f64::from(camera_offset.1), 0.0, 1.0, 1.0);
         self.draw_food_chunks(img, world, cam);
         self.draw_boombox_pieces(img, world, cam);
         self.draw_chair_pieces(img, world, cam);
         self.draw_glass_pieces(img, world, cam);
+        self.draw_toilet_pieces(img, world, cam);
         for (i, sp) in level.specials.iter().enumerate() {
             if sp.kind == 0 {
                 self.draw_van(img, sp, world.special_parts.get(i).map(Vec::as_slice).unwrap_or(&[]), world, cam);
@@ -1138,8 +1164,11 @@ impl Sprites {
                 if sp.kind == 24 {
                     let flip = if sp.flag("reverse").unwrap_or(false) { -1.0 } else { 1.0 };
                     let m = mul(cam, mul(pose, local(0.0, 0.0, 0.0, flip, 1.0)));
-                    for n in toilet {
-                        self.draw_node(img, n, m);
+                    let (back, base) = world.toilet_parts(world.special_bodies.get(i).copied().flatten());
+                    for c in toilet {
+                        for n in c.k.iter().filter(|n| (n.n != "back" || back) && (n.n != "base" || base)) {
+                            self.draw_node(img, n, m);
+                        }
                     }
                 } else {
                     let trash = sp.flag("containsTrash").unwrap_or(true);
@@ -1549,12 +1578,12 @@ impl Sprites {
                 struct Frames {
                     frames: Vec<Vec<Node>>,
                 }
-                static FRAMES: std::sync::OnceLock<[Vec<Vec<Node>>; 6]> = std::sync::OnceLock::new();
+                static FRAMES: std::sync::OnceLock<[Vec<Vec<Node>>; 7]> = std::sync::OnceLock::new();
                 let frames = FRAMES.get_or_init(|| {
                     let f = |s: &str| serde_json::from_str::<Frames>(s).map(|f| f.frames).unwrap_or_default();
-                    [f(include_str!("../data/game-WatermelonParticlesMC.json")), f(include_str!("../data/game-PumpkinParticlesMC.json")), f(include_str!("../data/game-PineappleParticlesMC.json")), f(include_str!("../data/game-BoomboxShardsMC.json")), f(include_str!("../data/game-TVShardsMC.json")), f(include_str!("../data/game-GlassShardsMC.json"))]
+                    [f(include_str!("../data/game-WatermelonParticlesMC.json")), f(include_str!("../data/game-PumpkinParticlesMC.json")), f(include_str!("../data/game-PineappleParticlesMC.json")), f(include_str!("../data/game-BoomboxShardsMC.json")), f(include_str!("../data/game-TVShardsMC.json")), f(include_str!("../data/game-GlassShardsMC.json")), f(include_str!("../data/game-ToiletParticlesMC.json"))]
                 });
-                let Some(children) = frames[usize::from(ty) % 6].get(p.frame) else { continue };
+                let Some(children) = frames[usize::from(ty) % 7].get(p.frame) else { continue };
                 let mut ext = (0.0, 0.0);
                 for c in children {
                     self.extent(c, local(0.0, 0.0, 0.0, 1.0, 1.0), &mut ext);

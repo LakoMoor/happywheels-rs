@@ -85,7 +85,7 @@ impl ShardKind {
             Self::Metal => ("metalShards", None, 12),
             Self::Cola => ("cola", None, 13),
             Self::Snow => ("snowflakes", None, 7),
-            Self::Food(ty) => ("", None, [15, 9, 8, 6, 9, 11][ty as usize % 6]),
+            Self::Food(ty) => ("", None, [15, 9, 8, 6, 9, 11, 5][ty as usize % 7]),
         }
     }
 }

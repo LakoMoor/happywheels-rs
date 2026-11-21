@@ -256,6 +256,18 @@ struct Glass {
     pieces: Vec<(BodyId, [(f64, f64); 3])>,
 }
 
+/// Toilet special (`$e`): a Result above 12 on the back breaks off the back (two pieces), on the base or bowl the base (two pieces).
+struct Toilet {
+    body: BodyId,
+    sign: f64,
+    back: Option<ShapeId>,
+    base: Option<ShapeId>,
+    bowl: Option<ShapeId>,
+    done: bool,
+    /// (body, 0 base1 / 1 base2 / 2 back1 / 3 back2, mirror sign)
+    pieces: Vec<(BodyId, u8, f64)>,
+}
+
 /// A special's `checkAdd`: a contact starting on one of its shapes with a non-sensor body that is static or at least as heavy, closing speed along the
 /// normal above `threshold`, plays `name` (`variants` picks `name1..n`). `lock_frames` > 0 = the original keeps a handle until the sound ends (toilet, trash can).
 struct HitSound {
@@ -433,6 +445,7 @@ pub struct World {
     food_chunks: Vec<(BodyId, u8, u8)>,
     boomboxes: Vec<Boombox>,
     chairs: Vec<BreakChair>,
+    toilets: Vec<Toilet>,
     glasses: Vec<Glass>,
     cans: Vec<TrashCan>,
     hit_sounds: Vec<HitSound>,
@@ -505,6 +518,7 @@ impl World {
             food_chunks: Vec::new(),
             boomboxes: Vec::new(),
             chairs: Vec::new(),
+            toilets: Vec::new(),
             glasses: Vec::new(),
             cans: Vec::new(),
             hit_sounds: Vec::new(),
@@ -990,6 +1004,12 @@ impl World {
         }
         for (geos, density) in &sb.more {
             add(self, body, geos, *density, sb.friction, sb.restitution);
+        }
+        if sp.kind == 24 && sp.flag("interactive") != Some(false) {
+            self.b.c.report_results = true;
+            let s = self.b.body(body).shapes.clone();
+            let sign = if sp.flag("reverse").unwrap_or(false) { -1.0 } else { 1.0 };
+            self.toilets.push(Toilet { body, sign, back: s.first().copied(), base: s.get(1).copied(), bowl: s.get(2).copied(), done: false, pieces: Vec::new() });
         }
         self.b.set_mass_from_shapes(body);
         if let Some(spec) = sb.jet {
@@ -1900,6 +1920,7 @@ impl World {
         self.boombox_events(&events);
         self.chair_events(&events);
         self.glass_events(&events);
+        self.toilet_events(&events);
         self.mine_events(&events);
         self.arrow_events(&events);
         self.spike_events(&events);
@@ -3483,6 +3504,82 @@ impl World {
         }
     }
 
+    /// `Toilet.singleAction`: the base (with the bowl) and/or the back break off into new bodies at the toilet's centre with its velocity; once both are
+    /// gone the toilet body is removed. Pieces keep density 2, μ.3, e.1.
+    fn toilet_events(&mut self, events: &[box2d::world::ContactEvent]) {
+        for k in 0..self.toilets.len() {
+            let (body, sign) = (self.toilets[k].body, self.toilets[k].sign);
+            let hit = |s: Option<ShapeId>| s.is_some_and(|s| events.iter().any(|e| e.kind == ContactEventKind::Result && (e.shape1 == s || e.shape2 == s) && e.normal_impulse > 12.0));
+            let (t_back, t_base) = (hit(self.toilets[k].back), hit(self.toilets[k].base) || hit(self.toilets[k].bowl));
+            if !(t_back || t_base) {
+                continue;
+            }
+            let src = self.b.body(body).clone();
+            let (at, ang, vel, w) = (src.sweep.c, src.sweep.a, src.linear_velocity, src.angular_velocity);
+            let v = |x: f64, y: f64| Vec2::new(x * sign / PS, y / PS);
+            let make = |this: &mut Self, geoms: Vec<Geometry>| -> BodyId {
+                let piece = this.b.create_body(&BodyDef { position: at, angle: ang, ..Default::default() });
+                for g in geoms {
+                    let mut sd = ShapeDef::new(g);
+                    sd.density = 2.0;
+                    sd.friction = 0.3;
+                    sd.restitution = 0.1;
+                    sd.filter = Filter { category_bits: 8, mask_bits: 0xFFFF, group_index: 0 };
+                    this.b.create_shape(piece, &sd);
+                }
+                this.b.set_mass_from_shapes(piece);
+                this.b.body_mut(piece).angular_velocity = w;
+                this.b.body_mut(piece).linear_velocity = vel;
+                this.loose.push(piece);
+                piece
+            };
+            let bx = |hx: f64, hy: f64, cx: f64, cy: f64| ShapeDef::oriented_box(hx / PS, hy / PS, v(cx, cy), 0.0).geometry;
+            if t_base && self.toilets[k].base.is_some() {
+                let (base, bowl) = (self.toilets[k].base.take().unwrap(), self.toilets[k].bowl.take().unwrap());
+                self.b.destroy_shape(base);
+                self.b.destroy_shape(bowl);
+                let mut b1 = vec![v(-25.0, 4.5), v(2.0, 4.5), v(17.0, 25.0), v(3.5, 30.5), v(-22.0, 17.0)];
+                if sign < 0.0 {
+                    b1 = vec![b1[1], b1[0], b1[4], b1[3], b1[2]];
+                }
+                let p1 = make(self, vec![bx(10.5, 7.5, 3.0, 31.5), Geometry::Polygon(b1)]);
+                let (g, wv, x, bq) = (v(8.0, 4.5), v(31.0, 4.5), v(25.0, 20.0), v(17.0, 25.0));
+                let quad = if sign > 0.0 { vec![g, wv, x, bq] } else { vec![wv, g, bq, x] };
+                let p2 = make(self, vec![Geometry::Polygon(quad)]);
+                self.rect_burst(&src, p1, crate::blood::ShardKind::Food(6), 20.0, 30);
+                self.toilets[k].pieces.push((p1, 0, sign));
+                self.toilets[k].pieces.push((p2, 1, sign));
+                self.play(&format!("ToiletSmash{}", 1 + (self.toilets[k].pieces.len() % 3)), 3, at);
+            }
+            if t_back && self.toilets[k].back.is_some() {
+                let back = self.toilets[k].back.take().unwrap();
+                self.b.destroy_shape(back);
+                let p1 = make(self, vec![bx(10.0, 12.5, -14.0, -31.0)]);
+                let p2 = make(self, vec![bx(10.0, 11.0, -14.0, -7.0)]);
+                self.rect_burst(&src, p2, crate::blood::ShardKind::Food(6), 20.0, 30);
+                self.toilets[k].pieces.push((p1, 2, sign));
+                self.toilets[k].pieces.push((p2, 3, sign));
+                self.play(&format!("ToiletSmash{}", 1 + (self.toilets[k].pieces.len() % 3)), 3, at);
+            }
+            if self.toilets[k].base.is_none() && self.toilets[k].back.is_none() {
+                self.b.destroy_body(body);
+                self.toilets[k].done = true;
+            } else {
+                self.b.set_mass_from_shapes(body);
+            }
+        }
+    }
+
+    /// Pieces of broken toilets: (body, 0 base1 / 1 base2 / 2 back1 / 3 back2, mirror).
+    pub fn toilet_pieces(&self) -> impl Iterator<Item = (BodyId, u8, f64)> + '_ {
+        self.toilets.iter().flat_map(|t| t.pieces.iter().copied())
+    }
+
+    /// Which parts of the toilet on `body` are still attached: (back, base).
+    pub fn toilet_parts(&self, body: Option<BodyId>) -> (bool, bool) {
+        body.and_then(|b| self.toilets.iter().find(|t| t.body == b)).map_or((true, true), |t| (t.back.is_some(), t.base.is_some()))
+    }
+
     /// Triangle pieces of shattered glass panes: (body, vertices in the body frame in px).
     pub fn glass_pieces(&self) -> impl Iterator<Item = (BodyId, [(f64, f64); 3])> + '_ {
         self.glasses.iter().flat_map(|g| g.pieces.iter().copied())
@@ -4375,6 +4472,22 @@ mod tests {
         assert!((4..=8).contains(&n), "2 triangles per intact side (6 when the impact is on an edge, 8 mid-pane), got {n}");
         assert!(w.glass_pieces().all(|(b, _)| w.b.c.bodies[b].alive));
         assert!(w.blood.sprites.iter().any(|p| matches!(p.kind, crate::blood::ShardKind::Food(5))));
+    }
+
+    /// A toilet hit hard on the back loses its back (two pieces); hit on the base/bowl it loses the base (two pieces, with the bowl split); both -> body gone.
+    #[test]
+    fn toilet_breaks_off_pieces() {
+        let xml = "<levelXML><info v='1.99'/><shapes><sh t='0' p0='1000' p1='450' p2='3000' p3='50' p4='0' p5='t' p6='f' p7='1' p8='0' p9='-1' p10='100' p11='1'/></shapes><specials><sp t='24' p0='900' p1='380' p2='0' p3='f' p4='f' p5='t'/><sp t='24' p0='1300' p1='360' p2='0' p3='f' p4='f' p5='t'/></specials></levelXML>";
+        let mut w = World::from_level(&crate::level::parse(xml).unwrap());
+        let (soft, hard) = (w.special_bodies[0].unwrap(), w.special_bodies[1].unwrap());
+        w.b.body_mut(hard).linear_velocity = Vec2::new(0.0, 60.0);
+        let _ = soft;
+        for _ in 0..40 {
+            w.step();
+        }
+        assert_eq!(w.toilet_parts(Some(soft)), (true, true));
+        assert!(w.toilet_pieces().count() >= 2, "a hard drop breaks something off");
+        assert!(w.toilet_pieces().all(|(b, _, _)| w.b.c.bodies[b].alive));
     }
 
     /// A smashed food item leaves four circle chunks and 30 juice particles, and its body is gone.
