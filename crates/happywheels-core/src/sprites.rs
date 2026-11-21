@@ -778,8 +778,41 @@ impl Sprites {
                 let flip = if sp.flag("reverse").unwrap_or(false) { -1.0 } else { 1.0 };
                 let m = mul(cam, mul(pose, local(0.0, 0.0, 0.0, flip, 1.0)));
                 let frame = (sp.num("bladeWeaponType").unwrap_or(1.0).max(1.0) as usize).min(frames.len().max(1)) - 1;
-                for n in frames.get(frame).map(Vec::as_slice).unwrap_or(&[]) {
+                let nodes = frames.get(frame).map(Vec::as_slice).unwrap_or(&[]);
+                for n in nodes {
                     self.draw_node(img, n, m);
+                }
+                // paintBlood: `BladeBloodMC` stamps clipped by `BladeWeaponMaskMC`. The mask is vector art the clip dump cannot read, so the blade's
+                // own texture silhouette stands in for it (blood is multiplied by the blade sprite's alpha, which also covers the handle).
+                let stamps = world.special_bodies.get(i).copied().flatten().map_or(&[][..], |b| world.blade_blood(b));
+                if !stamps.is_empty() {
+                    static BLOOD: std::sync::OnceLock<Vec<Node>> = std::sync::OnceLock::new();
+                    #[derive(Deserialize)]
+                    struct Clip {
+                        k: Vec<Node>,
+                    }
+                    let blood = BLOOD.get_or_init(|| serde_json::from_str::<Clip>(include_str!("../data/game-BladeBloodMC.json")).map(|c| c.k).unwrap_or_default());
+                    let mut mask = RgbaImage::new(img.width(), img.height());
+                    let mut paint = RgbaImage::new(img.width(), img.height());
+                    for n in nodes {
+                        self.draw_node(&mut mask, n, m);
+                    }
+                    for &(sx, sy, rot, mirror) in stamps {
+                        let sm = mul(m, local(sx, sy, rot, mirror, 1.0));
+                        for n in blood {
+                            self.draw_node(&mut paint, n, sm);
+                        }
+                    }
+                    for (x, y, p) in paint.enumerate_pixels() {
+                        let a = u32::from(p[3]) * u32::from(mask.get_pixel(x, y)[3]) / 255;
+                        if a == 0 {
+                            continue;
+                        }
+                        let d = img.get_pixel_mut(x, y);
+                        for c in 0..3 {
+                            d[c] = ((u32::from(p[c]) * a + u32::from(d[c]) * (255 - a)) / 255) as u8;
+                        }
+                    }
                 }
                 continue;
             }

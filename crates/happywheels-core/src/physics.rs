@@ -296,6 +296,10 @@ struct Arrow {
     harpoon: bool,
     /// BladeWeapon: initial blade angle (axis reference); anchor is the body centre.
     blade: Option<f64>,
+    /// BladeWeapon blood stamps in the weapon clip's local px (x already mirrored for `reverse`): (x, y, rotation rad, scaleX ±1).
+    blood: Vec<(f64, f64, f64, f64)>,
+    reverse: bool,
+    flesh_sounds: u32,
 }
 
 /// ArrowGun special, static-base variant (`immovable2` true): turret aims at the closest material-2 body in range and fires 10 arrows.
@@ -2564,7 +2568,7 @@ impl World {
         hs.filter = Filter { category_bits: 8, mask_bits: 0xFFFF, group_index: 0 };
         self.b.create_shape(body, &hs);
         self.b.set_mass_from_shapes(body);
-        self.arrows.push(Arrow { body, sensor, solid, pinned: Vec::new(), queue_add: Vec::new(), queue_remove: Vec::new(), armed: false, done: false, harpoon: true, blade: Some(r + blade_rot) });
+        self.arrows.push(Arrow { body, sensor, solid, pinned: Vec::new(), queue_add: Vec::new(), queue_remove: Vec::new(), armed: false, done: false, harpoon: true, blade: Some(r + blade_rot), blood: Vec::new(), reverse: m < 0.0, flesh_sounds: 0 });
         Some(body)
     }
 
@@ -2583,7 +2587,7 @@ impl World {
         self.b.set_mass_from_shapes(body);
         self.b.body_mut(body).linear_velocity = vel;
         self.b.c.report_results = true;
-        self.arrows.push(Arrow { body, sensor, solid, pinned: Vec::new(), queue_add: Vec::new(), queue_remove: Vec::new(), armed: false, done: false, harpoon, blade: None });
+        self.arrows.push(Arrow { body, sensor, solid, pinned: Vec::new(), queue_add: Vec::new(), queue_remove: Vec::new(), armed: false, done: false, harpoon, blade: None, blood: Vec::new(), reverse: false, flesh_sounds: 0 });
     }
 
     /// `ArrowGun.actions` + `fireArrow` (before the world step) and the arrows' own `actions` (pin / unpin queued bodies).
@@ -2709,6 +2713,19 @@ impl World {
                 let j = self.b.create_prismatic_joint(&jd);
                 self.arrows[ai].pinned.push((other, j, 1));
                 self.arrows[ai].armed = true;
+                if self.arrows[ai].blade.is_some() && self.b.shape_material(self.b.body(other).shapes[0]) & 6 != 0 {
+                    // BladeWeapon.createPrisJoint on a new flesh body: 50-particle blood burst at its centre, `paintBlood` stamp, BladeFlesh sound
+                    let c = self.b.body(other).sweep.c;
+                    self.blood.burst([c.x * PS, c.y * PS], Vec2::default(), 5.0, 15.0, 50);
+                    let l = self.b.body(body).local_point(c);
+                    let flip = if self.arrows[ai].reverse { -1.0 } else { 1.0 };
+                    let (rot, mirror) = (self.blood.rand() * std::f64::consts::TAU, if self.blood.rand() > 0.5 { -1.0 } else { 1.0 });
+                    self.arrows[ai].blood.push((l.x * PS * flip, l.y * PS, rot, mirror));
+                    if self.arrows[ai].flesh_sounds < 1 {
+                        self.arrows[ai].flesh_sounds += 1;
+                        self.play("BladeFlesh", 3, c);
+                    }
+                }
             }
             for other in std::mem::take(&mut self.arrows[ai].queue_remove) {
                 if let Some(k) = self.arrows[ai].pinned.iter().position(|p| p.0 == other) {
@@ -2790,6 +2807,11 @@ impl World {
                 }
             }
         }
+    }
+
+    /// BladeWeapon blood stamps (clip-local px x, y, rotation, scaleX) of the blade whose body is `body`.
+    pub fn blade_blood(&self, body: BodyId) -> &[(f64, f64, f64, f64)] {
+        self.arrows.iter().find(|a| a.body == body && a.blade.is_some()).map_or(&[], |a| a.blood.as_slice())
     }
 
     /// Blood stamps (x in the spike row, frame) of the spikes special whose body is `body`.

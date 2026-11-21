@@ -2984,3 +2984,15 @@ fn spike_blood_is_drawn() {
     let after = happywheels_core::render::render_level_sprites(&level, &w, 400, 300, [1000.0, 400.0], Some(&sp));
     assert_ne!(before.as_raw(), after.as_raw());
 }
+
+/// A sword dropped onto an NPC records a blood stamp for its blade (paintBlood).
+#[test]
+fn blade_records_blood_when_it_stabs_flesh() {
+    let level = level::parse("<levelXML><info v='1.99' x='700' y='350'/><shapes><sh t='0' p0='1000' p1='425' p2='3000' p3='50' p4='0' p5='t' p6='f' p7='1' p8='0' p9='-1' p10='100' p11='1'/></shapes><specials><sp t='17' p0='1000' p1='390' p2='90' p3='1' p4='f' p5='f'/><sp t='34' p0='1000' p1='300' p2='180' p3='f' p4='f' p5='t' p6='2'/></specials></levelXML>").unwrap();
+    let mut w = World::from_level(&level);
+    for _ in 0..70 {
+        w.step();
+    }
+    let blade = w.special_bodies.iter().flatten().copied().find(|&b| !w.blade_blood(b).is_empty());
+    assert!(blade.is_some(), "no blood stamp recorded");
+}
