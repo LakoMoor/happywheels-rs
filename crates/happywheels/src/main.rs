@@ -362,6 +362,21 @@ impl Net {
     }
 }
 
+/// Opens the `--host` / `--join` connection, if one was asked for.
+fn connect_net(options: &Options) -> Result<Option<Net>> {
+    let (stream, host) = match (options.host, &options.join) {
+        (Some(port), _) => {
+            println!("waiting for a player on port {port} …");
+            (std::net::TcpListener::bind(("0.0.0.0", port))?.accept()?.0, true)
+        }
+        (None, Some(addr)) => (std::net::TcpStream::connect(addr).with_context(|| format!("connecting to {addr}"))?, false),
+        _ => return Ok(None),
+    };
+    stream.set_nodelay(true)?;
+    stream.set_read_timeout(Some(std::time::Duration::from_secs(10)))?;
+    Ok(Some(Net { stream, host }))
+}
+
 fn dir_of(k: [bool; 8]) -> f32 {
     f32::from(u8::from(k[1])) - f32::from(u8::from(k[0]))
 }
@@ -763,6 +778,29 @@ fn main() -> Result<()> {
         }
         let sprites = make_sprites(&options.assets, 3, &world, level.info.start);
         let mut p2 = (options.players > 1).then(|| Player::new(&options.assets, &level, 4));
+        if let Some(mut net) = connect_net(&options)? {
+            // Headless lockstep run: scripted keys (host rides right, client rides right from step 10), both peers print the final positions —
+            // they must be identical on both machines/processes.
+            let mut p2 = Player::new(&options.assets, &level, 4);
+            for s in 0..options.sim_steps {
+                let mut mine = [false; 8];
+                mine[1] = net.host || s >= 10;
+                mine[2] = s % 40 < 20;
+                let Some(remote) = net.exchange(mine) else { bail!("peer disconnected at step {s}") };
+                let (k1, k2) = if net.host { (mine, remote) } else { (remote, mine) };
+                let ks = |k: [bool; 8]| happywheels_core::vehicle::Keys { left: k[0], right: k[1], up: k[2], down: k[3], space: k[4], z: k[5], shift: k[6], ctrl: k[7] };
+                world.drive(dir_of(k1));
+                world.set_rider_keys(ks(k1));
+                world.step();
+                p2.keys = k2;
+                p2.drive = dir_of(k2);
+                p2.step();
+            }
+            use happywheels_core::character::Part;
+            let pos = |w: &happywheels_core::physics::World| w.character.as_ref().and_then(|d| d.bodies.get(&Part::Chest)).and_then(|&b| w.body_position_px(b));
+            println!("net-final p1 {:?} p2 {:?}", pos(&world), pos(&p2.world));
+            return Ok(());
+        }
         for _ in 0..options.sim_steps {
             world.step();
             if let Some(p2) = &mut p2 {
@@ -803,19 +841,9 @@ fn main() -> Result<()> {
     let menu = Menu::load(&assets)?;
     let mut app = App::new(menu, options.frame_limit, options.assets.clone());
     app.players = options.players;
-    if options.host.is_some() || options.join.is_some() {
+    if let Some(net) = connect_net(&options)? {
         app.players = 2;
-        let (stream, host) = match (options.host, &options.join) {
-            (Some(port), _) => {
-                println!("waiting for a player on port {port} …");
-                (std::net::TcpListener::bind(("0.0.0.0", port))?.accept()?.0, true)
-            }
-            (None, Some(addr)) => (std::net::TcpStream::connect(addr).with_context(|| format!("connecting to {addr}"))?, false),
-            _ => unreachable!(),
-        };
-        stream.set_nodelay(true)?;
-        stream.set_read_timeout(Some(std::time::Duration::from_secs(10)))?;
-        app.net = Some(Net { stream, host });
+        app.net = Some(net);
     }
     if let (Some(path), true) = (&options.level, options.window) {
         let xml = std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
