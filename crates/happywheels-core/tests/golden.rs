@@ -3035,3 +3035,46 @@ fn mower_blade_throws_sparks_on_hard_hits() {
     }
     assert!(seen >= 20, "expected a 20-spark burst, saw {seen}");
 }
+
+/// The blade throws a blood spray (`createBloodSpray`) while it grinds a body heavier than 0.1.
+#[test]
+fn mower_blade_sprays_blood_while_grinding() {
+    use box2d::{math::Vec2, shape::{Geometry, ShapeDef}, world::BodyDef};
+    use happywheels_core::vehicle::Vehicle;
+    let level = level::parse(
+        "<levelXML><info v='1.99' x='1000' y='250'/><shapes>\
+         <sh t='0' p0='1000' p1='425' p2='3000' p3='50' p4='0' p5='t' p6='f' p7='1' p8='0' p9='-1' p10='100' p11='1'/></shapes></levelXML>",
+    )
+    .unwrap();
+    let mut w = World::from_level(&level);
+    assert!(w.spawn_bike(6, [1000.0, 250.0]));
+    for _ in 0..20 {
+        w.step();
+    }
+    // a 0.3 m flesh box dropped onto the blade
+    let Some(Vehicle::Mower(m)) = w.bike.as_ref() else { panic!() };
+    let mc = w.b2().body(m.body).sweep.c;
+    let target = {
+        let b = w.b2_mut();
+        // the blade sits under the mower body; find it through the lowest non-sensor shape point
+        let id = b.create_body(&BodyDef { position: Vec2::new(mc.x, mc.y + 0.55), ..Default::default() });
+        let mut d = ShapeDef::new(Geometry::Polygon(vec![Vec2::new(-0.15, -0.15), Vec2::new(0.15, -0.15), Vec2::new(0.15, 0.15), Vec2::new(-0.15, 0.15)]));
+        d.density = 5.0;
+        let s = b.create_shape(id, &d);
+        b.shape_mut(s).material = 1;
+        b.set_mass_from_shapes(id);
+        id
+    };
+    let mut sprayed = 0;
+    for s in 0..240 {
+        w.step();
+        let grew = w.blood.particles.len() > sprayed;
+        sprayed = sprayed.max(w.blood.particles.len());
+        if let (Some(path), true) = (std::env::var_os("HW_SHOT_SPRAY"), grew && s > 0) {
+            let c = w.b2().body(match w.bike.as_ref() { Some(Vehicle::Mower(m)) => m.body, _ => panic!() }).sweep.c;
+            happywheels_core::render::render_level_scene(&level, &w, 640, 360, [(c.x * 62.5) as f32, (c.y * 62.5) as f32], None, None).save(path).unwrap();
+        }
+    }
+    let _ = target;
+    assert!(sprayed > 20, "grinding a heavy flesh body should throw a blood spray, saw {sprayed} particles");
+}

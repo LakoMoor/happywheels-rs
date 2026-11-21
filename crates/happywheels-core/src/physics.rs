@@ -2123,6 +2123,11 @@ impl World {
         self.npcs.iter().flat_map(|n| n.bodies).collect()
     }
 
+    /// Whether `body` is a food item (its grinding sprays juice particles, not blood).
+    pub(crate) fn is_food(&self, body: BodyId) -> bool {
+        self.foods.iter().any(|f| f.0 == body)
+    }
+
     pub fn frame(&self) -> u32 {
         self.frame
     }

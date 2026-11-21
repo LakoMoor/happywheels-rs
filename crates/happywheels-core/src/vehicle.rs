@@ -1790,6 +1790,8 @@ pub struct Mower {
     /// Frame until which the previous `MowerImpact` sound is still playing (`mowerImpactSound`).
     impact_until: u32,
     mower_mass: f64,
+    /// Blood sprays of the bodies being ground (`createBloodSpray`): (target body, spray start local, spray end local, particles per step).
+    sprays: Vec<(BodyId, Vec2, Vec2, u32)>,
     /// Grinding in progress: (target body, rising body) pairs, new pairs queued by `handleBladeContacts`, and the clearance-sensor contact counts per body.
     pub targets: Vec<(BodyId, BodyId)>,
     added: Vec<usize>,
@@ -1815,6 +1817,22 @@ impl Mower {
         use box2d::world::ContactEventKind as K;
         if self.halves.is_some() {
             return;
+        }
+        // blood sprays of the bodies still being ground: `perFrame` particles per step from the blade edge, thrown over a 180° fan
+        for &(target, a, b, per_frame) in &self.sprays {
+            if !world.b2().c.bodies[target].alive {
+                continue;
+            }
+            for _ in 0..per_frame {
+                let (u, speed, spread) = (world.blood.rand(), world.blood.rand() * 5.0, world.blood.rand() * std::f64::consts::PI);
+                let p = Vec2::new(a.x + (b.x - a.x) * u, a.y + (b.y - a.y) * u);
+                let m = world.b2().body(self.body);
+                let rot = (b.y - a.y).atan2(b.x - a.x);
+                let ang = m.sweep.a + rot + spread;
+                let v = m.linear_velocity_from_local_point(p);
+                let w = m.world_point(p);
+                world.blood.spawn([w.x * 62.5, w.y * 62.5], [ang.cos() * speed + v.x, ang.sin() * speed + v.y]);
+            }
         }
         for e in events {
             if !matches!(e.kind, K::Add | K::Remove) || (e.shape1 != self.clearance_shape && e.shape2 != self.clearance_shape) {
@@ -1895,6 +1913,7 @@ impl Mower {
                 b.destroy_body(target);
                 b.destroy_body(rising);
                 self.targets.remove(i);
+                self.sprays.retain(|s| s.0 != target);
             }
         }
         for j in std::mem::take(&mut self.added) {
@@ -1946,6 +1965,15 @@ impl Mower {
         rd.max_motor_torque = 5.0;
         let rj = b.create_revolute_joint(&rd);
         self.added.push(rj);
+        let mass = b.body(body).mass;
+        if mass > 0.1 && !world.is_food(body) {
+            // `createBloodSpray(mowerBody, (max(bladeLeftX, x − r), bottom), (min(bladeRightX, x + r), bottom), 0, 5, 180°, round(20·D), …)`
+            let d = (mass / 0.4).min(1.0);
+            let r = d * 1.12 * 0.5;
+            let x = world.b2().body(self.body).local_point(at).x;
+            let (lo, hi) = (self.blade_center.x - self.blade_x, self.blade_center.x + self.blade_x);
+            self.sprays.push((body, Vec2::new(lo.max(x - r), self.blade_bottom), Vec2::new(hi.min(x + r), self.blade_bottom), (20.0 * d).round() as u32));
+        }
         Some(())
     }
 
@@ -2203,6 +2231,7 @@ impl Mower {
             blade_center,
             blade_x,
             blade_bottom,
+            sprays: Vec::new(),
             impact_until: 0,
             mower_mass,
             targets: Vec::new(),
