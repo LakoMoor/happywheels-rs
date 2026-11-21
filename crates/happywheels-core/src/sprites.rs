@@ -166,7 +166,44 @@ impl Sprites {
         if pages.is_empty() {
             return None;
         }
+        // Some clips reuse textures that live in another character's atlas (the dirt bike's `metalShards` use `fat-lady-asset-44`): load those pages too.
+        let mut missing = Vec::new();
+        Self::textures(&clip, &mut missing);
+        missing.retain(|t| !pages.iter().any(|(f, _)| f.contains_key(t)));
+        for other in (1..=11).filter(|&o| o != index) {
+            if missing.is_empty() {
+                break;
+            }
+            let dir = assets.join(format!("animate/character{other}"));
+            let mut tries = vec![(dir.clone(), format!("character{other}"))];
+            tries.extend(["a", "b", "c"].map(|sub| (dir.join(sub), sub.to_string())));
+            for (folder, stem) in tries {
+                let Ok(json) = std::fs::read_to_string(folder.join(format!("{stem}@0.3x.json"))) else { continue };
+                let Ok(atlas) = serde_json::from_str::<AtlasFile>(&json) else { continue };
+                if !missing.iter().any(|t| atlas.frames.contains_key(t)) {
+                    continue;
+                }
+                let Ok(img) = image::open(folder.join(format!("{stem}@0.3x.png"))) else { continue };
+                missing.retain(|t| !atlas.frames.contains_key(t));
+                pages.push((atlas.frames, img.to_rgba8()));
+            }
+        }
         Some(Self { clip, pages, bindings: Vec::new(), shift: [0.0, 0.0], city: Vec::new(), hidden: Default::default(), show_wound: Default::default() })
+    }
+
+    /// Every texture name used anywhere in `nodes` (including alternate frames).
+    fn textures(nodes: &[Node], out: &mut Vec<String>) {
+        for n in nodes {
+            if let Some(t) = &n.t {
+                if !out.contains(t) {
+                    out.push(t.clone());
+                }
+            }
+            Self::textures(&n.k, out);
+            for alt in n.alt.values() {
+                Self::textures(alt, out);
+            }
+        }
     }
 
     /// Binds clip part `name` to `body`. The original's `paint` puts the clip at the body's centre of mass with the body's angle, so

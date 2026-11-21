@@ -1386,6 +1386,7 @@ impl DirtBike {
         {
             let at = world.b2().body(self.frame).sweep.c;
             world.play("MetalSmashHeavy", 1, at);
+            world.shard_burst(crate::blood::ShardKind::Metal, at, 5.0, 50.0, 50);
         }
         self.eject(world, doll);
         if let Some(g) = self.girl.as_mut() {
