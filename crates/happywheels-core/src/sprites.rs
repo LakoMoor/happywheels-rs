@@ -597,6 +597,7 @@ impl Sprites {
             0 => "van-body.png",
             27 => "rail.png",
             11 => "meteor.png",
+            31 => "token-outer-ring.png",
             _ => return false,
         };
         self.pages.iter().any(|(f, _)| f.contains_key(tex))
@@ -614,6 +615,27 @@ impl Sprites {
             }
             if matches!(sp.kind, 1 | 2 | 5 | 7 | 10) {
                 self.draw_clip_special(img, sp, world.special_bodies.get(i).copied().flatten(), world, cam);
+                continue;
+            }
+            // Token: `CoinMC.container.gotoAndStop(tokenType)` at the level position; gone once collected (its sensor body is destroyed).
+            if sp.kind == 31 {
+                static COIN: std::sync::OnceLock<Vec<Node>> = std::sync::OnceLock::new();
+                #[derive(Deserialize)]
+                struct File {
+                    k: Vec<Node>,
+                }
+                let coin = COIN.get_or_init(|| serde_json::from_str::<File>(include_str!("../data/game-CoinMC.json")).map(|f| f.k).unwrap_or_default());
+                if world.special_bodies.get(i).copied().flatten().is_none_or(|b| world.body_center_px(b).is_none()) {
+                    continue;
+                }
+                let frame = sp.num("tokenType").unwrap_or(1.0).max(1.0) as usize;
+                let m = mul(cam, local(f64::from(sp.num("x").unwrap_or(0.0)), f64::from(sp.num("y").unwrap_or(0.0)), 0.0, 1.0, 1.0));
+                for container in coin {
+                    let kids = if frame > 1 { container.alt.get(&frame.to_string()).unwrap_or(&container.k) } else { &container.k };
+                    for k in kids {
+                        self.draw_node(img, k, m);
+                    }
+                }
                 continue;
             }
             // Rail: static `RailMC` (rail.png, 100×18) at the level position/angle, `mc.width = shapeWidth` (x scale only).
