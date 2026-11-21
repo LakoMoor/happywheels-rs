@@ -167,7 +167,7 @@ impl Sprites {
             return None;
         }
         // Atlas `game/l` holds the runtime special-element art (spikes, ...).
-        for g in ["l", "d", "r", "o", "c", "a", "n"] {
+        for g in ["l", "d", "r", "o", "c", "a", "n", "p", "q"] {
             let game = assets.join(format!("animate/game/{g}"));
             if let (Ok(json), Ok(img)) = (std::fs::read_to_string(game.join(format!("{g}@0.3x.json"))), image::open(game.join(format!("{g}@0.3x.png")))) {
                 if let Ok(atlas) = serde_json::from_str::<AtlasFile>(&json) {
@@ -607,6 +607,7 @@ impl Sprites {
             35 => "paddle-paddle.png",
             12 => "boost-1718.png",
             24 => "toilet-ref-base.png",
+            19 => "chair-top-asset.png",
             26 => "trash-can-body.png",
             20 => "bottle-1724.png",
             21 => "tv-damage-0.png",
@@ -909,6 +910,28 @@ impl Sprites {
                     for n in can.iter().filter(|n| n.n == "can" || (n.n == "lid" && trash)) {
                         self.draw_node(img, n, mul(cam, pose));
                     }
+                }
+                continue;
+            }
+            // Chair: `ChairMC.container` frame 1 (top, two legs, back) x-flipped by `reverse`, at the body's COM or the level position when not interactive.
+            // The broken-back frame and the breaking pieces are not drawn.
+            if sp.kind == 19 {
+                #[derive(Deserialize)]
+                struct File {
+                    k: Vec<Node>,
+                }
+                static CHAIR: std::sync::OnceLock<Vec<Node>> = std::sync::OnceLock::new();
+                let chair = CHAIR.get_or_init(|| serde_json::from_str::<File>(include_str!("../data/game-ChairMC.json")).map(|f| f.k).unwrap_or_default());
+                let (x, y, a) = (f64::from(sp.num("x").unwrap_or(0.0)), f64::from(sp.num("y").unwrap_or(0.0)), f64::from(sp.num("angle").unwrap_or(0.0)).to_radians());
+                let pose = match world.special_bodies.get(i).copied().flatten() {
+                    Some(b) if world.body_center_px(b).is_some() => body_matrix(world, b),
+                    Some(_) => continue,
+                    None => local(x, y, a, 1.0, 1.0),
+                };
+                let flip = if sp.flag("reverse").unwrap_or(false) { -1.0 } else { 1.0 };
+                let m = mul(cam, mul(pose, local(0.0, 0.0, 0.0, flip, 1.0)));
+                for n in chair {
+                    self.draw_node(img, n, m);
                 }
                 continue;
             }
