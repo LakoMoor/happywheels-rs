@@ -595,6 +595,8 @@ impl Sprites {
             10 => "soccer-ball.png",
             7 => "wrecking-ball-ball.png",
             0 => "van-body.png",
+            27 => "rail.png",
+            11 => "meteor.png",
             _ => return false,
         };
         self.pages.iter().any(|(f, _)| f.contains_key(tex))
@@ -612,6 +614,20 @@ impl Sprites {
             }
             if matches!(sp.kind, 1 | 2 | 5 | 7 | 10) {
                 self.draw_clip_special(img, sp, world.special_bodies.get(i).copied().flatten(), world, cam);
+                continue;
+            }
+            // Rail: static `RailMC` (rail.png, 100×18) at the level position/angle, `mc.width = shapeWidth` (x scale only).
+            if sp.kind == 27 {
+                let (x, y, a) = (f64::from(sp.num("x").unwrap_or(0.0)), f64::from(sp.num("y").unwrap_or(0.0)), f64::from(sp.num("angle").unwrap_or(0.0)).to_radians());
+                let sw = f64::from(sp.num("shapeWidth").unwrap_or(250.0));
+                self.blit(img, "rail.png", mul(cam, mul(local(x, y, a, sw / 100.0, 1.0), local(-50.0, -9.0, 0.0, 0.5, 0.5))));
+                continue;
+            }
+            // Meteor: `meteor.png` (clip 407×401 at (−205, −201)), scaled by shapeWidth / 400, at the body's centre of mass.
+            if sp.kind == 11 {
+                let Some(body) = world.special_bodies.get(i).copied().flatten().filter(|&b| world.body_center_px(b).is_some()) else { continue };
+                let s = f64::from(sp.num("shapeWidth").unwrap_or(400.0)) / 400.0;
+                self.blit(img, "meteor.png", mul(cam, mul(body_matrix(world, body), mul(local(0.0, 0.0, 0.0, s, s), local(-205.0, -201.0, 0.0, 1.0, 1.0)))));
                 continue;
             }
             if !matches!(sp.kind, 3 | 4 | 6) {
