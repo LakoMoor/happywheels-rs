@@ -598,6 +598,7 @@ impl Sprites {
             27 => "rail.png",
             11 => "meteor.png",
             31 => "token-outer-ring.png",
+            23 => "post.png",
             _ => return false,
         };
         self.pages.iter().any(|(f, _)| f.contains_key(tex))
@@ -615,6 +616,32 @@ impl Sprites {
             }
             if matches!(sp.kind, 1 | 2 | 5 | 7 | 10) {
                 self.draw_clip_special(img, sp, world.special_bodies.get(i).copied().flatten(), world, cam);
+                continue;
+            }
+            // SignPost: static `SignMC` frame `signPostType` (a single sign texture per frame) with `PostMC` behind it when `signPost` is set.
+            if sp.kind == 23 {
+                #[derive(Deserialize)]
+                struct Frames {
+                    frames: Vec<Vec<Node>>,
+                }
+                static SIGNS: std::sync::OnceLock<Vec<Vec<Node>>> = std::sync::OnceLock::new();
+                static POST: std::sync::OnceLock<Vec<Node>> = std::sync::OnceLock::new();
+                #[derive(Deserialize)]
+                struct File {
+                    k: Vec<Node>,
+                }
+                let signs = SIGNS.get_or_init(|| serde_json::from_str::<Frames>(include_str!("../data/game-SignMC.json")).map(|f| f.frames).unwrap_or_default());
+                let post = POST.get_or_init(|| serde_json::from_str::<File>(include_str!("../data/game-PostMC.json")).map(|f| f.k).unwrap_or_default());
+                let m = mul(cam, local(f64::from(sp.num("x").unwrap_or(0.0)), f64::from(sp.num("y").unwrap_or(0.0)), f64::from(sp.num("angle").unwrap_or(0.0)).to_radians(), 1.0, 1.0));
+                if sp.flag("signPost").unwrap_or(true) {
+                    for n in post {
+                        self.draw_node(img, n, m);
+                    }
+                }
+                let frame = (sp.num("signPostType").unwrap_or(1.0).max(1.0) as usize).min(signs.len().max(1)) - 1;
+                for n in signs.get(frame).map(Vec::as_slice).unwrap_or(&[]) {
+                    self.draw_node(img, n, m);
+                }
                 continue;
             }
             // Token: `CoinMC.container.gotoAndStop(tokenType)` at the level position; gone once collected (its sensor body is destroyed).
