@@ -3281,3 +3281,27 @@ fn harpoon_blood_shot() {
     let sp = happywheels_core::sprites::Sprites::open(&assets, 1).unwrap();
     happywheels_core::render::render_level_scene(&level, &w, 500, 400, [1000.0, 300.0], Some(&sp), None).save(path).unwrap();
 }
+
+/// HW_SHOT_ARROWS=<png>: an arrow gun fires a volley at a hovering flesh-material ball; arrows in flight and pinned arrows are drawn with `ArrowMC`.
+#[test]
+fn arrow_gun_shot() {
+    use box2d::{math::Vec2, shape::{Filter, Geometry, ShapeDef}, world::BodyDef};
+    let Some(path) = std::env::var_os("HW_SHOT_ARROWS") else { return };
+    let Some(assets) = Some(std::path::PathBuf::from("../../../assets-99tnk64n1mubaoc8w")).filter(|p| p.join("animate/game/l").exists()) else { return };
+    let level = level::parse("<levelXML><info v='1.99'/><shapes/><specials><sp t='29' p0='1000' p1='500' p2='0' p3='t' p4='10' p5='f'/></specials></levelXML>").unwrap();
+    let mut w = World::from_level(&level);
+    let b = w.b2_mut().create_body(&BodyDef { position: Vec2::new(1000.0 / 62.5, 250.0 / 62.5), ..Default::default() });
+    let mut sd = ShapeDef::new(Geometry::Circle { local_position: Vec2::default(), radius: 20.0 / 62.5 });
+    sd.density = 50.0;
+    sd.filter = Filter { category_bits: 8, mask_bits: 0xFFFF, group_index: 0 };
+    let s = w.b2_mut().create_shape(b, &sd);
+    w.b2_mut().shape_mut(s).material = 2;
+    w.b2_mut().set_mass_from_shapes(b);
+    for _ in 0..30 {
+        w.b2_mut().body_mut(b).linear_velocity = Vec2::default();
+        w.step();
+    }
+    assert!(w.arrow_bodies().count() > 1, "the gun should have fired several arrows");
+    let sp = happywheels_core::sprites::Sprites::open(&assets, 1).unwrap();
+    happywheels_core::render::render_level_scene(&level, &w, 400, 400, [1000.0, 350.0], Some(&sp), None).save(path).unwrap();
+}
