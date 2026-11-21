@@ -961,7 +961,7 @@ impl World {
             let first = self.b.body(body).shapes[0];
             self.hit_sounds.push(HitSound { body, shapes: vec![first], name, variants, threshold, lock_frames, free_at: 0 });
         }
-        if sp.kind == 4 && !sb.fixed {
+        if sp.kind == 4 {
             self.b.c.report_results = true;
             let (w, h) = (f64::from(sp.num("shapeWidth").unwrap_or(36.0)), f64::from(sp.num("shapeHeight").unwrap_or(400.0)));
             let shape = self.b.body(body).shapes[0];
@@ -4668,6 +4668,27 @@ mod tests {
         assert_eq!(w.toilet_parts(Some(soft)), (true, true));
         assert!(w.toilet_pieces().count() >= 2, "a hard drop breaks something off");
         assert!(w.toilet_pieces().all(|(b, _, _)| w.b.c.bodies[b].alive));
+    }
+
+    /// An immovable log (a shape of the level body in the original) breaks like a free one: the heavy hitter above 2250 splits it, the halves start at rest.
+    #[test]
+    fn immovable_log_splits_too() {
+        let xml = "<levelXML><info v='1.99'/><shapes/><specials><sp t='4' p0='1000' p1='400' p2='36' p3='100' p4='0' p5='t' p6='f'/></specials></levelXML>";
+        let mut w = World::from_level(&crate::level::parse(xml).unwrap());
+        let log = w.special_bodies[0].unwrap();
+        assert!(w.body_is_fixed(log));
+        let hitter = w.b.create_body(&BodyDef { position: Vec2::new(1000.0 / PS, 250.0 / PS), ..Default::default() });
+        let mut sd = ShapeDef::oriented_box(0.4, 0.4, Vec2::default(), 0.0);
+        sd.density = 5000.0;
+        sd.filter = Filter { category_bits: 8, mask_bits: 0xFFFF, group_index: 0 };
+        w.b.create_shape(hitter, &sd);
+        w.b.set_mass_from_shapes(hitter);
+        w.b.body_mut(hitter).linear_velocity = Vec2::new(0.0, 20.0);
+        for _ in 0..30 {
+            w.step();
+        }
+        assert!(!w.b.c.bodies[log].alive);
+        assert_eq!(w.log_halves().count(), 2);
     }
 
     /// A log hit above an impulse of 2250 splits into two halves; a gentle one does not.

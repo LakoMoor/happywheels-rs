@@ -3305,3 +3305,26 @@ fn arrow_gun_shot() {
     let sp = happywheels_core::sprites::Sprites::open(&assets, 1).unwrap();
     happywheels_core::render::render_level_scene(&level, &w, 400, 400, [1000.0, 350.0], Some(&sp), None).save(path).unwrap();
 }
+
+/// HW_SHOT_FIXED_LOG=<png>: a heavy block smashes an immovable log; the halves and wood chips appear where the log stood.
+#[test]
+fn fixed_log_shot() {
+    use box2d::{math::Vec2, shape::{Filter, ShapeDef}, world::BodyDef};
+    let Some(path) = std::env::var_os("HW_SHOT_FIXED_LOG") else { return };
+    let Some(assets) = Some(std::path::PathBuf::from("../../../assets-99tnk64n1mubaoc8w")).filter(|p| p.join("animate/game/l").exists()) else { return };
+    let level = level::parse("<levelXML><info v='1.99'/><shapes><sh t='0' p0='1000' p1='450' p2='3000' p3='50' p4='0' p5='t' p6='f' p7='1' p8='0' p9='-1' p10='100' p11='1'/></shapes><specials><sp t='4' p0='1000' p1='380' p2='36' p3='100' p4='0' p5='t' p6='f'/></specials></levelXML>").unwrap();
+    let mut w = World::from_level(&level);
+    let hitter = w.b2_mut().create_body(&BodyDef { position: Vec2::new(1000.0 / 62.5, 250.0 / 62.5), ..Default::default() });
+    let mut sd = ShapeDef::oriented_box(0.4, 0.4, Vec2::default(), 0.0);
+    sd.density = 5000.0;
+    sd.filter = Filter { category_bits: 8, mask_bits: 0xFFFF, group_index: 0 };
+    w.b2_mut().create_shape(hitter, &sd);
+    w.b2_mut().set_mass_from_shapes(hitter);
+    w.b2_mut().body_mut(hitter).linear_velocity = Vec2::new(0.0, 20.0);
+    for _ in 0..8 {
+        w.step();
+    }
+    assert_eq!(w.log_halves().count(), 2);
+    let sp = happywheels_core::sprites::Sprites::open(&assets, 1).unwrap();
+    happywheels_core::render::render_level_scene(&level, &w, 500, 300, [1000.0, 330.0], Some(&sp), None).save(path).unwrap();
+}
