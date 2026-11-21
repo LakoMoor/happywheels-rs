@@ -13,3 +13,7 @@ Original game assets are **not** included; point the app at your own copy of the
 
 ![bike](docs/screenshots/sprites_bike.png)
 ![backdrop](docs/screenshots/backdrop_green_scrolled.png)
+
+## Multiplayer
+
+`happywheels --level level.xml --window --players 2` — local split screen (P1: arrows/Space, P2: WASD/F). Online race: `--host 7777` on one machine, `--join HOST:7777` on the other (same level file).

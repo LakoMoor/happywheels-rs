@@ -256,6 +256,40 @@ struct Sim {
     sprites: Option<happywheels_core::sprites::Sprites>,
     /// Parallax backdrop (`bg='1'` green hills only).
     backdrop: Option<happywheels_core::sprites::Sprites>,
+    /// Local second player (split screen): its own copy of the level and world, so players race side by side without touching each other.
+    p2: Option<Player>,
+}
+
+/// A local player beyond the first: own world, sprites and keys (W A S D, F = space, G = Z).
+struct Player {
+    world: happywheels_core::physics::World,
+    sprites: Option<happywheels_core::sprites::Sprites>,
+    keys: [bool; 8],
+    drive: f32,
+}
+
+impl Player {
+    fn new(assets: &std::path::Path, level: &happywheels_core::level::Level, character: usize) -> Self {
+        let mut world = happywheels_core::physics::World::from_level(level);
+        if !world.spawn_bike(character, level.info.start) {
+            world.spawn_character(character, level.info.start);
+        }
+        let sprites = make_sprites(assets, character, &world, level.info.start);
+        Self { world, sprites, keys: [false; 8], drive: 0.0 }
+    }
+
+    fn camera(&self, level: &happywheels_core::level::Level) -> [f32; 2] {
+        use happywheels_core::character::Part;
+        self.world.character.as_ref().and_then(|d| d.bodies.get(&Part::Chest)).and_then(|&b| self.world.body_position_px(b)).unwrap_or(level.info.start)
+    }
+
+    fn step(&mut self) {
+        let k = self.keys;
+        self.world.drive(self.drive);
+        self.world.set_rider_keys(happywheels_core::vehicle::Keys { left: k[0], right: k[1], up: k[2], down: k[3], space: k[4], z: k[5], shift: k[6], ctrl: k[7] });
+        self.world.step();
+        self.world.take_sounds();
+    }
 }
 
 impl Sim {
@@ -286,6 +320,52 @@ fn make_sprites(assets: &std::path::Path, character: usize, world: &happywheels_
     Some(s)
 }
 
+/// Split screen: the left half shows player 1, the right half player 2 (each at `w/2` wide, own camera).
+fn render_split(level: &happywheels_core::level::Level, world: &happywheels_core::physics::World, sprites: Option<&happywheels_core::sprites::Sprites>, p2: &Player, backdrop: Option<&happywheels_core::sprites::Sprites>, w: u32, h: u32) -> RgbaImage {
+    use happywheels_core::character::Part;
+    let (half, h) = ((w / 2).max(1), h.max(1));
+    let cam = world.character.as_ref().and_then(|d| d.bodies.get(&Part::Chest)).and_then(|&b| world.body_position_px(b)).unwrap_or(level.info.start);
+    let left = happywheels_core::render::render_level_scene(level, world, half, h, cam, sprites, backdrop);
+    let right = happywheels_core::render::render_level_scene(level, &p2.world, half, h, p2.camera(level), p2.sprites.as_ref(), backdrop);
+    let mut out = RgbaImage::new(half * 2, h);
+    image::imageops::replace(&mut out, &left, 0, 0);
+    image::imageops::replace(&mut out, &right, i64::from(half), 0);
+    for y in 0..h {
+        out.put_pixel(half - 1, y, image::Rgba([0, 0, 0, 255]));
+    }
+    out
+}
+
+/// Online play: two peers each simulate both riders (separate worlds, deterministic Box2D) and exchange the key state of every step over TCP (lockstep).
+struct Net {
+    stream: std::net::TcpStream,
+    /// The host's local keys drive player 1, the client's player 2.
+    host: bool,
+}
+
+fn pack_keys(k: [bool; 8]) -> u8 {
+    k.iter().enumerate().fold(0, |b, (i, &on)| b | (u8::from(on) << i))
+}
+
+fn unpack_keys(b: u8) -> [bool; 8] {
+    std::array::from_fn(|i| b & (1 << i) != 0)
+}
+
+impl Net {
+    /// Sends this step's local keys and waits for the peer's; `None` when the connection is gone.
+    fn exchange(&mut self, local: [bool; 8]) -> Option<[bool; 8]> {
+        use std::io::{Read, Write};
+        self.stream.write_all(&[pack_keys(local)]).ok()?;
+        let mut b = [0u8; 1];
+        self.stream.read_exact(&mut b).ok()?;
+        Some(unpack_keys(b[0]))
+    }
+}
+
+fn dir_of(k: [bool; 8]) -> f32 {
+    f32::from(u8::from(k[1])) - f32::from(u8::from(k[0]))
+}
+
 struct App {
     sim: Option<Sim>,
     menu: Menu,
@@ -300,12 +380,17 @@ struct App {
     /// Sound output (None when no device / no converted wav).
     audio: Option<audio::Audio>,
     assets: PathBuf,
+    /// Local players (1 or 2; `--players N`).
+    players: usize,
+    net: Option<Net>,
 }
 
 impl App {
     fn new(menu: Menu, frame_limit: Option<u32>, assets: PathBuf) -> Self {
         Self {
             assets,
+            players: 1,
+            net: None,
             sim: None,
             audio: audio::Audio::new(),
             character: 1,
@@ -332,7 +417,10 @@ impl App {
 
     fn current_frame(&mut self, w: u32, h: u32) -> Result<RgbaImage> {
         match &self.sim {
-            Some(sim) => Ok(happywheels_core::render::render_level_scene(&sim.level, &sim.world, w.max(1), h.max(1), sim.camera(), sim.sprites.as_ref(), sim.backdrop.as_ref())),
+            Some(sim) => Ok(match &sim.p2 {
+                None => happywheels_core::render::render_level_scene(&sim.level, &sim.world, w.max(1), h.max(1), sim.camera(), sim.sprites.as_ref(), sim.backdrop.as_ref()),
+                Some(p2) => render_split(&sim.level, &sim.world, sim.sprites.as_ref(), p2, sim.backdrop.as_ref(), w, h),
+            }),
             None => self.menu.render(w, h),
         }
     }
@@ -343,13 +431,14 @@ impl App {
         };
         let xml = std::fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
         let level = happywheels_core::level::parse(&xml)?;
+        let level2 = happywheels_core::level::parse(&xml)?;
         let mut world = happywheels_core::physics::World::from_level(&level);
         if !world.spawn_bike(self.character, level.info.start) {
             world.spawn_character(self.character, level.info.start);
         }
         let sprites = make_sprites(&self.assets, self.character, &world, level.info.start);
         let backdrop = make_backdrop(&self.assets, &level);
-        self.sim = Some(Sim { level, world, next_step: std::time::Instant::now(), drive: 0.0, keys: [false; 8], sprites, backdrop });
+        self.sim = Some(Sim { level, world, next_step: std::time::Instant::now(), drive: 0.0, keys: [false; 8], sprites, backdrop, p2: (self.players > 1).then(|| Player::new(&self.assets, &level2, self.character % 11 + 1)) });
         Ok(())
     }
 
@@ -391,10 +480,29 @@ impl ApplicationHandler for App {
         let now = std::time::Instant::now();
         if now >= sim.next_step {
             let before = sim.world.events.len();
-            sim.world.drive(sim.drive);
-            let k = sim.keys;
+            let mut k = sim.keys;
+            let mut drive = sim.drive;
+            if let (Some(net), Some(p2)) = (&mut self.net, &mut sim.p2) {
+                // lockstep: host keys → player 1, client keys → player 2
+                match net.exchange(sim.keys) {
+                    Some(remote) => {
+                        let (k1, k2) = if net.host { (sim.keys, remote) } else { (remote, sim.keys) };
+                        (k, p2.keys) = (k1, k2);
+                        drive = dir_of(k1);
+                        p2.drive = dir_of(k2);
+                    }
+                    None => {
+                        eprintln!("network peer disconnected");
+                        self.net = None;
+                    }
+                }
+            }
+            sim.world.drive(drive);
             sim.world.set_rider_keys(happywheels_core::vehicle::Keys { left: k[0], right: k[1], up: k[2], down: k[3], space: k[4], z: k[5], shift: k[6], ctrl: k[7] });
             sim.world.step();
+            if let Some(p2) = &mut sim.p2 {
+                p2.step();
+            }
             for e in &sim.world.events[before..] {
                 println!("trigger {} fired at step {}", e.trigger, e.frame);
             }
@@ -466,6 +574,27 @@ impl ApplicationHandler for App {
             {
                 if let Some(sim) = &mut self.sim {
                     sim.keys[4] = key.state == ElementState::Pressed;
+                }
+            }
+            WindowEvent::KeyboardInput { event: key, .. } if self.sim.as_ref().is_some_and(|s| s.p2.is_some())
+                && matches!(&key.logical_key, winit::keyboard::Key::Character(c) if matches!(c.to_ascii_lowercase().as_str(), "a" | "d" | "w" | "s" | "f" | "g")) =>
+            {
+                let pressed = key.state == ElementState::Pressed;
+                if let (Some(Some(p2)), winit::keyboard::Key::Character(c)) = (self.sim.as_mut().map(|s| s.p2.as_mut()), &key.logical_key) {
+                    match c.to_ascii_lowercase().as_str() {
+                        "a" => {
+                            p2.keys[0] = pressed;
+                            p2.drive = if pressed { -1.0 } else if p2.drive < 0.0 { 0.0 } else { p2.drive };
+                        }
+                        "d" => {
+                            p2.keys[1] = pressed;
+                            p2.drive = if pressed { 1.0 } else if p2.drive > 0.0 { 0.0 } else { p2.drive };
+                        }
+                        "w" => p2.keys[2] = pressed,
+                        "s" => p2.keys[3] = pressed,
+                        "f" => p2.keys[4] = pressed,
+                        _ => p2.keys[5] = pressed,
+                    }
                 }
             }
             WindowEvent::KeyboardInput { event: key, .. } if self.sim.is_some()
@@ -549,6 +678,9 @@ struct Options {
     sim_steps: u32,
     level_png: Option<PathBuf>,
     window: bool,
+    players: usize,
+    host: Option<u16>,
+    join: Option<String>,
 }
 
 fn parse_options() -> Result<Option<Options>> {
@@ -564,6 +696,9 @@ fn parse_options() -> Result<Option<Options>> {
         sim_steps: 90,
         level_png: None,
         window: false,
+        players: 1,
+        host: None,
+        join: None,
     };
     let mut args = std::env::args().skip(1);
     while let Some(argument) = args.next() {
@@ -578,6 +713,9 @@ fn parse_options() -> Result<Option<Options>> {
             }
             "--check-assets" => options.check_assets = true,
             "--level" => options.level = Some(PathBuf::from(args.next().context("--level needs a file")?)),
+            "--players" => options.players = args.next().context("--players needs a number")?.parse::<usize>()?.clamp(1, 2),
+            "--host" => options.host = Some(args.next().context("--host needs a port")?.parse()?),
+            "--join" => options.join = Some(args.next().context("--join needs HOST:PORT")?),
             "--level-png" => options.level_png = Some(PathBuf::from(args.next().context("--level-png needs a file")?)),
             "--window" => options.window = true,
             "--steps" => options.sim_steps = args.next().context("--steps needs N")?.parse().context("invalid --steps")?,
@@ -624,8 +762,14 @@ fn main() -> Result<()> {
             world.spawn_character(1, level.info.start);
         }
         let sprites = make_sprites(&options.assets, 3, &world, level.info.start);
+        let mut p2 = (options.players > 1).then(|| Player::new(&options.assets, &level, 4));
         for _ in 0..options.sim_steps {
             world.step();
+            if let Some(p2) = &mut p2 {
+                p2.keys[1] = true; // headless demo: player 2 holds right
+                p2.drive = 1.0;
+                p2.step();
+            }
         }
         for e in &world.events {
             println!("trigger {} fired at step {}", e.trigger, e.frame);
@@ -637,7 +781,11 @@ fn main() -> Result<()> {
         }
         if let Some(png) = &options.level_png {
             let backdrop = make_backdrop(&options.assets, &level);
-            happywheels_core::render::render_level_scene(&level, &world, 1280, 720, level.info.start, sprites.as_ref(), backdrop.as_ref()).save(png)?;
+            match &p2 {
+                Some(p2) => render_split(&level, &world, sprites.as_ref(), p2, backdrop.as_ref(), 1280, 720),
+                None => happywheels_core::render::render_level_scene(&level, &world, 1280, 720, level.info.start, sprites.as_ref(), backdrop.as_ref()),
+            }
+            .save(png)?;
             println!("saved {}", png.display());
         }
         return Ok(());
@@ -654,16 +802,32 @@ fn main() -> Result<()> {
 
     let menu = Menu::load(&assets)?;
     let mut app = App::new(menu, options.frame_limit, options.assets.clone());
+    app.players = options.players;
+    if options.host.is_some() || options.join.is_some() {
+        app.players = 2;
+        let (stream, host) = match (options.host, &options.join) {
+            (Some(port), _) => {
+                println!("waiting for a player on port {port} …");
+                (std::net::TcpListener::bind(("0.0.0.0", port))?.accept()?.0, true)
+            }
+            (None, Some(addr)) => (std::net::TcpStream::connect(addr).with_context(|| format!("connecting to {addr}"))?, false),
+            _ => unreachable!(),
+        };
+        stream.set_nodelay(true)?;
+        stream.set_read_timeout(Some(std::time::Duration::from_secs(10)))?;
+        app.net = Some(Net { stream, host });
+    }
     if let (Some(path), true) = (&options.level, options.window) {
         let xml = std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
         let level = happywheels_core::level::parse(&xml)?;
+        let level2 = happywheels_core::level::parse(&xml)?;
         let mut world = happywheels_core::physics::World::from_level(&level);
         if !world.spawn_bike(app.character, level.info.start) {
             world.spawn_character(app.character, level.info.start);
         }
         let sprites = make_sprites(&options.assets, app.character, &world, level.info.start);
         let backdrop = make_backdrop(&options.assets, &level);
-        app.sim = Some(Sim { level, world, next_step: std::time::Instant::now(), drive: 0.0, keys: [false; 8], sprites, backdrop });
+        app.sim = Some(Sim { level, world, next_step: std::time::Instant::now(), drive: 0.0, keys: [false; 8], sprites, backdrop, p2: (app.players > 1).then(|| Player::new(&options.assets, &level2, app.character % 11 + 1)) });
     }
     let event_loop = EventLoop::new()?;
     event_loop.set_control_flow(ControlFlow::Wait);
@@ -672,4 +836,28 @@ fn main() -> Result<()> {
         bail!("application initialization or frame update failed");
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod net_tests {
+    use super::*;
+
+    #[test]
+    fn peers_exchange_keys_in_lockstep() {
+        let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let client = std::thread::spawn(move || {
+            let mut net = Net { stream: std::net::TcpStream::connect(("127.0.0.1", port)).unwrap(), host: false };
+            (0..5).map(|i| net.exchange(unpack_keys(i + 100)).unwrap()).collect::<Vec<_>>()
+        });
+        let mut host = Net { stream: listener.accept().unwrap().0, host: true };
+        let got: Vec<_> = (0..5).map(|i| host.exchange(unpack_keys(i)).unwrap()).collect();
+        let theirs = client.join().unwrap();
+        for i in 0..5u8 {
+            assert_eq!(pack_keys(got[usize::from(i)]), i + 100, "host receives the client's keys");
+            assert_eq!(pack_keys(theirs[usize::from(i)]), i, "client receives the host's keys");
+        }
+        assert_eq!(dir_of(unpack_keys(0b10)), 1.0);
+        assert_eq!(dir_of(unpack_keys(0b01)), -1.0);
+    }
 }
