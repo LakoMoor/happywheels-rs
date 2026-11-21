@@ -543,6 +543,15 @@ impl Ragdoll {
         }
     }
 
+    /// `wound.visible`: the chest's after a hard shoulder break (17739), the pelvis's after the waist tears (17652).
+    pub fn part_wound(&self, name: &str) -> bool {
+        match name {
+            "chest" => [Limb::Shoulder1, Limb::Shoulder2].iter().any(|l| self.broken.contains(l) && !self.sev_limbs.contains(l)),
+            "pelvis" => self.broken.contains(&Limb::Waist),
+            _ => false,
+        }
+    }
+
     fn chest_gone(&self) -> bool {
         self.heart.is_some()
     }

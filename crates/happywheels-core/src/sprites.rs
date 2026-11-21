@@ -109,6 +109,8 @@ pub struct Sprites {
     city: Vec<(f64, Vec<Building>)>,
     /// Extra node names hidden for the current `draw` (Santa's `ski`/`stem` children after those parts broke off).
     hidden: std::cell::RefCell<Vec<&'static str>>,
+    /// `wound` overlays of the chest / pelvis are drawn only while this is set (see `Ragdoll::part_wound`).
+    show_wound: std::cell::Cell<bool>,
 }
 
 /// One baked `drawBuilding` result: the top `W` rows drawn once (and again `dup` px to the right) and `k` tiled rows below them.
@@ -164,7 +166,7 @@ impl Sprites {
         if pages.is_empty() {
             return None;
         }
-        Some(Self { clip, pages, bindings: Vec::new(), shift: [0.0, 0.0], city: Vec::new(), hidden: Default::default() })
+        Some(Self { clip, pages, bindings: Vec::new(), shift: [0.0, 0.0], city: Vec::new(), hidden: Default::default(), show_wound: Default::default() })
     }
 
     /// Binds clip part `name` to `body`. The original's `paint` puts the clip at the body's centre of mass with the body's angle, so
@@ -219,7 +221,7 @@ impl Sprites {
         if pages.is_empty() {
             return None;
         }
-        Some(Self { clip, pages, bindings: Vec::new(), shift: [0.0, 0.0], city: Vec::new(), hidden: Default::default() })
+        Some(Self { clip, pages, bindings: Vec::new(), shift: [0.0, 0.0], city: Vec::new(), hidden: Default::default(), show_wound: Default::default() })
     }
 
     /// City backdrop (`bg='2'`): `city_bd1` (fixed sky/clouds) below two layers of baked buildings (`backdrop2`: multiplier .25, blur 5;
@@ -655,13 +657,15 @@ impl Sprites {
         // Top-level rider parts switch frames when limbs break (`gotoAndStop`); NPC / nested parts stay on frame 1.
         let frame = if b.path.len() == 1 { world.character.as_ref().map_or(1, |d| d.part_frame(&node.n)) } else { 1 };
         let children = if frame > 1 { node.alt.get(&frame.to_string()).unwrap_or(&node.k) } else { &node.k };
+        self.show_wound.set(b.path.len() == 1 && world.character.as_ref().is_some_and(|d| d.part_wound(&node.n)));
         for child in children {
             self.draw_node(img, child, g);
         }
+        self.show_wound.set(false);
     }
 
     fn draw_node(&self, img: &mut RgbaImage, n: &Node, parent: M) {
-        if HIDDEN.contains(&n.n.as_str()) || self.hidden.borrow().contains(&n.n.as_str()) {
+        if (HIDDEN.contains(&n.n.as_str()) && !(n.n == "wound" && self.show_wound.get())) || self.hidden.borrow().contains(&n.n.as_str()) {
             return;
         }
         let m = mul(parent, local(n.x, n.y, n.r, n.sx, n.sy));

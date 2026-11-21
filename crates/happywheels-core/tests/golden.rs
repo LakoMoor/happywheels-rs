@@ -2636,6 +2636,9 @@ fn sprites_draw_limb_break_frames() {
     doll.break_limb(&mut w, Limb::Hip2, 1.0);
     doll.break_limb(&mut w, Limb::Knee1, 1.0);
     doll.break_limb(&mut w, Limb::Neck, 1.0);
+    doll.break_limb(&mut w, Limb::Waist, 1.0);
+    doll.break_limb(&mut w, Limb::Shoulder2, 1.0e6);
+    assert!(doll.part_wound("pelvis") && doll.part_wound("chest"));
     assert_eq!(doll.part_frame("upperArm1"), 3);
     assert_eq!(doll.part_frame("lowerArm2"), 2);
     assert_eq!(doll.part_frame("upperLeg2"), 3);
