@@ -167,7 +167,7 @@ impl Sprites {
             return None;
         }
         // Atlas `game/l` holds the runtime special-element art (spikes, ...).
-        for g in ["l", "d", "r", "o", "c", "a"] {
+        for g in ["l", "d", "r", "o", "c", "a", "n"] {
             let game = assets.join(format!("animate/game/{g}"));
             if let (Ok(json), Ok(img)) = (std::fs::read_to_string(game.join(format!("{g}@0.3x.json"))), image::open(game.join(format!("{g}@0.3x.png")))) {
                 if let Ok(atlas) = serde_json::from_str::<AtlasFile>(&json) {
@@ -606,6 +606,9 @@ impl Sprites {
             28 => "jet-ref.png",
             35 => "paddle-paddle.png",
             12 => "boost-1718.png",
+            20 => "bottle-1724.png",
+            21 => "tv-damage-0.png",
+            22 => "boombox-1683.png",
             30 => "link-5.png",
             32 => "food-item-asset-1411.png",
             25 => "homing-mine-jet.png",
@@ -844,6 +847,31 @@ impl Sprites {
                     for n in clips[2 + ty].iter().filter(|n| n.n != "chunks" && n.n != "shapes") {
                         self.draw_node(img, n, mul(cam, body_matrix(world, b)));
                     }
+                }
+                continue;
+            }
+            // Bottle (frame `bottleType`), TV and boombox (frame 1; the other frames are damage states): one texture clip at the body's COM, or at the
+            // level position when not interactive. Broken pieces/shards and the later damage frames are not drawn.
+            if matches!(sp.kind, 20..=22) {
+                #[derive(Deserialize)]
+                struct Frames {
+                    frames: Vec<Vec<Node>>,
+                }
+                static CLIPS: std::sync::OnceLock<[Vec<Vec<Node>>; 3]> = std::sync::OnceLock::new();
+                let clips = CLIPS.get_or_init(|| {
+                    let f = |s: &str| serde_json::from_str::<Frames>(s).map(|f| f.frames).unwrap_or_default();
+                    [f(include_str!("../data/game-bottle.json")), f(include_str!("../data/game-tv.json")), f(include_str!("../data/game-BoomboxMC.json"))]
+                });
+                let frames = &clips[sp.kind - 20];
+                let (x, y, a) = (f64::from(sp.num("x").unwrap_or(0.0)), f64::from(sp.num("y").unwrap_or(0.0)), f64::from(sp.num("angle").unwrap_or(0.0)).to_radians());
+                let pose = match world.special_bodies.get(i).copied().flatten() {
+                    Some(b) if world.body_center_px(b).is_some() => body_matrix(world, b),
+                    Some(_) => continue,
+                    None => local(x, y, a, 1.0, 1.0),
+                };
+                let f = if sp.kind == 20 { (sp.num("bottleType").unwrap_or(1.0).max(1.0) as usize).min(frames.len().max(1)) - 1 } else { 0 };
+                for n in frames.get(f).map(Vec::as_slice).unwrap_or(&[]) {
+                    self.draw_node(img, n, mul(cam, pose));
                 }
                 continue;
             }
