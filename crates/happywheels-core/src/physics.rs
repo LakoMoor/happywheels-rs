@@ -223,6 +223,8 @@ struct Npc {
 /// into two pieces and 30 shards.
 struct Boombox {
     body: BodyId,
+    /// TV instead of boombox (crack 7 / shatter 20, 30 / 60 shards, three triangular pieces).
+    tv: bool,
     crack_impulse: f64,
     broken: bool,
     done: bool,
@@ -900,9 +902,9 @@ impl World {
             let first = self.b.body(body).shapes[0];
             self.hit_sounds.push(HitSound { body, shapes: vec![first], name, variants, threshold, lock_frames, free_at: 0 });
         }
-        if sp.kind == 22 {
+        if matches!(sp.kind, 21 | 22) {
             self.b.c.report_results = true;
-            self.boomboxes.push(Boombox { body, crack_impulse: 6.5, broken: false, done: false, frame: 1, pieces: Vec::new() });
+            self.boomboxes.push(Boombox { body, tv: sp.kind == 21, crack_impulse: if sp.kind == 21 { 7.0 } else { 6.5 }, broken: false, done: false, frame: 1, pieces: Vec::new() });
         }
         if sp.kind == 26 {
             let first = self.b.body(body).shapes[0];
@@ -3281,36 +3283,58 @@ impl World {
             let shape = self.b.body(body).shapes[0];
             let limit = self.boomboxes[k].crack_impulse;
             let Some(imp) = events.iter().filter(|e| e.kind == ContactEventKind::Result && (e.shape1 == shape || e.shape2 == shape) && e.normal_impulse > limit).map(|e| e.normal_impulse).reduce(f64::max) else { continue };
-            self.boomboxes[k].crack_impulse = 17.5;
-            if imp > 17.5 {
+            let tv = self.boomboxes[k].tv;
+            let shatter = if tv { 20.0 } else { 17.5 };
+            self.boomboxes[k].crack_impulse = shatter;
+            if imp > shatter {
                 self.boomboxes[k].broken = true;
             }
             let at = self.b.body(body).sweep.c;
             let src = self.b.body(body).clone();
             if !self.boomboxes[k].broken {
-                self.play("BoomboxCrush1", 1, at);
-                self.rect_burst(&src, body, crate::blood::ShardKind::Food(3), 8.0, 15);
-                self.boomboxes[k].frame = 1 + (3.0 * self.blood.rand()).ceil().clamp(1.0, 3.0) as usize;
+                if tv {
+                    self.play("GlassLight", 2, at);
+                    self.rect_burst(&src, body, crate::blood::ShardKind::Food(4), 10.0, 30);
+                    self.boomboxes[k].frame = 1 + (4.0 * self.blood.rand()).ceil().clamp(1.0, 4.0) as usize;
+                } else {
+                    self.play("BoomboxCrush1", 1, at);
+                    self.rect_burst(&src, body, crate::blood::ShardKind::Food(3), 8.0, 15);
+                    self.boomboxes[k].frame = 1 + (3.0 * self.blood.rand()).ceil().clamp(1.0, 3.0) as usize;
+                }
                 self.boomboxes[k].broken = true;
                 continue;
             }
             // shatter
-            self.rect_burst(&src, body, crate::blood::ShardKind::Food(3), 10.0, 30);
-            self.play("BoomboxSmash", 2, at);
             let (ang, w) = (src.sweep.a, src.angular_velocity);
+            // (position, vertices) of each piece in its own body frame; the boombox pieces sit left/right of the centre, the TV's three at the centre
+            type Piece = (Vec2, Vec<Vec2>);
+            let boxy = |x: f64| -> Piece { (src.world_point(Vec2::new(x / PS, 1.8 / PS)), vec![Vec2::new(-10.5 / PS, -14.0 / PS), Vec2::new(10.5 / PS, -14.0 / PS), Vec2::new(10.5 / PS, 14.0 / PS), Vec2::new(-10.5 / PS, 14.0 / PS)]) };
+            let tri = |a: (f64, f64), b: (f64, f64), c: (f64, f64)| -> Piece { (src.sweep.c, vec![Vec2::new(a.0 / PS, a.1 / PS), Vec2::new(b.0 / PS, b.1 / PS), Vec2::new(c.0 / PS, c.1 / PS)]) };
+            let pieces: Vec<(u8, Piece)> = if tv {
+                self.rect_burst(&src, body, crate::blood::ShardKind::Food(4), 10.0, 60);
+                self.play("TVSmash", 2, at);
+                vec![
+                    (3, tri((-26.0, -18.0), (0.0, 20.0), (-26.0, 20.0))),
+                    (4, tri((26.0, -15.0), (25.0, 20.0), (-2.0, 20.0))),
+                    (5, tri((-24.0, -18.0), (25.0, -18.0), (-1.0, 4.0))),
+                ]
+            } else {
+                self.rect_burst(&src, body, crate::blood::ShardKind::Food(3), 10.0, 30);
+                self.play("BoomboxSmash", 2, at);
+                vec![(1, boxy(-13.6)), (2, boxy(13.55))]
+            };
             self.b.destroy_body(body);
             self.boomboxes[k].done = true;
-            for (n, lx) in [(1u8, -13.6), (2u8, 13.55)] {
-                let pos = src.world_point(Vec2::new(lx / PS, 1.8 / PS));
+            for (n, (pos, verts)) in pieces {
                 let piece = self.b.create_body(&BodyDef { position: pos, angle: ang, ..Default::default() });
-                let mut sd = ShapeDef::boxed(10.5 / PS, 14.0 / PS);
+                let mut sd = ShapeDef::new(Geometry::Polygon(verts));
                 sd.density = 2.0;
                 sd.friction = 0.3;
                 sd.restitution = 0.1;
                 sd.filter = Filter { category_bits: 8, mask_bits: 0xFFFF, group_index: 0 };
                 self.b.create_shape(piece, &sd);
                 self.b.set_mass_from_shapes(piece);
-                // the original asks the old body for the velocity at the NEW body's local centre (≈ its own origin)
+                // the original asks the old body for the velocity at the NEW body's local centre
                 let lc = self.b.body(piece).sweep.local_center;
                 self.b.body_mut(piece).angular_velocity = w;
                 self.b.body_mut(piece).linear_velocity = src.linear_velocity_from_local_point(lc);
@@ -3325,7 +3349,7 @@ impl World {
         self.boomboxes.iter().find(|b| b.body == body).map_or(1, |b| b.frame)
     }
 
-    /// Pieces of shattered boomboxes (body, 1 = left / 2 = right).
+    /// Pieces of shattered boomboxes (1 = left / 2 = right) and TVs (3..5): (body, piece clip number).
     pub fn boombox_pieces(&self) -> impl Iterator<Item = (BodyId, u8)> + '_ {
         self.boomboxes.iter().flat_map(|b| b.pieces.iter().copied())
     }
@@ -4148,6 +4172,24 @@ mod tests {
         assert!(!w.b.c.bodies[b].alive, "a hard hit destroys the body");
         assert_eq!(w.boombox_pieces().count(), 2);
         assert!(w.blood.sprites.iter().any(|p| matches!(p.kind, crate::blood::ShardKind::Food(3))));
+    }
+
+    /// A TV cracks above 7 (shards, frame 2..5) and shatters above 20 into three triangular pieces and 60 shards.
+    #[test]
+    fn tv_cracks_then_shatters() {
+        let xml = "<levelXML><info v='1.99'/><shapes><sh t='0' p0='1000' p1='450' p2='3000' p3='50' p4='0' p5='t' p6='f' p7='1' p8='0' p9='-1' p10='100' p11='1'/></shapes><specials><sp t='21' p0='900' p1='380' p2='0' p3='f' p4='t'/><sp t='21' p0='1200' p1='380' p2='0' p3='f' p4='t'/></specials></levelXML>";
+        let mut w = World::from_level(&crate::level::parse(xml).unwrap());
+        let (a, b) = (w.special_bodies[0].unwrap(), w.special_bodies[1].unwrap());
+        w.b.body_mut(a).linear_velocity = Vec2::new(0.0, 20.0);
+        w.b.body_mut(b).linear_velocity = Vec2::new(0.0, 60.0);
+        for _ in 0..40 {
+            w.step();
+        }
+        assert!(w.boombox_frame(a) >= 2 && w.b.c.bodies[a].alive, "medium hit: damage frame, body kept");
+        assert!(!w.b.c.bodies[b].alive, "hard hit destroys the TV");
+        assert_eq!(w.boombox_pieces().count(), 3);
+        assert!(w.boombox_pieces().all(|(p, _)| w.b.c.bodies[p].alive));
+        assert!(w.blood.sprites.iter().any(|p| matches!(p.kind, crate::blood::ShardKind::Food(4))));
     }
 
     /// A smashed food item leaves four circle chunks and 30 juice particles, and its body is gone.

@@ -3131,14 +3131,17 @@ fn boombox_shot() {
     use box2d::math::Vec2;
     let Some(path) = std::env::var_os("HW_SHOT_BOOM") else { return };
     let Some(assets) = Some(std::path::PathBuf::from("../../../assets-99tnk64n1mubaoc8w")).filter(|p| p.join("animate/game/l").exists()) else { return };
-    let level = level::parse("<levelXML><info v='1.99'/><shapes><sh t='0' p0='1000' p1='450' p2='3000' p3='50' p4='0' p5='t' p6='f' p7='1' p8='0' p9='-1' p10='100' p11='1'/></shapes><specials><sp t='22' p0='900' p1='380' p2='0' p3='f' p4='t'/><sp t='22' p0='1100' p1='380' p2='0' p3='f' p4='t'/></specials></levelXML>").unwrap();
+    let level = level::parse("<levelXML><info v='1.99'/><shapes><sh t='0' p0='1000' p1='450' p2='3000' p3='50' p4='0' p5='t' p6='f' p7='1' p8='0' p9='-1' p10='100' p11='1'/></shapes><specials><sp t='22' p0='900' p1='380' p2='0' p3='f' p4='t'/><sp t='22' p0='1100' p1='380' p2='0' p3='f' p4='t'/><sp t='21' p0='700' p1='380' p2='0' p3='f' p4='t'/><sp t='21' p0='500' p1='380' p2='0' p3='f' p4='t'/></specials></levelXML>").unwrap();
     let mut w = World::from_level(&level);
     let (a, b) = (w.special_bodies[0].unwrap(), w.special_bodies[1].unwrap());
+    let (tv1, tv2) = (w.special_bodies[2].unwrap(), w.special_bodies[3].unwrap());
+    w.b2_mut().body_mut(tv1).linear_velocity = Vec2::new(0.0, 25.0);
+    w.b2_mut().body_mut(tv2).linear_velocity = Vec2::new(0.0, 70.0);
     w.b2_mut().body_mut(a).linear_velocity = Vec2::new(0.0, 20.0);
     w.b2_mut().body_mut(b).linear_velocity = Vec2::new(0.0, 60.0);
     for _ in 0..22 {
         w.step();
     }
     let sp = happywheels_core::sprites::Sprites::open(&assets, 1).unwrap();
-    happywheels_core::render::render_level_scene(&level, &w, 640, 360, [1000.0, 380.0], Some(&sp), None).save(path).unwrap();
+    happywheels_core::render::render_level_scene(&level, &w, 800, 360, [800.0, 380.0], Some(&sp), None).save(path).unwrap();
 }

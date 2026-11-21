@@ -743,16 +743,22 @@ impl Sprites {
         }
     }
 
-    /// Pieces of shattered boomboxes (`BoomboxPiece1MC` / `BoomboxPiece2MC` at the piece body's pose).
+    /// Pieces of shattered boomboxes and TVs (`BoomboxPiece<n>MC` / `TVPiece<n>MC` at the piece body's pose).
     fn draw_boombox_pieces(&self, img: &mut RgbaImage, world: &World, cam: M) {
         #[derive(Deserialize)]
         struct File {
             k: Vec<Node>,
         }
-        static PIECES: std::sync::OnceLock<[Vec<Node>; 2]> = std::sync::OnceLock::new();
+        static PIECES: std::sync::OnceLock<[Vec<Node>; 5]> = std::sync::OnceLock::new();
         let pieces = PIECES.get_or_init(|| {
             let f = |s: &str| serde_json::from_str::<File>(s).map(|f| f.k).unwrap_or_default();
-            [f(include_str!("../data/game-BoomboxPiece1MC.json")), f(include_str!("../data/game-BoomboxPiece2MC.json"))]
+            [
+                f(include_str!("../data/game-BoomboxPiece1MC.json")),
+                f(include_str!("../data/game-BoomboxPiece2MC.json")),
+                f(include_str!("../data/game-TVPiece1MC.json")),
+                f(include_str!("../data/game-TVPiece2MC.json")),
+                f(include_str!("../data/game-TVPiece3MC.json")),
+            ]
         });
         for (b, n) in world.boombox_pieces() {
             if world.body_center_px(b).is_none() {
@@ -1049,7 +1055,7 @@ impl Sprites {
                 };
                 let f = match sp.kind {
                     20 => (sp.num("bottleType").unwrap_or(1.0).max(1.0) as usize).min(frames.len().max(1)) - 1,
-                    22 => world.special_bodies.get(i).copied().flatten().map_or(1, |b| world.boombox_frame(b)).clamp(1, frames.len().max(1)) - 1,
+                    21 | 22 => world.special_bodies.get(i).copied().flatten().map_or(1, |b| world.boombox_frame(b)).clamp(1, frames.len().max(1)) - 1,
                     _ => 0,
                 };
                 for n in frames.get(f).map(Vec::as_slice).unwrap_or(&[]) {
@@ -1493,12 +1499,12 @@ impl Sprites {
                 struct Frames {
                     frames: Vec<Vec<Node>>,
                 }
-                static FRAMES: std::sync::OnceLock<[Vec<Vec<Node>>; 4]> = std::sync::OnceLock::new();
+                static FRAMES: std::sync::OnceLock<[Vec<Vec<Node>>; 5]> = std::sync::OnceLock::new();
                 let frames = FRAMES.get_or_init(|| {
                     let f = |s: &str| serde_json::from_str::<Frames>(s).map(|f| f.frames).unwrap_or_default();
-                    [f(include_str!("../data/game-WatermelonParticlesMC.json")), f(include_str!("../data/game-PumpkinParticlesMC.json")), f(include_str!("../data/game-PineappleParticlesMC.json")), f(include_str!("../data/game-BoomboxShardsMC.json"))]
+                    [f(include_str!("../data/game-WatermelonParticlesMC.json")), f(include_str!("../data/game-PumpkinParticlesMC.json")), f(include_str!("../data/game-PineappleParticlesMC.json")), f(include_str!("../data/game-BoomboxShardsMC.json")), f(include_str!("../data/game-TVShardsMC.json"))]
                 });
-                let Some(children) = frames[usize::from(ty) % 4].get(p.frame) else { continue };
+                let Some(children) = frames[usize::from(ty) % 5].get(p.frame) else { continue };
                 let mut ext = (0.0, 0.0);
                 for c in children {
                     self.extent(c, local(0.0, 0.0, 0.0, 1.0, 1.0), &mut ext);
