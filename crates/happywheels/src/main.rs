@@ -273,7 +273,11 @@ impl Sim {
 
 /// Sprites for the c3 bike + rider (other characters still use the polygon fallback).
 fn make_backdrop(assets: &std::path::Path, level: &happywheels_core::level::Level) -> Option<happywheels_core::sprites::Sprites> {
-    (level.info.background == 1).then(|| happywheels_core::sprites::Sprites::open_backdrop(assets)).flatten()
+    match level.info.background {
+        1 => happywheels_core::sprites::Sprites::open_backdrop(assets),
+        2 => happywheels_core::sprites::Sprites::open_city_backdrop(assets),
+        _ => None,
+    }
 }
 
 fn make_sprites(assets: &std::path::Path, character: usize, world: &happywheels_core::physics::World, start: [f32; 2]) -> Option<happywheels_core::sprites::Sprites> {

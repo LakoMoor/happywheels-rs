@@ -2599,3 +2599,14 @@ fn green_backdrop_draws_parallax_layers() {
     assert_ne!(a.get_pixel(450, 100), &image::Rgba([255, 255, 255, 255]), "sky should be drawn");
     assert_ne!(a, b);
 }
+
+/// City backdrop (screenshots/backdrop_city.png).
+#[test]
+fn city_backdrop_draws_buildings() {
+    let assets = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../assets-99tnk64n1mubaoc8w");
+    let Some(back) = happywheels_core::sprites::Sprites::open_city_backdrop(&assets) else { return };
+    let level = level::parse("<levelXML><info v='1.99' x='450' y='250' bg='2'/><shapes></shapes></levelXML>").unwrap();
+    let w = World::from_level(&level);
+    let a = happywheels_core::render::render_level_scene(&level, &w, 900, 500, [450.0, 1500.0], None, Some(&back));
+    a.save(concat!(env!("CARGO_MANIFEST_DIR"), "/../../screenshots/backdrop_city.png")).unwrap();
+}
