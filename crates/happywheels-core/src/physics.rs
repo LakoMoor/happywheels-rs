@@ -1593,6 +1593,10 @@ impl World {
                 }
             }
         }
+        if let Some(crate::vehicle::Vehicle::Mower(mut m)) = self.bike.take_if(|b| matches!(b, crate::vehicle::Vehicle::Mower(_))) {
+            m.grind(self, &events);
+            self.bike = Some(crate::vehicle::Vehicle::Mower(m));
+        }
         if self.joints_break && matches!(self.bike, Some(crate::vehicle::Vehicle::Mower(_))) {
             // `contactResultHandler` on frontShape (3rd created): impulse above 200 smashes the mower
             let hit = if let Some(crate::vehicle::Vehicle::Mower(m)) = self.bike.as_ref() {
@@ -2011,6 +2015,12 @@ impl World {
             if c.motor_on(self) {
                 let w = self.b.body(c.back_wheel).sweep.c;
                 self.loops.push(("ElectricMotor1".to_string(), [(w.x * PS) as f32, (w.y * PS) as f32], 1.0));
+            }
+        }
+        if let Some(Vehicle::Mower(m)) = self.bike.as_ref() {
+            if m.grinding() {
+                let c = self.b.body(m.body).sweep.c;
+                self.loops.push(("GrindLoop2".to_string(), [(c.x * PS) as f32, (c.y * PS) as f32], 1.0));
             }
         }
         if let Some(Vehicle::Santa(sa)) = self.bike.as_ref() {

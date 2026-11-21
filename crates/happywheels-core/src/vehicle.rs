@@ -1780,6 +1780,16 @@ pub struct Mower {
     /// `mowerSmash` result: the two halves and the stored polygons (guide, world space) the halves are rebuilt from.
     pub halves: Option<[BodyId; 2]>,
     smash_geo: Vec<Vec<Vec2>>,
+    blade_shape: box2d::world::ShapeId,
+    clearance_shape: box2d::world::ShapeId,
+    /// `bladeCenter`, `bladeX` (half width) and (the body starts at the origin, so world = local at creation).
+    blade_center: Vec2,
+    blade_x: f64,
+    mower_mass: f64,
+    /// Grinding in progress: (target body, rising body) pairs, new pairs queued by `handleBladeContacts`, and the clearance-sensor contact counts per body.
+    pub targets: Vec<(BodyId, BodyId)>,
+    added: Vec<usize>,
+    contact_count: std::collections::HashMap<BodyId, i32>,
 }
 
 impl Mower {
@@ -1789,6 +1799,127 @@ impl Mower {
     pub fn loop_volume(&self, world: &World) -> f32 {
         let on = matches!(&world.b2().joint(self.back_joint).kind, box2d::joints::JointKind::Revolute(r) if r.enable_motor);
         if on { 1.0 } else { 0.5 }
+    }
+
+    /// Blade grinding (original `contactBladeResultHandler` / `handleBladeContacts` / `actions`, deobfuscated.js 31550–31700, 31907–31945). Needs the step's
+    /// contact `events`. A Result on the blade shape with a dynamic shape of material bits 1–7 whose contact lies in the middle of the blade (|x| < ½ blade width)
+    /// starts grinding it: the shape gets filter (1, 9, −3) and material 0, a sensor "rising" body slides it down the blade along the mower's local y axis
+    /// (prismatic, motor −0.5, limit −10…0) and is pinned to it (revolute, torque 5); the pair is removed once nothing touches the clearance sensor any
+    /// more. Other blade hits only shove the mower (and the hit body) like the original. NOT ported: `grindShape` side effects on characters/level shapes,
+    /// blood/particle sprays, sparks, target masks, stats.
+    pub fn grind(&mut self, world: &mut World, events: &[box2d::world::ContactEvent]) {
+        use box2d::world::ContactEventKind as K;
+        if self.halves.is_some() {
+            return;
+        }
+        for e in events {
+            if !matches!(e.kind, K::Add | K::Remove) || (e.shape1 != self.clearance_shape && e.shape2 != self.clearance_shape) {
+                continue;
+            }
+            let other = if e.shape1 == self.clearance_shape { e.shape2 } else { e.shape1 };
+            let body = world.b2().c.shapes[other].body;
+            if body == self.body {
+                continue;
+            }
+            *self.contact_count.entry(body).or_insert(0) += if e.kind == K::Add { 1 } else { -1 };
+        }
+        // strongest Result per other shape
+        let mut hits: Vec<(box2d::world::ShapeId, Vec2, f64)> = Vec::new();
+        for e in events.iter().filter(|e| e.kind == K::Result && (e.shape1 == self.blade_shape || e.shape2 == self.blade_shape)) {
+            let other = if e.shape1 == self.blade_shape { e.shape2 } else { e.shape1 };
+            if world.b2().c.shapes[other].shape.density == 0.0 {
+                continue;
+            }
+            match hits.iter_mut().find(|h| h.0 == other) {
+                Some(h) if e.normal_impulse > h.2 => *h = (other, e.position, e.normal_impulse),
+                Some(_) => {}
+                None => hits.push((other, e.position, e.normal_impulse)),
+            }
+        }
+        for (shape, at, _) in hits {
+            let (body, mass, material) = {
+                let b = world.b2();
+                let body = b.c.shapes[shape].body;
+                (body, b.body(body).mass, b.c.shapes[shape].shape.material)
+            };
+            if !world.b2().body(body).alive {
+                continue;
+            }
+            let local = {
+                let b = world.b2();
+                let l = b.body(self.body).local_point(at);
+                Vec2::new(l.x - self.blade_center.x, l.y - self.blade_center.y)
+            };
+            let o = -local.x / self.blade_x;
+            if material & 7 != 0 && o.abs() < 0.5 {
+                let _ = self.start_grind(world, shape, body, at);
+            } else {
+                let angle = world.b2().body(self.body).sweep.a;
+                let a1 = o * 1.2217 - 1.5708 + angle;
+                let a2 = a1 - std::f64::consts::PI;
+                let b = world.b2_mut();
+                if mass > 0.0 {
+                    let share = mass / (mass + self.mower_mass);
+                    b.body_mut(self.body).apply_impulse(Vec2::new(a1.cos() * 3.0 * share, a1.sin() * 3.0 * share), at);
+                    b.body_mut(body).apply_impulse(Vec2::new(a2.cos() * 3.0 * (1.0 - share), a2.sin() * 3.0 * (1.0 - share)), at);
+                } else {
+                    b.body_mut(self.body).apply_impulse(Vec2::new(a1.cos() * 3.0, a1.sin() * 3.0), at);
+                }
+            }
+        }
+        // `actions`: drop finished pairs, adopt the new ones
+        for i in (0..self.targets.len()).rev() {
+            let (target, rising) = self.targets[i];
+            if self.contact_count.get(&target).copied().unwrap_or(0) <= 0 {
+                let b = world.b2_mut();
+                b.destroy_body(target);
+                b.destroy_body(rising);
+                self.targets.remove(i);
+            }
+        }
+        for j in std::mem::take(&mut self.added) {
+            let (rising, target) = {
+                let jt = world.b2().joint(j);
+                (jt.body1, jt.body2)
+            };
+            self.targets.push((target, rising));
+        }
+    }
+
+    /// The `GrindLoop2` sound plays while something is being ground.
+    pub fn grinding(&self) -> bool {
+        !self.targets.is_empty() || !self.added.is_empty()
+    }
+
+    fn start_grind(&mut self, world: &mut World, shape: box2d::world::ShapeId, body: BodyId, at: Vec2) -> Option<()> {
+        let b = world.b2_mut();
+        b.set_shape_filter(shape, Filter { category_bits: 1, mask_bits: 9, group_index: -3 });
+        b.shape_mut(shape).material = 0;
+        self.contact_count.insert(body, 0);
+        let angle = b.body(self.body).sweep.a;
+        let rising = b.create_body(&BodyDef { position: at, angle, ..Default::default() });
+        let mut d = ShapeDef::boxed(10.0 / 62.5, 10.0 / 62.5);
+        d.density = 5.0;
+        d.restitution = 0.1;
+        d.friction = 0.1;
+        d.is_sensor = true;
+        b.create_shape(rising, &d);
+        b.set_mass_from_shapes(rising);
+        let mut pd = PrismaticJointDef::initialize(b.body(self.body), self.body, b.body(rising), rising, at, Vec2::new(-angle.sin(), angle.cos()));
+        pd.enable_limit = true;
+        pd.upper_translation = 0.0;
+        pd.lower_translation = -10.0;
+        pd.max_motor_force = 100000.0;
+        pd.enable_motor = true;
+        pd.motor_speed = -0.5;
+        b.create_prismatic_joint(&pd);
+        let mut rd = RevoluteJointDef::initialize(b.body(rising), rising, b.body(body), body, at);
+        rd.enable_motor = true;
+        rd.motor_speed = 0.0;
+        rd.max_motor_torque = 5.0;
+        let rj = b.create_revolute_joint(&rd);
+        self.added.push(rj);
+        Some(())
     }
 
     /// `mowerSmash` (original 32513, mowing targets not modelled): eject, then the mower body becomes two loose halves — front
@@ -1936,13 +2067,13 @@ impl Mower {
             d.restitution = 0.1;
             d.filter = filter;
             d.is_sensor = sensor;
-            b.create_shape(body, &d);
+            b.create_shape(body, &d)
         };
         add(b, poly("handleVert", 4)?, 4.0, 0.3, zero, false);
         add(b, boxed("shaftShape")?, 4.0, 0.3, zero, false);
         add(b, poly("frontVert", 6)?, 4.0, 0.3, zero, false);
         add(b, boxed("baseShape")?, 4.0, 0.3, zero, false);
-        add(b, boxed("bladeShape")?, 4.0, 0.3, zero, false);
+        let blade_shape = add(b, boxed("bladeShape")?, 4.0, 0.3, zero, false);
         add(b, poly("rearVert", 5)?, 4.0, 0.3, zero, false);
         add(b, poly("topVert", 5)?, 4.0, 0.3, zero, false);
         add(b, poly("backVert", 4)?, 4.0, 0.3, zero, false);
@@ -1959,8 +2090,12 @@ impl Mower {
         let align = Filter { category_bits: 1, mask_bits: 1, group_index: 0 };
         add(b, boxed("alignShape1")?, 0.01, 0.01, align, false);
         add(b, boxed("alignShape2")?, 0.01, 0.01, align, false);
-        add(b, boxed("clearanceShape")?, 0.01, 0.01, align, true);
+        let clearance_shape = add(b, boxed("clearanceShape")?, 0.01, 0.01, align, true);
         b.set_mass_from_shapes(body);
+        let mower_mass = b.body(body).mass;
+        let gb = guide.get("bladeShape")?;
+        let blade_center = at("bladeShape")?;
+        let blade_x = gb[3] * 5.0 / CHARACTER_SCALE;
         let wheel = |b: &mut box2d::world::World, name: &str| -> Option<BodyId> {
             let g = guide.get(name)?;
             let w = b.create_body(&BodyDef { position: at(name)?, angle: g[2] / deg, ..Default::default() });
@@ -2035,6 +2170,14 @@ impl Mower {
             ejected: false,
             halves: None,
             smash_geo: smash_geo?,
+            blade_shape,
+            clearance_shape,
+            blade_center,
+            blade_x,
+            mower_mass,
+            targets: Vec::new(),
+            added: Vec::new(),
+            contact_count: std::collections::HashMap::new(),
         })
     }
 
