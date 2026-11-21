@@ -1179,6 +1179,21 @@ impl Sprites {
             }
             let width = 15.0 * n as f64 - 2.0;
             self.blit(img, "spike-platform.png", mul(m, mul(local(0.0, 35.0 - lc_y, 0.0, 1.0, 1.0), local(-width / 2.0, -10.0, 0.0, width / 300.0, 1.0))));
+            // Blood bitmap (`bmd`, 15n−2 × 50, centred on the clip like the row): one `spike_blood` frame per impale at the snapped spike x.
+            {
+                #[derive(Deserialize)]
+                struct Frames {
+                    frames: Vec<Vec<Node>>,
+                }
+                static BLOOD: std::sync::OnceLock<Vec<Vec<Node>>> = std::sync::OnceLock::new();
+                let frames = BLOOD.get_or_init(|| serde_json::from_str::<Frames>(include_str!("../data/game-spike_blood.json")).map(|f| f.frames).unwrap_or_default());
+                for &(x, frame) in world.spike_blood(body) {
+                    let sm = mul(m, local(x - width / 2.0, -25.0 - lc_y, 0.0, 1.0, 1.0));
+                    for n in frames.get(usize::from(frame).saturating_sub(1)).map(Vec::as_slice).unwrap_or(&[]) {
+                        self.draw_node(img, n, sm);
+                    }
+                }
+            }
         }
     }
 

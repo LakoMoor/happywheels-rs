@@ -2959,3 +2959,28 @@ fn spikes_impale_and_record_blood() {
     assert!(w.b2().body(target).alive);
     assert_eq!(w.spike_blood(spikes).len(), 1, "one impale → one blood stamp");
 }
+
+/// The impale stamp shows up on the spike sprite (skipped without the original assets).
+#[test]
+fn spike_blood_is_drawn() {
+    use box2d::{math::Vec2, shape::{Geometry, ShapeDef}, world::BodyDef};
+    let Some(assets) = std::env::var_os("HW_ASSETS").map(std::path::PathBuf::from).or_else(|| Some(std::path::PathBuf::from("../../../assets-99tnk64n1mubaoc8w"))).filter(|p| p.join("animate/game/l").exists()) else { return };
+    let level = level::parse("<levelXML><info v='1.99' x='1000' y='300'/><shapes></shapes><specials><sp t='6' p0='1000' p1='400' p2='0' p3='t' p4='8' p5='f'/></specials></levelXML>").unwrap();
+    let mut w = World::from_level(&level);
+    let sp = happywheels_core::sprites::Sprites::open(&assets, 1).unwrap();
+    let before = happywheels_core::render::render_level_sprites(&level, &w, 400, 300, [1000.0, 400.0], Some(&sp));
+    let b = w.b2_mut();
+    let id = b.create_body(&BodyDef { position: Vec2::new(1000.0 / 62.5, 380.0 / 62.5), ..Default::default() });
+    let mut d = ShapeDef::new(Geometry::Polygon(vec![Vec2::new(-0.1, -0.1), Vec2::new(0.1, -0.1), Vec2::new(0.1, 0.1), Vec2::new(-0.1, 0.1)]));
+    d.density = 1.0;
+    let s = b.create_shape(id, &d);
+    b.shape_mut(s).material = 2;
+    b.set_mass_from_shapes(id);
+    for _ in 0..20 {
+        w.step();
+    }
+    assert_eq!(w.spike_blood(w.special_bodies[0].unwrap()).len(), 1);
+    // hide the impaling body's own shape effect by comparing only the spike area (top-left 400x300 frame differs because of the body and blood alike)
+    let after = happywheels_core::render::render_level_sprites(&level, &w, 400, 300, [1000.0, 400.0], Some(&sp));
+    assert_ne!(before.as_raw(), after.as_raw());
+}
