@@ -606,6 +606,8 @@ impl Sprites {
             28 => "jet-ref.png",
             35 => "paddle-paddle.png",
             12 => "boost-1718.png",
+            30 => "link-5.png",
+            32 => "food-item-asset-1411.png",
             25 => "homing-mine-jet.png",
             29 => "arrow-asset-1650.png",
             _ => return false,
@@ -803,6 +805,44 @@ impl Sprites {
                     start -= 4;
                     if start <= 0 {
                         start += 18;
+                    }
+                }
+                continue;
+            }
+            // Chain: link k (`link0MC` for even k, `link1MC` for odd) scaled 1 + (linkScale − 1)/9·2 at each link body's COM (non-interactive chains have
+            // no bodies and are not drawn here). FoodItem: the whole-fruit child of `WatermelonMC`/`PumpkinMC`/`PineappleMC` at the body's COM (the
+            // `chunks` stay hidden until a smash, which is not drawn: the body is simply gone).
+            if matches!(sp.kind, 30 | 32) {
+                static CLIPS: std::sync::OnceLock<[Vec<Node>; 5]> = std::sync::OnceLock::new();
+                #[derive(Deserialize)]
+                struct File {
+                    k: Vec<Node>,
+                }
+                let clips = CLIPS.get_or_init(|| {
+                    let f = |s: &str| serde_json::from_str::<File>(s).map(|f| f.k).unwrap_or_default();
+                    [
+                        f(include_str!("../data/game-link0MC.json")),
+                        f(include_str!("../data/game-link1MC.json")),
+                        f(include_str!("../data/game-WatermelonMC.json")),
+                        f(include_str!("../data/game-PumpkinMC.json")),
+                        f(include_str!("../data/game-PineappleMC.json")),
+                    ]
+                });
+                if sp.kind == 30 {
+                    let s = 1.0 + (f64::from(sp.num("linkScale").unwrap_or(1.0)) - 1.0) / 9.0 * 2.0;
+                    for (k, &b) in world.special_parts.get(i).into_iter().flatten().enumerate() {
+                        if world.body_center_px(b).is_none() {
+                            continue;
+                        }
+                        let m = mul(cam, mul(body_matrix(world, b), local(0.0, 0.0, 0.0, s, s)));
+                        for n in &clips[k % 2] {
+                            self.draw_node(img, n, m);
+                        }
+                    }
+                } else if let Some(b) = world.special_bodies.get(i).copied().flatten().filter(|&b| world.body_center_px(b).is_some()) {
+                    let ty = (sp.num("foodItemType").unwrap_or(1.0).max(1.0) as usize).min(3) - 1;
+                    for n in clips[2 + ty].iter().filter(|n| n.n != "chunks" && n.n != "shapes") {
+                        self.draw_node(img, n, mul(cam, body_matrix(world, b)));
                     }
                 }
                 continue;
