@@ -246,6 +246,8 @@ struct TrashCan {
     spilled: bool,
     spill_impulse: f64,
     crushed: bool,
+    /// `TrashCanMC` frame shown once crushed: 2 (squashed sides) or 3 (squashed vertically).
+    crush_frame: usize,
 }
 
 /// `TrashCanMC.shapes` guides in px (clip dump, `analysis/trash-dump.js`): (x, y, w, h).
@@ -526,7 +528,11 @@ impl World {
         // createSpecials: bodies from rigid-body specials (see specials.rs; transcribed from the original).
         for sp in &level.specials {
             let before = w.special_parts.len();
-            let h = w.special_body(sp);
+            let mut h = w.special_body(sp);
+            if sp.kind == 26 && h.is_some() {
+                // a trash can built hollow already replaced its first body
+                h = w.cans.last().map(|c| c.body);
+            }
             if w.special_parts.len() == before {
                 w.special_parts.push(Vec::new());
             }
@@ -880,7 +886,7 @@ impl World {
             let first = self.b.body(body).shapes[0];
             self.b.c.report_results = true;
             let contains = sp.flag("containsTrash").unwrap_or(true);
-            self.cans.push(TrashCan { body, shapes: vec![first], contains_trash: contains, spilled: false, spill_impulse: 3.5, crushed: false });
+            self.cans.push(TrashCan { body, shapes: vec![first], contains_trash: contains, spilled: false, spill_impulse: 3.5, crushed: false, crush_frame: 1 });
             if !contains {
                 let k = self.cans.len() - 1;
                 self.can_make_hollow(k);
@@ -2123,6 +2129,14 @@ impl World {
         self.npcs.iter().flat_map(|n| n.bodies).collect()
     }
 
+    /// How the trash can whose body is `body` looks now: `(clip frame, lid visible, hollow)` — `singleAction` hides the lid, `createHollowTrashCan`
+    /// moves the can art up 13 px, a crush switches to frame 2/3.
+    pub fn can_look(&self, body: BodyId) -> Option<(usize, bool, bool)> {
+        let c = self.cans.iter().find(|c| c.body == body)?;
+        let hollow = !c.contains_trash || c.spilled;
+        Some((c.crush_frame, c.contains_trash && !c.spilled && !c.crushed, hollow && !c.crushed))
+    }
+
     /// Whether `body` is a food item (its grinding sprays juice particles, not blood).
     pub(crate) fn is_food(&self, body: BodyId) -> bool {
         self.foods.iter().any(|f| f.0 == body)
@@ -2202,6 +2216,13 @@ impl World {
         }
         self.cans[k].body = body;
         self.cans[k].shapes = shapes;
+        // the special's sprite follows the replacement body (the original keeps the same `mc` on the new `_body`)
+        for s in self.special_bodies.iter_mut().filter(|s| **s == Some(old)) {
+            *s = Some(body);
+        }
+        for p in self.special_parts.iter_mut().flatten().filter(|b| **b == old) {
+            *p = body;
+        }
         self.loose.push(body);
     }
 
@@ -2269,7 +2290,9 @@ impl World {
             let old_xf = self.b.body(old_body).clone();
             if crush {
                 let x = normal.y.atan2(normal.x) - ang0;
-                let dims = if x.sin().round().abs() != 1.0 { CAN_CRUSH_H } else { CAN_CRUSH_V };
+                let horizontal = x.sin().round().abs() != 1.0;
+                self.cans[k].crush_frame = if horizontal { 2 } else { 3 };
+                let dims = if horizontal { CAN_CRUSH_H } else { CAN_CRUSH_V };
                 self.can_rebuild(k, Some(dims));
                 self.cans[k].crushed = true;
             } else {
@@ -3929,6 +3952,26 @@ mod tests {
         };
         assert!(run(false) > 0, "control: a 60 m/s impact smashes the NPC");
         assert_eq!(run(true), 0);
+    }
+
+    /// A trash can built without trash is replaced by a hollow body at level load; the special's sprite pose must follow the live body and show
+    /// the hollow look (no lid, art 13 px up), also after a spill.
+    #[test]
+    fn hollow_trash_can_keeps_its_sprite_body() {
+        let xml = "<levelXML><info v='1.99'/><shapes></shapes><specials><sp t='26' p0='900' p1='395' p2='0' p3='f' p4='t' p5='f'/><sp t='26' p0='1100' p1='395' p2='0' p3='f' p4='t' p5='t'/></specials></levelXML>";
+        let mut w = World::from_level(&crate::level::parse(xml).unwrap());
+        let hollow = w.special_bodies[0].unwrap();
+        assert!(w.b.c.bodies[hollow].alive, "the sprite body of a hollow can must be the live replacement");
+        assert_eq!(w.can_look(hollow), Some((1, false, true)));
+        let full = w.special_bodies[1].unwrap();
+        assert_eq!(w.can_look(full), Some((1, true, false)));
+        // spill it by a hit: lid gone, hollow, and the special follows the rebuilt body
+        w.cans[1].spill_impulse = 0.0;
+        w.can_rebuild(1, None);
+        w.cans[1].spilled = true;
+        let after = w.special_bodies[1].unwrap();
+        assert!(w.b.c.bodies[after].alive);
+        assert_eq!(w.can_look(after), Some((1, false, true)));
     }
 
     /// Free fall of NPC 1/5 (plain and mirrored) compared with the original class running in the oracle (tests/golden/npc_fall.json, every 10th step).

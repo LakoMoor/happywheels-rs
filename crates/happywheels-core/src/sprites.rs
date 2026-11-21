@@ -1018,9 +1018,10 @@ impl Sprites {
                     frames: Vec<Vec<Node>>,
                 }
                 static TOILET: std::sync::OnceLock<Vec<Node>> = std::sync::OnceLock::new();
-                static CAN: std::sync::OnceLock<Vec<Node>> = std::sync::OnceLock::new();
+                static CAN: std::sync::OnceLock<Vec<Vec<Node>>> = std::sync::OnceLock::new();
                 let toilet = TOILET.get_or_init(|| serde_json::from_str::<File>(include_str!("../data/game-ToiletMC.json")).map(|f| f.k).unwrap_or_default());
-                let can = CAN.get_or_init(|| serde_json::from_str::<Frames>(include_str!("../data/game-TrashCanMC.json")).ok().and_then(|f| f.frames.into_iter().next()).unwrap_or_default());
+                let cans = CAN.get_or_init(|| serde_json::from_str::<Frames>(include_str!("../data/game-TrashCanMC.json")).map(|f| f.frames).unwrap_or_default());
+                let can = cans.first().map_or(&[][..], Vec::as_slice);
                 let (x, y, a) = (f64::from(sp.num("x").unwrap_or(0.0)), f64::from(sp.num("y").unwrap_or(0.0)), f64::from(sp.num("angle").unwrap_or(0.0)).to_radians());
                 let pose = match world.special_bodies.get(i).copied().flatten() {
                     Some(b) if world.body_center_px(b).is_some() => body_matrix(world, b),
@@ -1035,8 +1036,18 @@ impl Sprites {
                     }
                 } else {
                     let trash = sp.flag("containsTrash").unwrap_or(true);
-                    for n in can.iter().filter(|n| n.n == "can" || (n.n == "lid" && trash)) {
-                        self.draw_node(img, n, mul(cam, pose));
+                    let (frame, lid, hollow) = world.special_bodies.get(i).copied().flatten().and_then(|b| world.can_look(b)).unwrap_or((1, trash, !trash));
+                    if frame > 1 {
+                        // crushed: the squashed texture of that frame (no lid, no can)
+                        for n in cans.get(frame - 1).map(Vec::as_slice).unwrap_or(&[]).iter().filter(|n| n.t.is_some()) {
+                            self.draw_node(img, n, mul(cam, pose));
+                        }
+                    } else {
+                        for n in can.iter().filter(|n| n.n == "can" || (n.n == "lid" && lid)) {
+                            // `createHollowTrashCan`: `mc.can.y -= 13`
+                            let up = if hollow && n.n == "can" { -13.0 } else { 0.0 };
+                            self.draw_node(img, n, mul(mul(cam, pose), local(0.0, up, 0.0, 1.0, 1.0)));
+                        }
                     }
                 }
                 continue;
