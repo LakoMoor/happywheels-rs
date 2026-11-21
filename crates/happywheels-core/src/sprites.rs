@@ -167,7 +167,7 @@ impl Sprites {
             return None;
         }
         // Atlas `game/l` holds the runtime special-element art (spikes, ...).
-        for g in ["l", "d", "r", "o", "c"] {
+        for g in ["l", "d", "r", "o", "c", "a"] {
             let game = assets.join(format!("animate/game/{g}"));
             if let (Ok(json), Ok(img)) = (std::fs::read_to_string(game.join(format!("{g}@0.3x.json"))), image::open(game.join(format!("{g}@0.3x.png")))) {
                 if let Ok(atlas) = serde_json::from_str::<AtlasFile>(&json) {
@@ -601,6 +601,7 @@ impl Sprites {
             23 => "post.png",
             8 => "fan-1522.png",
             9 => "finish-line-asset-1480.png",
+            34 => "blade-weapon-1654.png",
             _ => return false,
         };
         self.pages.iter().any(|(f, _)| f.contains_key(tex))
@@ -643,6 +644,33 @@ impl Sprites {
                     } else {
                         self.draw_node(img, n, m);
                     }
+                }
+                continue;
+            }
+            // BladeWeapon: `BladeWeaponMC.gotoAndStop(bladeWeaponType)` (one texture per frame) at the weapon body's origin with its angle (`paint`
+            // with zero offsets), mirrored when `reverse`; a non-interactive blade stays at its level position. The blood stamps (`paintBlood`: `BladeBloodMC`
+            // clipped by `BladeWeaponMaskMC`, whose mask is vector art that the clip dump cannot read) are not drawn.
+            if sp.kind == 34 {
+                static FRAMES: std::sync::OnceLock<Vec<Vec<Node>>> = std::sync::OnceLock::new();
+                #[derive(Deserialize)]
+                struct Frames {
+                    frames: Vec<Vec<Node>>,
+                }
+                let frames = FRAMES.get_or_init(|| serde_json::from_str::<Frames>(include_str!("../data/game-BladeWeaponMC.json")).map(|f| f.frames).unwrap_or_default());
+                let (x, y, a) = (f64::from(sp.num("x").unwrap_or(0.0)), f64::from(sp.num("y").unwrap_or(0.0)), f64::from(sp.num("angle").unwrap_or(0.0)).to_radians());
+                let pose = match world.special_bodies.get(i).copied().flatten() {
+                    Some(b) if world.b2().body(b).alive => {
+                        let bd = world.b2().body(b);
+                        local(bd.xf.position.x * 62.5, bd.xf.position.y * 62.5, bd.sweep.a, 1.0, 1.0)
+                    }
+                    Some(_) => continue,
+                    None => local(x, y, a, 1.0, 1.0),
+                };
+                let flip = if sp.flag("reverse").unwrap_or(false) { -1.0 } else { 1.0 };
+                let m = mul(cam, mul(pose, local(0.0, 0.0, 0.0, flip, 1.0)));
+                let frame = (sp.num("bladeWeaponType").unwrap_or(1.0).max(1.0) as usize).min(frames.len().max(1)) - 1;
+                for n in frames.get(frame).map(Vec::as_slice).unwrap_or(&[]) {
+                    self.draw_node(img, n, m);
                 }
                 continue;
             }
