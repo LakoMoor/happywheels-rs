@@ -1991,6 +1991,15 @@ impl Mower {
             world.play("MetalSmashHeavy3", 1, at);
             world.shard_burst(crate::blood::ShardKind::Mower, at, 30.0, 30.0, 70);
         }
+        // original start of `mowerSmash`: everything being ground is destroyed with its rising body, sprays stop, the grind loop ends
+        for (target, rising) in std::mem::take(&mut self.targets) {
+            let b = world.b2_mut();
+            b.destroy_body(target);
+            b.destroy_body(rising);
+        }
+        self.sprays.clear();
+        self.added.clear();
+        self.contact_count.clear();
         self.eject(world, doll);
         let zero = Filter { category_bits: 260, mask_bits: 0xFFFF, group_index: 0 };
         let b = world.b2_mut();
