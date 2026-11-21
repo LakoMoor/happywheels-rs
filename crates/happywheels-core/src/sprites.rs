@@ -843,6 +843,16 @@ impl Sprites {
         }
     }
 
+    /// The two halves of a broken log (`LogHalf1` upper, `LogHalf2` lower), stretched like the log, at the half body's origin.
+    fn draw_log_halves(&self, img: &mut RgbaImage, world: &World, cam: M) {
+        for (b, which, sx, sy) in world.log_halves() {
+            let Some([x, y]) = world.body_position_px(b) else { continue };
+            let m = mul(cam, mul(local(f64::from(x), f64::from(y), f64::from(world.body_angle(b)), 1.0, 1.0), local(0.0, 0.0, 0.0, sx, sy)));
+            let (tex, ox, oy) = if which == 0 { ("log-half-1.png", -18.0, -100.0) } else { ("log-half-2.png", -18.0, -112.0) };
+            self.blit(img, tex, mul(m, local(ox, oy, 0.0, 0.5, 0.5)));
+        }
+    }
+
     pub fn draw_specials(&self, img: &mut RgbaImage, level: &crate::level::Level, world: &World, camera_offset: (f32, f32)) {
         let cam = local(f64::from(camera_offset.0), f64::from(camera_offset.1), 0.0, 1.0, 1.0);
         self.draw_food_chunks(img, world, cam);
@@ -850,6 +860,7 @@ impl Sprites {
         self.draw_chair_pieces(img, world, cam);
         self.draw_glass_pieces(img, world, cam);
         self.draw_toilet_pieces(img, world, cam);
+        self.draw_log_halves(img, world, cam);
         for (i, sp) in level.specials.iter().enumerate() {
             if sp.kind == 0 {
                 self.draw_van(img, sp, world.special_parts.get(i).map(Vec::as_slice).unwrap_or(&[]), world, cam);
@@ -1578,12 +1589,12 @@ impl Sprites {
                 struct Frames {
                     frames: Vec<Vec<Node>>,
                 }
-                static FRAMES: std::sync::OnceLock<[Vec<Vec<Node>>; 7]> = std::sync::OnceLock::new();
+                static FRAMES: std::sync::OnceLock<[Vec<Vec<Node>>; 8]> = std::sync::OnceLock::new();
                 let frames = FRAMES.get_or_init(|| {
                     let f = |s: &str| serde_json::from_str::<Frames>(s).map(|f| f.frames).unwrap_or_default();
-                    [f(include_str!("../data/game-WatermelonParticlesMC.json")), f(include_str!("../data/game-PumpkinParticlesMC.json")), f(include_str!("../data/game-PineappleParticlesMC.json")), f(include_str!("../data/game-BoomboxShardsMC.json")), f(include_str!("../data/game-TVShardsMC.json")), f(include_str!("../data/game-GlassShardsMC.json")), f(include_str!("../data/game-ToiletParticlesMC.json"))]
+                    [f(include_str!("../data/game-WatermelonParticlesMC.json")), f(include_str!("../data/game-PumpkinParticlesMC.json")), f(include_str!("../data/game-PineappleParticlesMC.json")), f(include_str!("../data/game-BoomboxShardsMC.json")), f(include_str!("../data/game-TVShardsMC.json")), f(include_str!("../data/game-GlassShardsMC.json")), f(include_str!("../data/game-ToiletParticlesMC.json")), f(include_str!("../data/game-WoodChipsMC.json"))]
                 });
-                let Some(children) = frames[usize::from(ty) % 7].get(p.frame) else { continue };
+                let Some(children) = frames[usize::from(ty) % 8].get(p.frame) else { continue };
                 let mut ext = (0.0, 0.0);
                 for c in children {
                     self.extent(c, local(0.0, 0.0, 0.0, 1.0, 1.0), &mut ext);

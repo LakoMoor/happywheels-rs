@@ -3152,3 +3152,28 @@ fn boombox_shot() {
     let sp = happywheels_core::sprites::Sprites::open(&assets, 1).unwrap();
     happywheels_core::render::render_level_scene(&level, &w, 1800, 360, [1200.0, 380.0], Some(&sp), None).save(path).unwrap();
 }
+
+/// HW_SHOT_LOG=<png>: a log hit hard splits in two halves with wood chips; the view follows the halves at their highest point.
+#[test]
+fn log_shot() {
+    use box2d::math::Vec2;
+    let Some(path) = std::env::var_os("HW_SHOT_LOG") else { return };
+    let Some(assets) = Some(std::path::PathBuf::from("../../../assets-99tnk64n1mubaoc8w")).filter(|p| p.join("animate/game/l").exists()) else { return };
+    let level = level::parse("<levelXML><info v='1.99'/><shapes><sh t='0' p0='1000' p1='450' p2='3000' p3='50' p4='0' p5='t' p6='f' p7='1' p8='0' p9='-1' p10='100' p11='1'/></shapes><specials><sp t='4' p0='900' p1='380' p2='36' p3='100' p4='0' p5='f' p6='f'/><sp t='4' p0='1100' p1='380' p2='36' p3='100' p4='0' p5='f' p6='f'/></specials></levelXML>").unwrap();
+    let mut w = World::from_level(&level);
+    let l = w.special_bodies[0].unwrap();
+    w.b2_mut().body_mut(l).linear_velocity = Vec2::new(0.0, 130.0);
+    let mut best = (0.0_f64, [900.0_f32, 300.0]);
+    for _ in 0..45 {
+        w.step();
+        if let Some((b, _, _, _)) = w.log_halves().next() {
+            if let Some(p) = w.body_position_px(b) {
+                if f64::from(-p[1]) > best.0 {
+                    best = (f64::from(-p[1]), p);
+                }
+            }
+        }
+    }
+    let sp = happywheels_core::sprites::Sprites::open(&assets, 1).unwrap();
+    happywheels_core::render::render_level_scene(&level, &w, 600, 360, [best.1[0], best.1[1].min(380.0)], Some(&sp), None).save(path).unwrap();
+}
