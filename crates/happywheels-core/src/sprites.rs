@@ -608,6 +608,7 @@ impl Sprites {
             12 => "boost-1718.png",
             24 => "toilet-ref-base.png",
             19 => "chair-top-asset.png",
+            33 => "cannon-asset-1541.png",
             26 => "trash-can-body.png",
             20 => "bottle-1724.png",
             21 => "tv-damage-0.png",
@@ -932,6 +933,37 @@ impl Sprites {
                 let m = mul(cam, mul(pose, local(0.0, 0.0, 0.0, flip, 1.0)));
                 for n in chair {
                     self.draw_node(img, n, m);
+                }
+                continue;
+            }
+            // Cannon: `CannonBaseMC` (frame `cannonType`) static at the level position/angle; `CannonMuzzleMC` (same frame) scaled 1 + muzzleScale/20 at the muzzle
+            // body's local point (0, 2 px) with its angle. The star/loading meter animation is not drawn (`meter.bar` hidden, star frame 1).
+            if sp.kind == 33 {
+                #[derive(Deserialize)]
+                struct Frames {
+                    frames: Vec<Vec<Node>>,
+                }
+                static CLIPS: std::sync::OnceLock<[Vec<Vec<Node>>; 2]> = std::sync::OnceLock::new();
+                let clips = CLIPS.get_or_init(|| {
+                    let f = |s: &str| serde_json::from_str::<Frames>(s).map(|f| f.frames).unwrap_or_default();
+                    [f(include_str!("../data/game-CannonBaseMC.json")), f(include_str!("../data/game-CannonMuzzleMC.json"))]
+                });
+                let (x, y, a) = (f64::from(sp.num("x").unwrap_or(0.0)), f64::from(sp.num("y").unwrap_or(0.0)), f64::from(sp.num("angle").unwrap_or(0.0)).to_radians());
+                let ty = (sp.num("cannonType").unwrap_or(1.0).max(1.0) as usize).saturating_sub(1);
+                let Some(muzzle) = world.special_bodies.get(i).copied().flatten().filter(|&b| world.body_center_px(b).is_some()) else { continue };
+                let d = 1.0 + f64::from(sp.num("muzzleScale").unwrap_or(1.0)) / 20.0;
+                let bd = world.b2().body(muzzle);
+                let o = bd.world_point(box2d::math::Vec2::new(0.0, 2.0 / 62.5));
+                let mm = mul(cam, local(o.x * 62.5, o.y * 62.5, bd.sweep.a, d, d));
+                let bm = mul(cam, local(x, y, a, 1.0, 1.0));
+                for (clip, m) in [(&clips[1], mm), (&clips[0], bm)] {
+                    let f = ty.min(clip.len().saturating_sub(1));
+                    for n in clip.get(f).map(Vec::as_slice).unwrap_or(&[]) {
+                        if n.n == "meter" {
+                            continue;
+                        }
+                        self.draw_node(img, n, m);
+                    }
                 }
                 continue;
             }
