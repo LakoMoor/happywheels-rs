@@ -390,7 +390,10 @@ pub struct World {
     /// Token specials: (body, sensor shape); collected ones are removed.
     tokens: Vec<(BodyId, ShapeId)>,
     /// FoodItem specials: (body, shape, smash impulse).
-    foods: Vec<(BodyId, ShapeId, f64)>,
+    /// (body, shape, smash impulse, food type 0..2)
+    foods: Vec<(BodyId, ShapeId, f64, u8)>,
+    /// Chunk bodies born from smashed food: (body, food type, chunk index).
+    food_chunks: Vec<(BodyId, u8, u8)>,
     cans: Vec<TrashCan>,
     hit_sounds: Vec<HitSound>,
     /// Bodies born from specials (trash, hollow cans…) that only the renderer cares about.
@@ -459,6 +462,7 @@ impl World {
             spikes: Vec::new(),
             tokens: Vec::new(),
             foods: Vec::new(),
+            food_chunks: Vec::new(),
             cans: Vec::new(),
             hit_sounds: Vec::new(),
             loose: Vec::new(),
@@ -914,7 +918,8 @@ impl World {
             self.b.shape_mut(first).material = 4;
             self.b.c.report_results = true;
             let limit = if sp.num("foodItemType").unwrap_or(1.0) as i32 == 3 { 3.0 } else { 8.0 };
-            self.foods.push((body, first, limit));
+            let ty = (sp.num("foodItemType").unwrap_or(1.0) as i32).clamp(1, 3) as u8 - 1;
+            self.foods.push((body, first, limit, ty));
         }
         if sp.kind == 27 {
             // Rail: the upper box carries material bit 4 (what the grinder's wheels look for)
@@ -3184,12 +3189,67 @@ impl World {
     fn food_events(&mut self, events: &[box2d::world::ContactEvent]) {
         for ev in events.iter().filter(|e| e.kind == ContactEventKind::Result) {
             if let Some(k) = self.foods.iter().position(|f| (f.1 == ev.shape1 || f.1 == ev.shape2) && ev.normal_impulse > f.2) {
-                let (body, _, _) = self.foods.remove(k);
+                let (body, _, _, ty) = self.foods.remove(k);
                 let at = self.b.body(body).sweep.c;
                 self.play("FoodSplat", 3, at);
+                self.food_smash(body, ty);
                 self.b.destroy_body(body);
             }
         }
+    }
+
+    /// `FoodItem.singleAction`: one circle chunk body per `m<n>` clip child (position/size from `WatermelonMC.chunks`, density 2, material 1, the food's
+    /// velocities) and a 30-particle `createRectBurst` over the shape's bounding box (speed range 10) of the fruit's particle clip.
+    fn food_smash(&mut self, body: BodyId, ty: u8) {
+        // (m_n.x, m_n.y, c_n.width) px per food type, read from the oracle (`chunks` of the three clips)
+        const CHUNKS: [[(f64, f64, f64); 4]; 3] = [
+            [(1.9, 1.0, 16.93), (11.9, -4.2, 14.56), (3.35, 8.25, 13.26), (-5.65, -2.9, 21.7)],
+            [(0.5, -13.15, 14.2), (13.5, -0.5, 13.57), (2.4, 3.05, 16.76), (-10.7, 1.6, 16.94)],
+            [(-0.6, -8.0, 14.2), (5.0, 7.05, 7.33), (0.6, 14.3, 11.55), (-1.95, 10.45, 11.55)],
+        ];
+        let (pos, ang, v, w) = {
+            let b = self.b.body(body);
+            (b.xf.position, b.sweep.a, b.linear_velocity, b.angular_velocity)
+        };
+        let src = self.b.body(body).clone();
+        for (n, &(mx, my, cw)) in CHUNKS[ty as usize % 3].iter().enumerate() {
+            let at = src.world_point(Vec2::new(mx / PS, my / PS));
+            let c = self.b.create_body(&BodyDef { position: at, angle: ang, ..Default::default() });
+            let mut sd = ShapeDef::new(Geometry::Circle { local_position: Vec2::default(), radius: cw / 2.0 / PS });
+            sd.density = 2.0;
+            sd.friction = 0.3;
+            sd.restitution = 0.1;
+            sd.filter = Filter { category_bits: 8, mask_bits: 0xFFFF, group_index: 0 };
+            let s = self.b.create_shape(c, &sd);
+            self.b.shape_mut(s).material = 1;
+            self.b.set_mass_from_shapes(c);
+            self.b.body_mut(c).linear_velocity = v;
+            self.b.body_mut(c).angular_velocity = w;
+            self.food_chunks.push((c, ty, n as u8));
+            self.loose.push(c);
+        }
+        let _ = pos;
+        // rect burst over the first shape's local bounding box
+        let first = self.b.body(body).shapes[0];
+        let (mut lo, mut hi) = (Vec2::new(1e4, 1e4), Vec2::new(-1e4, -1e4));
+        if let box2d::shape::ShapeKind::Polygon { poly, .. } = &self.b.c.shapes[first].shape.kind {
+            for p in &poly.vertices {
+                lo = Vec2::new(lo.x.min(p.x), lo.y.min(p.y));
+                hi = Vec2::new(hi.x.max(p.x), hi.y.max(p.y));
+            }
+        }
+        for _ in 0..30 {
+            let off = Vec2::new(lo.x + self.blood.rand() * (hi.x - lo.x), lo.y + self.blood.rand() * (hi.y - lo.y));
+            let sv = src.linear_velocity_from_local_point(off);
+            let vel = [sv.x + (self.blood.rand() * 10.0 - 5.0), sv.y + (self.blood.rand() * 10.0 - 5.0)];
+            let at = src.world_point(off);
+            self.blood.spawn_sprite(crate::blood::ShardKind::Food(ty), [at.x * PS, at.y * PS], vel);
+        }
+    }
+
+    /// Chunk bodies of smashed food (body, food type, chunk index).
+    pub fn food_chunks(&self) -> &[(BodyId, u8, u8)] {
+        &self.food_chunks
     }
 
     /// Token `checkContact`/`singleAction`: a material-2 shape entering the sensor counts the token and removes its body.
@@ -3987,6 +4047,21 @@ mod tests {
         assert!(!w.character.as_ref().unwrap().dead, "non-fatal");
         w.shape_impale(head, true, None, 0.0);
         assert!(w.character.as_ref().unwrap().dead);
+    }
+
+    /// A smashed food item leaves four circle chunks and 30 juice particles, and its body is gone.
+    #[test]
+    fn smashed_food_leaves_chunks_and_juice() {
+        let xml = "<levelXML><info v='1.99'/><shapes><sh t='0' p0='1000' p1='450' p2='3000' p3='50' p4='0' p5='t' p6='f' p7='1' p8='0' p9='-1' p10='100' p11='1'/></shapes><specials><sp t='32' p0='1000' p1='-2500' p2='0' p3='f' p4='t' p5='3'/></specials></levelXML>";
+        let mut w = World::from_level(&crate::level::parse(xml).unwrap());
+        let food = w.special_bodies[0].unwrap();
+        for _ in 0..150 {
+            w.step();
+        }
+        assert!(!w.b.c.bodies[food].alive, "the pineapple smashes on landing");
+        assert_eq!(w.food_chunks().len(), 4);
+        assert!(w.food_chunks().iter().all(|c| w.b.c.bodies[c.0].alive));
+        assert!(w.blood.sprites.iter().any(|p| matches!(p.kind, crate::blood::ShardKind::Food(2))), "juice particles were thrown");
     }
 
     /// A trash can built without trash is replaced by a hollow body at level load; the special's sprite pose must follow the live body and show

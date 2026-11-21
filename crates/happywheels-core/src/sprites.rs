@@ -719,8 +719,33 @@ impl Sprites {
     /// Spikes (`Spikes.setupMC`, `paint`): clip at the body's centre of mass; `spikes` row at (−halfWidth, −25) and `base` (`spike-platform`, stretched
     /// to 15·n−2) at (0, 35), both lowered by the body's local-centre y; one `spike-clean` per 15 px. NOT verified: clips with fewer than 20 spikes
     /// (the library clip has 20 children; the original's `setupMC` adds more only above 20).
+    /// Chunk bodies of smashed food items: the `m<n>` child of the fruit clip's `chunks` at the body's pose (`createBody` of the chunk class).
+    fn draw_food_chunks(&self, img: &mut RgbaImage, world: &World, cam: M) {
+        #[derive(Deserialize)]
+        struct File {
+            k: Vec<Node>,
+        }
+        static CLIPS: std::sync::OnceLock<[Vec<Node>; 3]> = std::sync::OnceLock::new();
+        let clips = CLIPS.get_or_init(|| {
+            let f = |s: &str| serde_json::from_str::<File>(s).map(|f| f.k).unwrap_or_default();
+            [f(include_str!("../data/game-WatermelonMC.json")), f(include_str!("../data/game-PumpkinMC.json")), f(include_str!("../data/game-PineappleMC.json"))]
+        });
+        for &(b, ty, n) in world.food_chunks() {
+            if world.body_center_px(b).is_none() {
+                continue;
+            }
+            let name = format!("m{n}");
+            let Some(m) = clips[usize::from(ty) % 3].iter().find(|c| c.n == "chunks").and_then(|c| c.k.iter().find(|k| k.n == name)) else { continue };
+            let pose = mul(cam, mul(body_matrix(world, b), local(0.0, 0.0, m.r, m.sx, m.sy)));
+            for k in &m.k {
+                self.draw_node(img, k, pose);
+            }
+        }
+    }
+
     pub fn draw_specials(&self, img: &mut RgbaImage, level: &crate::level::Level, world: &World, camera_offset: (f32, f32)) {
         let cam = local(f64::from(camera_offset.0), f64::from(camera_offset.1), 0.0, 1.0, 1.0);
+        self.draw_food_chunks(img, world, cam);
         for (i, sp) in level.specials.iter().enumerate() {
             if sp.kind == 0 {
                 self.draw_van(img, sp, world.special_parts.get(i).map(Vec::as_slice).unwrap_or(&[]), world, cam);
@@ -1437,6 +1462,27 @@ impl Sprites {
     /// Sprite particles of the shard bursts (`createPointBurst`): the particle's frame of its debris clip, centred on the particle, natural clip scale.
     fn draw_shards(&self, img: &mut RgbaImage, world: &World, camera_offset: (f32, f32)) {
         for p in &world.blood.sprites {
+            if let crate::blood::ShardKind::Food(ty) = p.kind {
+                #[derive(Deserialize)]
+                struct Frames {
+                    frames: Vec<Vec<Node>>,
+                }
+                static FRAMES: std::sync::OnceLock<[Vec<Vec<Node>>; 3]> = std::sync::OnceLock::new();
+                let frames = FRAMES.get_or_init(|| {
+                    let f = |s: &str| serde_json::from_str::<Frames>(s).map(|f| f.frames).unwrap_or_default();
+                    [f(include_str!("../data/game-WatermelonParticlesMC.json")), f(include_str!("../data/game-PumpkinParticlesMC.json")), f(include_str!("../data/game-PineappleParticlesMC.json"))]
+                });
+                let Some(children) = frames[usize::from(ty) % 3].get(p.frame) else { continue };
+                let mut ext = (0.0, 0.0);
+                for c in children {
+                    self.extent(c, local(0.0, 0.0, 0.0, 1.0, 1.0), &mut ext);
+                }
+                let m = local(p.pos[0] - ext.0 / 2.0 + f64::from(camera_offset.0), p.pos[1] - ext.1 / 2.0 + f64::from(camera_offset.1), 0.0, 1.0, 1.0);
+                for c in children {
+                    self.draw_node(img, c, m);
+                }
+                continue;
+            }
             let (name, parent, _) = p.kind.clip();
             let nodes = match parent {
                 Some(par) => self.clip.iter().find(|c| c.n == par).map(|c| &c.k),
