@@ -167,10 +167,12 @@ impl Sprites {
             return None;
         }
         // Atlas `game/l` holds the runtime special-element art (spikes, ...).
-        let game = assets.join("animate/game/l");
-        if let (Ok(json), Ok(img)) = (std::fs::read_to_string(game.join("l@0.3x.json")), image::open(game.join("l@0.3x.png"))) {
-            if let Ok(atlas) = serde_json::from_str::<AtlasFile>(&json) {
-                pages.push((atlas.frames, img.to_rgba8()));
+        for g in ["l", "d"] {
+            let game = assets.join(format!("animate/game/{g}"));
+            if let (Ok(json), Ok(img)) = (std::fs::read_to_string(game.join(format!("{g}@0.3x.json"))), image::open(game.join(format!("{g}@0.3x.png")))) {
+                if let Ok(atlas) = serde_json::from_str::<AtlasFile>(&json) {
+                    pages.push((atlas.frames, img.to_rgba8()));
+                }
             }
         }
         // Some clips reuse textures that live in another character's atlas (the dirt bike's `metalShards` use `fat-lady-asset-44`): load those pages too.
@@ -583,7 +585,13 @@ impl Sprites {
     /// Draws every bound part plus the debris a smash leaves (chunks, brain, heart, helmet); `camera_offset` translates world px to image px.
     /// True when special element `kind` has sprite art here (and so replaces the grey fallback).
     pub fn covers_special(&self, kind: usize) -> bool {
-        kind == 6 && self.pages.iter().any(|(f, _)| f.contains_key("spike-clean.png"))
+        let tex = match kind {
+            6 => "spike-clean.png",
+            3 => "i-beam-body.png",
+            4 => "log-full.png",
+            _ => return false,
+        };
+        self.pages.iter().any(|(f, _)| f.contains_key(tex))
     }
 
     /// Spikes (`Spikes.setupMC`, `paint`): clip at the body's centre of mass; `spikes` row at (−halfWidth, −25) and `base` (`spike-platform`, stretched
@@ -592,11 +600,19 @@ impl Sprites {
     pub fn draw_specials(&self, img: &mut RgbaImage, level: &crate::level::Level, world: &World, camera_offset: (f32, f32)) {
         let cam = local(f64::from(camera_offset.0), f64::from(camera_offset.1), 0.0, 1.0, 1.0);
         for (i, sp) in level.specials.iter().enumerate() {
-            if sp.kind != 6 {
+            if !matches!(sp.kind, 3 | 4 | 6) {
                 continue;
             }
             let Some(body) = world.special_bodies.get(i).copied().flatten() else { continue };
             if world.body_center_px(body).is_none() {
+                continue;
+            }
+            // IBeamMC / LogMC: one texture, the clip is stretched to shapeWidth × shapeHeight (`mc.width/height`); clip bounds 400×32 / 36×400.
+            if sp.kind != 6 {
+                let (tex, cw, ch) = if sp.kind == 3 { ("i-beam-body.png", 400.0, 32.0) } else { ("log-full.png", 36.0, 400.0) };
+                let (sw, sh) = (f64::from(sp.num("shapeWidth").unwrap_or(cw as f32)), f64::from(sp.num("shapeHeight").unwrap_or(ch as f32)));
+                let m = mul(cam, mul(body_matrix(world, body), local(0.0, 0.0, 0.0, sw / cw, sh / ch)));
+                self.blit(img, tex, mul(m, local(-cw / 2.0, -ch / 2.0, 0.0, 0.5, 0.5)));
                 continue;
             }
             let n = sp.num("numSpikes").unwrap_or(3.0).max(1.0) as usize;
