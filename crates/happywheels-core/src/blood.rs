@@ -67,6 +67,8 @@ pub enum ShardKind {
     Metal,
     /// Cola spilling from the cart's soda can.
     Cola,
+    /// Snow thrown off the boosting sleigh (`snowflakes`, class `Mb`: half gravity).
+    Snow,
 }
 
 impl ShardKind {
@@ -80,6 +82,7 @@ impl ShardKind {
             Self::Mower => ("mowerShards", None, 12),
             Self::Metal => ("metalShards", None, 12),
             Self::Cola => ("cola", None, 13),
+            Self::Snow => ("snowflakes", None, 7),
         }
     }
 }
@@ -157,7 +160,7 @@ impl Blood {
         self.sprites.retain_mut(|p| {
             p.pos[1] += p.vel[1];
             p.pos[0] += p.vel[0];
-            p.vel[1] += 62.5 / 90.0;
+            p.vel[1] += if p.kind == ShardKind::Snow { 62.5 / 180.0 } else { 62.5 / 90.0 };
             p.pos[1] <= Y_LIMIT
         });
     }

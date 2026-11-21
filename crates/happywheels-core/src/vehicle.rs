@@ -5400,6 +5400,8 @@ pub struct Santa {
     pub debris_names: Vec<String>,
     /// The sleigh body's local centre at creation (the sleigh clip is re-centred when `skiSmash` swaps the base shape and moves it).
     pub sleigh_lc0: Vec2,
+    /// Start position in metres (`_startX/_startY`; the sleigh's body-local points are start-relative).
+    pub start_m: Vec2,
 }
 
 impl Santa {
@@ -5565,6 +5567,7 @@ impl Santa {
             debris: Vec::new(),
             debris_names: Vec::new(),
             sleigh_lc0: world.b2().body(sleigh).sweep.local_center,
+            start_m: Vec2::new(f64::from(start_px[0]) / 62.5, f64::from(start_px[1]) / 62.5),
         };
         s.create_straps(world, guide, start)?;
         Some(s)

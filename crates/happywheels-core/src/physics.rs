@@ -2272,10 +2272,31 @@ impl World {
         }
     }
 
+    /// `createSnowSpray("snowflakes", sleighBody, (start − 143/125, start.y + 178/125), (start + 107/125, …), 0, 0, 180°, 5)`: while the sleigh boosts, five
+    /// snowflakes per step appear on that bottom edge of the sleigh and move with it (speed range 0, so only the body's velocity at the point), 180° fan downwards.
+    fn snow_spray(&mut self) {
+        let Some(crate::vehicle::Vehicle::Santa(s)) = self.bike.as_ref() else { return };
+        if !s.bell || s.sleigh_gone {
+            return;
+        }
+        let (body, start) = (s.sleigh, s.start_m);
+        let (a, b) = (Vec2::new(start.x - 143.0 / 125.0, start.y + 178.0 / 125.0), Vec2::new(start.x + 107.0 / 125.0, start.y + 178.0 / 125.0));
+        for _ in 0..5 {
+            let t = self.blood.rand();
+            let p = Vec2::new(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t);
+            let (v, at) = {
+                let bd = self.b.body(body);
+                (bd.linear_velocity_from_local_point(p), bd.world_point(p))
+            };
+            self.blood.spawn_sprite(crate::blood::ShardKind::Snow, [at.x * PS, at.y * PS], [v.x, v.y]);
+        }
+    }
+
     /// Per-step blood update: particles advance, then every running flow emits one particle (the original's emitter `step` order).
     fn step_blood(&mut self) {
         self.blood.step_particles();
         self.blood.step_sprites();
+        self.snow_spray();
         for i in 0..self.blood.flows.len() {
             let (body, offset, angle, min, range, total, count, finished, sprite) = {
                 let f = &self.blood.flows[i];

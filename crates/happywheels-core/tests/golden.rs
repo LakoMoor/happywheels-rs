@@ -2838,3 +2838,31 @@ fn cart_groceries_burst_and_spill() {
         img.save(concat!(env!("CARGO_MANIFEST_DIR"), "/../../screenshots/sprites_cart_groceries.png")).unwrap();
     }
 }
+
+/// Boosting Santa's sleigh throws snowflakes off its underside (screenshot screenshots/sprites_santa_snow.png).
+#[test]
+fn santa_boost_throws_snow() {
+    let assets = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../assets-99tnk64n1mubaoc8w");
+    let level = level::parse(
+        "<levelXML><info v='1.99' x='1000' y='250'/><shapes>\
+         <sh t='0' p0='1000' p1='425' p2='2000' p3='50' p4='0' p5='t' p6='f' p7='1' p8='0' p9='-1' p10='100' p11='1'/></shapes></levelXML>",
+    )
+    .unwrap();
+    let mut w = World::from_level(&level);
+    assert!(w.spawn_bike(8, [1000.0, 250.0]));
+    let mut sprites = happywheels_core::sprites::Sprites::open(&assets, 8);
+    if let Some(s) = sprites.as_mut() {
+        s.bind_vehicle_rider(&w, [1000.0, 250.0]);
+    }
+    w.set_rider_keys(happywheels_core::vehicle::Keys { space: true, right: true, ..Default::default() });
+    for _ in 0..40 {
+        w.step();
+    }
+    assert!(w.blood.sprites.iter().any(|p| p.kind == happywheels_core::blood::ShardKind::Snow), "boost should throw snow");
+    if let Some(s) = sprites {
+        let mut img = image::RgbaImage::from_pixel(640, 360, image::Rgba([0xc8, 0xd8, 0xe8, 255]));
+        let c = w.b2().body(match w.bike.as_ref() { Some(happywheels_core::vehicle::Vehicle::Santa(s)) => s.sleigh, _ => panic!() }).sweep.c;
+        s.draw(&mut img, &w, (320.0 - c.x as f32 * 62.5, 180.0 - c.y as f32 * 62.5));
+        img.save(concat!(env!("CARGO_MANIFEST_DIR"), "/../../screenshots/sprites_santa_snow.png")).unwrap();
+    }
+}
