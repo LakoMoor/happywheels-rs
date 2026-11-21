@@ -613,7 +613,32 @@ impl Sprites {
             }
             _ => {}
         }
-        let Some(doll) = world.character.as_ref() else { return };
+        if let Some(doll) = world.character.as_ref() {
+            self.draw_doll_extras(img, world, camera_offset, doll, None);
+        }
+        for name in ["kid", "girl", "daughter", "son", "elf1", "elf2"] {
+            if let Some(doll) = Self::npc_doll(world, name) {
+                self.draw_doll_extras(img, world, camera_offset, doll, Some(name));
+            }
+        }
+    }
+
+    /// The ragdoll of the NPC clip `name` (`kid`, `girl`, `daughter`, `son`, `elf1`, `elf2`) of the current vehicle.
+    fn npc_doll<'a>(world: &'a World, name: &str) -> Option<&'a crate::character::Ragdoll> {
+        use crate::vehicle::Vehicle;
+        match (world.bike.as_ref()?, name) {
+            (Vehicle::Bike(b), "kid") => b.kid.as_ref().map(|k| &k.doll),
+            (Vehicle::Dirt(d), "girl") => d.girl.as_ref().map(|g| &g.doll),
+            (Vehicle::Family(f), "daughter") => Some(&f.daughter.doll),
+            (Vehicle::Family(f), "son") => Some(&f.son.doll),
+            (Vehicle::Santa(s), "elf1") => Some(&s.elf1.doll),
+            (Vehicle::Santa(s), "elf2") => Some(&s.elf2.doll),
+            _ => None,
+        }
+    }
+
+    /// Debris of a ragdoll (chunks, brain, heart, spine / intestine chains, feet, helmet, severed stumps), inside clip `parent` for NPCs.
+    fn draw_doll_extras(&self, img: &mut RgbaImage, world: &World, camera_offset: (f32, f32), doll: &crate::character::Ragdoll, parent: Option<&str>) {
         let mut extras: Vec<(&str, BodyId)> = doll.chunks.iter().zip(&doll.chunk_names).map(|(&b, n)| (n.as_str(), b)).collect();
         extras.extend(doll.brain.map(|b| ("brain", b)));
         extras.extend(doll.heart.map(|b| ("heart", b)));
@@ -622,6 +647,8 @@ impl Sprites {
         extras.extend(doll.spine.iter().flat_map(|c| c.bodies.iter()).zip(&spine_names).map(|(&b, n)| (n.as_str(), b)));
         extras.extend(doll.intestines.iter().flat_map(|c| c.bodies.iter()).zip(&gut_names).map(|(&b, n)| (n.as_str(), b)));
         extras.extend(doll.helmet.map(|b| ("helmet", b)));
+        extras.extend(doll.feet[0].map(|b| ("foot1", b)));
+        extras.extend(doll.feet[1].map(|b| ("foot2", b)));
         for (&body, limb) in doll.sev.iter().zip(&doll.sev_limbs) {
             use crate::character::Limb;
             let name = match limb {
@@ -633,8 +660,19 @@ impl Sprites {
             extras.push((name, body));
         }
         for (name, body) in extras {
-            self.draw_loose(img, world, camera_offset, name, body);
+            match parent {
+                Some(par) => self.draw_loose_in(img, world, camera_offset, par, name, body),
+                None => self.draw_loose(img, world, camera_offset, name, body),
+            }
         }
+    }
+    /// [`draw_loose`](Self::draw_loose) for a clip nested in `parent`.
+    fn draw_loose_in(&self, img: &mut RgbaImage, world: &World, camera_offset: (f32, f32), parent: &str, name: &str, body: BodyId) {
+        let Some(pi) = self.clip.iter().position(|c| c.n == parent) else { return };
+        let Some(ci) = self.clip[pi].k.iter().position(|c| c.n == name) else { return };
+        let c = &self.clip[pi].k[ci];
+        let b = Binding { path: vec![pi, ci], body, rest: local(0.0, 0.0, 0.0, 0.5 * c.sx, 0.5 * c.sy) };
+        self.draw_binding(img, world, camera_offset, &b);
     }
 
     /// Draws top-level clip `name` on a body created after the bindings (debris, break pieces).
@@ -655,9 +693,14 @@ impl Sprites {
             node = &node.k[i];
         }
         // Top-level rider parts switch frames when limbs break (`gotoAndStop`); NPC / nested parts stay on frame 1.
-        let frame = if b.path.len() == 1 { world.character.as_ref().map_or(1, |d| d.part_frame(&node.n)) } else { 1 };
+        let owner = match b.path.len() {
+            1 => world.character.as_ref(),
+            2 => Self::npc_doll(world, &self.clip[b.path[0]].n),
+            _ => None,
+        };
+        let frame = owner.map_or(1, |d| d.part_frame(&node.n));
         let children = if frame > 1 { node.alt.get(&frame.to_string()).unwrap_or(&node.k) } else { &node.k };
-        self.show_wound.set(b.path.len() == 1 && world.character.as_ref().is_some_and(|d| d.part_wound(&node.n)));
+        self.show_wound.set(owner.is_some_and(|d| d.part_wound(&node.n)));
         for child in children {
             self.draw_node(img, child, g);
         }

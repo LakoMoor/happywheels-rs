@@ -2668,3 +2668,36 @@ fn stump_frames_follow_chest_and_pelvis_smash() {
     doll.smash_pelvis(&mut w);
     assert_eq!((doll.part_frame("upperArm3"), doll.part_frame("upperLeg4")), (8, 8));
 }
+
+/// NPC debris and break frames are drawn inside the NPC's clip (screenshot screenshots/sprites_kid_smash.png).
+#[test]
+fn sprites_draw_kid_debris_and_frames() {
+    use happywheels_core::character::Limb;
+    let assets = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../assets-99tnk64n1mubaoc8w");
+    let Some(mut sprites) = happywheels_core::sprites::Sprites::open(&assets, 3) else { return };
+    let level = level::parse(
+        "<levelXML><info v='1.99' x='1000' y='250'/><shapes>\
+         <sh t='0' p0='1000' p1='425' p2='2000' p3='50' p4='0' p5='t' p6='f' p7='1' p8='0' p9='-1' p10='100' p11='1'/></shapes></levelXML>",
+    )
+    .unwrap();
+    let mut w = World::from_level(&level);
+    assert!(w.spawn_bike(3, [1000.0, 250.0]));
+    sprites.bind_vehicle_rider(&w, [1000.0, 250.0]);
+    for _ in 0..3 {
+        w.step();
+    }
+    let mut bike = w.bike.take();
+    let Some(happywheels_core::vehicle::Vehicle::Bike(b)) = bike.as_mut() else { panic!() };
+    let Some(kid) = b.kid.as_mut() else { return };
+    kid.doll.break_limb(&mut w, Limb::Elbow1, 1.0);
+    kid.doll.break_limb(&mut w, Limb::Knee2, 1.0);
+    kid.doll.smash_head(&mut w);
+    assert_eq!(kid.doll.part_frame("lowerArm1"), 2);
+    w.bike = bike;
+    for _ in 0..6 {
+        w.step();
+    }
+    let mut img = image::RgbaImage::from_pixel(640, 360, image::Rgba([0xc8, 0xd8, 0xe8, 255]));
+    sprites.draw(&mut img, &w, (320.0 - 1000.0, 180.0 - 330.0));
+    img.save(concat!(env!("CARGO_MANIFEST_DIR"), "/../../screenshots/sprites_kid_smash.png")).unwrap();
+}
