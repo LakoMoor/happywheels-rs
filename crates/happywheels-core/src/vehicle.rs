@@ -1855,6 +1855,8 @@ impl Mower {
                 let _ = self.start_grind(world, shape, body, at);
             } else {
                 let angle = world.b2().body(self.body).sweep.a;
+                // the original's literals (1.5708, not π/2)
+                #[allow(clippy::approx_constant)]
                 let a1 = o * 1.2217 - 1.5708 + angle;
                 let a2 = a1 - std::f64::consts::PI;
                 let b = world.b2_mut();
