@@ -3345,3 +3345,42 @@ fn toilet_water_shot() {
     let sp = happywheels_core::sprites::Sprites::open(&assets, 1).unwrap();
     happywheels_core::render::render_level_scene(&level, &w, 500, 300, [1000.0, 340.0], Some(&sp), None).save(path).unwrap();
 }
+
+/// HW_SHOT_GLASS_STAB=<png>: a flesh-material block lands on a glass triangle of a stabbing pane: the shard pins it and blood sprays from the impale point.
+#[test]
+fn glass_stab_shot() {
+    use box2d::{math::Vec2, shape::{Filter, ShapeDef}, world::BodyDef};
+    let Some(path) = std::env::var_os("HW_SHOT_GLASS_STAB") else { return };
+    let Some(assets) = Some(std::path::PathBuf::from("../../../assets-99tnk64n1mubaoc8w")).filter(|p| p.join("animate/game/l").exists()) else { return };
+    let level = level::parse("<levelXML><info v='1.99'/><shapes><sh t='0' p0='1000' p1='450' p2='3000' p3='50' p4='0' p5='t' p6='f' p7='1' p8='0' p9='-1' p10='100' p11='1'/></shapes><specials><sp t='18' p0='900' p1='400' p2='200' p3='20' p4='0' p5='f' p6='10' p7='t'/></specials></levelXML>").unwrap();
+    let mut w = World::from_level(&level);
+    let pane = w.special_bodies[0].unwrap();
+    w.b2_mut().body_mut(pane).linear_velocity = Vec2::new(0.0, 60.0);
+    for _ in 0..3 {
+        w.step();
+    }
+    let target = w.glass_pieces().next().unwrap().0;
+    w.b2_mut().body_mut(target).linear_velocity = Vec2::default();
+    w.b2_mut().body_mut(target).angular_velocity = 0.0;
+    let tp = w.b2().body(target).sweep.c;
+    let flesh = w.b2_mut().create_body(&BodyDef { position: Vec2::new(tp.x, tp.y - 40.0 / 62.5), ..Default::default() });
+    let mut sd = ShapeDef::oriented_box(0.5, 0.15, Vec2::default(), 0.0);
+    sd.density = 7.0;
+    sd.filter = Filter { category_bits: 4, mask_bits: 0xFFFF, group_index: 0 };
+    let s = w.b2_mut().create_shape(flesh, &sd);
+    w.b2_mut().shape_mut(s).material = 2;
+    w.b2_mut().set_mass_from_shapes(flesh);
+    w.b2_mut().body_mut(flesh).linear_velocity = Vec2::new(0.0, 3.5);
+    for _ in 0..60 {
+        w.step();
+        if w.blood.live() > 0 {
+            for _ in 0..3 {
+                w.step();
+            }
+            break;
+        }
+    }
+    let [cx, cy] = w.body_position_px(flesh).unwrap();
+    let sp = happywheels_core::sprites::Sprites::open(&assets, 1).unwrap();
+    happywheels_core::render::render_level_scene(&level, &w, 500, 300, [cx, cy - 20.0], Some(&sp), None).save(path).unwrap();
+}

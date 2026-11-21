@@ -255,7 +255,28 @@ struct Glass {
     /// Triangle pieces: (body, vertices in the body frame, px).
     pieces: Vec<(BodyId, [(f64, f64); 3])>,
     /// Per piece (`nd`): (body, shape, shatter impulse 10·mass, particles, sound suffix); a Result above the impulse shatters the piece too.
-    shards: Vec<(BodyId, ShapeId, f64, u32, &'static str)>,
+    shards: Vec<Shard>,
+    stabbing: bool,
+}
+
+/// One glass triangle (`nd`/`te`): shatters above `shatter` (10·mass) and, when the pane is `stabbing`, pins flesh it hits above `stab_limit` with a sensor +
+/// prismatic joints like spikes (motor force 30), until nothing is pinned any more.
+struct Shard {
+    body: BodyId,
+    shape: ShapeId,
+    shatter: f64,
+    stab_limit: f64,
+    particles: u32,
+    blood_particles: u32,
+    suffix: &'static str,
+    fatal: bool,
+    /// Sensor shape while in stab mode.
+    sensor: Option<ShapeId>,
+    /// (flesh body, joint, count)
+    pinned: Vec<(BodyId, usize, u32)>,
+    queue_add: Vec<(BodyId, Vec2)>,
+    queue_remove: Vec<BodyId>,
+    sounds: u32,
 }
 
 /// Toilet special (`$e`): a Result above 12 on the back breaks off the back (two pieces), on the base or bowl the base (two pieces).
@@ -282,6 +303,12 @@ struct Log {
     stretch: (f64, f64),
     done: bool,
     halves: Vec<(BodyId, u8)>,
+}
+
+/// Width in px of the bounding box of a triangle given in metres (`sprite.width` of the original's shard graphics).
+fn tri_width_px(v: &[Vec2; 3]) -> f64 {
+    let (lo, hi) = v.iter().fold((f64::MAX, f64::MIN), |(lo, hi), p| (lo.min(p.x), hi.max(p.x)));
+    (hi - lo) * PS
 }
 
 /// `createSpray` emitter (`Mu`): `per_frame` sprite particles per step from a segment of the body (local m), until `count` passes `total`.
@@ -992,7 +1019,7 @@ impl World {
             let (suffix, particles) = if mass < 0.75 { ("Light", 100) } else if mass < 4.0 { ("Mid", 150) } else { ("Heavy", 200) };
             let strength = f64::from(sp.num("shatterStrength").unwrap_or(10.0));
             let half = (f64::from(sp.num("shapeWidth").unwrap_or(10.0)) / 2.0 / PS, f64::from(sp.num("shapeHeight").unwrap_or(100.0)) / 2.0 / PS);
-            self.glasses.push(Glass { body, shape: first, half, smash_impulse: (mass * strength).round(), particles, suffix, done: false, pieces: Vec::new(), shards: Vec::new() });
+            self.glasses.push(Glass { body, shape: first, half, smash_impulse: (mass * strength).round(), particles, suffix, done: false, pieces: Vec::new(), shards: Vec::new(), stabbing: sp.flag("stabbing").unwrap_or(true) });
         }
         if sp.kind == 19 && sp.flag("interactive") != Some(false) {
             self.b.c.report_results = true;
@@ -3569,17 +3596,110 @@ impl World {
     /// `Glass.checkContact` / `shatter`: the contact point (in the pane's frame) is clamped to an edge when within 5 cm of it (that side then has no
     /// triangles); every remaining side contributes two triangles (impact point, side point k, side point k+1) as bodies at the pane's centre.
     fn glass_events(&mut self, events: &[box2d::world::ContactEvent]) {
-        // Shards (`nd.singleAction`): a Result above 10·mass destroys the piece with a glass burst (50/100/200 by mass < .75 / < 4 / heavier) and Glass sound.
+        // Shards (`nd`/`te`): shatter above 10·mass; in stab mode a flesh hit above `stab_limit` turns the piece into a pin (sensor + prismatic joints).
         for k in 0..self.glasses.len() {
+            let stabbing = self.glasses[k].stabbing;
             for s in 0..self.glasses[k].shards.len() {
-                let (b, shape, limit, particles, suffix) = self.glasses[k].shards[s];
-                if !self.b.body(b).alive || !events.iter().any(|e| e.kind == ContactEventKind::Result && (e.shape1 == shape || e.shape2 == shape) && e.normal_impulse > limit) {
+                let b = self.glasses[k].shards[s].body;
+                if !self.b.body(b).alive {
                     continue;
                 }
-                let src = self.b.body(b).clone();
-                self.rect_burst(&src, b, crate::blood::ShardKind::Food(5), 10.0, particles);
-                self.play(&format!("Glass{suffix}"), 2, src.sweep.c);
-                self.b.destroy_body(b);
+                let (shape, shatter, stab_limit) = (self.glasses[k].shards[s].shape, self.glasses[k].shards[s].shatter, self.glasses[k].shards[s].stab_limit);
+                let stab_limit = if stabbing { stab_limit } else { shatter };
+                let mut broke = false;
+                let mut begin_stab = false;
+                for e in events.iter().filter(|e| e.kind == ContactEventKind::Result && (e.shape1 == shape || e.shape2 == shape) && e.normal_impulse > stab_limit) {
+                    if e.normal_impulse > shatter {
+                        broke = true;
+                        break;
+                    }
+                    let other = if e.shape1 == shape { e.shape2 } else { e.shape1 };
+                    if self.b.shape_material(other) & 2 != 0 && !self.b.c.shapes[other].shape.is_sensor && self.glasses[k].shards[s].sensor.is_none() {
+                        begin_stab = true;
+                    }
+                }
+                if broke {
+                    let sh = &self.glasses[k].shards[s];
+                    let (particles, suffix, sensor) = (sh.particles, sh.suffix, sh.sensor);
+                    for (_, j, _) in std::mem::take(&mut self.glasses[k].shards[s].pinned) {
+                        self.b.destroy_joint(j);
+                    }
+                    let _ = sensor;
+                    let src = self.b.body(b).clone();
+                    self.rect_burst(&src, b, crate::blood::ShardKind::Food(5), 10.0, particles);
+                    self.play(&format!("Glass{suffix}"), 2, src.sweep.c);
+                    self.b.destroy_body(b);
+                    continue;
+                }
+                if begin_stab {
+                    // `te.singleAction` (stab): the solid shape only collides with category 8, a sensor copy (mask 4) watches for flesh
+                    let verts = match &self.b.c.shapes[shape].shape.kind {
+                        box2d::shape::ShapeKind::Polygon { poly, .. } => poly.vertices.clone(),
+                        _ => continue,
+                    };
+                    self.b.shape_mut(shape).filter.mask_bits = 8;
+                    self.b.refilter(shape);
+                    let mut sd = ShapeDef::new(Geometry::Polygon(verts));
+                    sd.is_sensor = true;
+                    sd.filter = Filter { category_bits: 8, mask_bits: 4, group_index: 0 };
+                    let sensor = self.b.create_shape(b, &sd);
+                    self.glasses[k].shards[s].sensor = Some(sensor);
+                }
+                let Some(sensor) = self.glasses[k].shards[s].sensor else { continue };
+                for e in events.iter().filter(|e| e.shape1 == sensor || e.shape2 == sensor) {
+                    let (other, flip) = if e.shape1 == sensor { (e.shape2, 1.0) } else { (e.shape1, -1.0) };
+                    if self.b.shape_material(other) & 2 == 0 {
+                        continue;
+                    }
+                    let ob = self.b.c.shapes[other].body;
+                    match e.kind {
+                        ContactEventKind::Add => self.glasses[k].shards[s].queue_add.push((ob, Vec2::new(e.normal.x * flip, e.normal.y * flip))),
+                        ContactEventKind::Remove if self.glasses[k].shards[s].pinned.iter().any(|p| p.0 == ob) || self.glasses[k].shards[s].queue_add.iter().any(|p| p.0 == ob) => self.glasses[k].shards[s].queue_remove.push(ob),
+                        _ => {}
+                    }
+                }
+                for (other, normal) in std::mem::take(&mut self.glasses[k].shards[s].queue_add) {
+                    if !self.b.c.bodies[other].alive {
+                        continue;
+                    }
+                    if let Some(p) = self.glasses[k].shards[s].pinned.iter_mut().find(|p| p.0 == other) {
+                        p.2 += 1;
+                        continue;
+                    }
+                    let fatal = self.glasses[k].shards[s].fatal;
+                    let at = self.b.body(other).sweep.c;
+                    self.shape_impale(other, fatal, None, 0.0);
+                    let mut jd = PrismaticJointDef::initialize(self.b.body(b), b, self.b.body(other), other, at, normal);
+                    jd.collide_connected = true;
+                    jd.enable_motor = true;
+                    jd.max_motor_force = 30.0;
+                    jd.motor_speed = 0.0;
+                    let j = self.b.create_prismatic_joint(&jd);
+                    let bp = self.glasses[k].shards[s].blood_particles;
+                    self.glasses[k].shards[s].pinned.push((other, j, 1));
+                    self.blood.burst([at.x * PS, at.y * PS], Vec2::default(), 5.0, 15.0, bp);
+                    if self.glasses[k].shards[s].sounds < 1 {
+                        self.glasses[k].shards[s].sounds += 1;
+                        self.play("ImpaleSpikes", 3, at);
+                    }
+                }
+                let had_removals = !self.glasses[k].shards[s].queue_remove.is_empty();
+                for other in std::mem::take(&mut self.glasses[k].shards[s].queue_remove) {
+                    if let Some(i) = self.glasses[k].shards[s].pinned.iter().position(|p| p.0 == other) {
+                        self.glasses[k].shards[s].pinned[i].2 -= 1;
+                        if self.glasses[k].shards[s].pinned[i].2 == 0 {
+                            let (_, j, _) = self.glasses[k].shards[s].pinned.remove(i);
+                            self.b.destroy_joint(j);
+                        }
+                    }
+                }
+                if had_removals && self.glasses[k].shards[s].pinned.is_empty() {
+                    // `checkZeroJoints` (only after removals, like `actions`): back to a plain solid piece
+                    self.b.shape_mut(shape).filter.mask_bits = 0xFFFF;
+                    self.b.refilter(shape);
+                    self.b.destroy_shape(sensor);
+                    self.glasses[k].shards[s].sensor = None;
+                }
             }
         }
         for k in 0..self.glasses.len() {
@@ -3629,7 +3749,23 @@ impl World {
                     let pm = self.b.body(piece).mass;
                     let (psuffix, pparticles) = if pm < 0.75 { ("Light", 50) } else if pm < 4.0 { ("Mid", 100) } else { ("Heavy", 200) };
                     self.b.c.report_results = true;
-                    self.glasses[k].shards.push((piece, psh, 10.0 * pm, pparticles, psuffix));
+                    let wide = tri_width_px(&[impact, Vec2::new(a.0, a.1), Vec2::new(b.0, b.1)]) >= 15.0;
+                    let stabs = self.glasses[k].stabbing;
+                    self.glasses[k].shards.push(Shard {
+                        body: piece,
+                        shape: psh,
+                        shatter: 10.0 * pm,
+                        stab_limit: if pm < 0.1 { 0.0 } else { (5.0 * pm).min(2.5) },
+                        particles: pparticles,
+                        blood_particles: if stabs && pm < 0.1 { 15 } else { 50 },
+                        suffix: psuffix,
+                        fatal: stabs && pm >= 0.25 && wide,
+                        sensor: None,
+                        pinned: Vec::new(),
+                        queue_add: Vec::new(),
+                        queue_remove: Vec::new(),
+                        sounds: 0,
+                    });
                     let com = self.b.body(piece).sweep.c;
                     self.b.body_mut(piece).angular_velocity = w;
                     self.b.body_mut(piece).linear_velocity = src.linear_velocity_from_world_point(com);
@@ -4781,6 +4917,45 @@ mod tests {
         }
         assert!(w.hit_sounds.iter().all(|h| h.body != b), "shattered one lost its listener");
         assert!(w.hit_sounds.iter().any(|h| h.body == a && h.name == "BoomboxHit"), "the untouched one keeps it");
+    }
+
+    /// A stabbing pane's triangles pin flesh that lands on them (sensor + prismatic joint, blood, ImpaleSpikes); a non-stabbing pane's do not.
+    #[test]
+    fn glass_shards_stab_flesh() {
+        let run = |stabbing: &str| {
+            let xml = format!("<levelXML><info v='1.99'/><shapes><sh t='0' p0='1000' p1='450' p2='3000' p3='50' p4='0' p5='t' p6='f' p7='1' p8='0' p9='-1' p10='100' p11='1'/></shapes><specials><sp t='18' p0='900' p1='400' p2='200' p3='20' p4='0' p5='f' p6='10' p7='{stabbing}'/></specials></levelXML>");
+            let mut w = World::from_level(&crate::level::parse(&xml).unwrap());
+            let pane = w.special_bodies[0].unwrap();
+            w.b.body_mut(pane).linear_velocity = Vec2::new(0.0, 60.0);
+            for _ in 0..3 {
+                w.step();
+            }
+            assert!(w.glass_pieces().count() > 0, "the pane broke");
+            let mut pinned = 0;
+            let mut sounds = false;
+            // hold the first triangle still and drop a flesh block onto it
+            let target = w.glass_pieces().next().unwrap().0;
+            w.b.body_mut(target).linear_velocity = Vec2::default();
+            w.b.body_mut(target).angular_velocity = 0.0;
+            let tp = w.b.body(target).sweep.c;
+            let flesh = w.b.create_body(&BodyDef { position: Vec2::new(tp.x, tp.y - 40.0 / PS), ..Default::default() });
+            let mut sd = ShapeDef::oriented_box(0.5, 0.15, Vec2::default(), 0.0);
+            sd.density = 7.0;
+            sd.filter = Filter { category_bits: 4, mask_bits: 0xFFFF, group_index: 0 };
+            let s = w.b.create_shape(flesh, &sd);
+            w.b.shape_mut(s).material = 2;
+            w.b.set_mass_from_shapes(flesh);
+            w.b.body_mut(flesh).linear_velocity = Vec2::new(0.0, 3.5);
+            for _ in 0..60 {
+                w.step();
+                pinned = pinned.max(w.glasses.iter().flat_map(|g| g.shards.iter()).map(|s| s.pinned.len()).sum::<usize>());
+                sounds |= w.take_sounds().iter().any(|s| s.0.starts_with("ImpaleSpikes"));
+            }
+            (pinned, sounds)
+        };
+        let (pinned, sounds) = run("t");
+        assert!(pinned > 0 && sounds, "stabbing glass pins flesh ({pinned}, {sounds})");
+        assert_eq!(run("f").0, 0, "non-stabbing glass does not");
     }
 
     /// Glass pieces are shards too: a hard hit on a piece (Result above 10·its mass) destroys it with a burst of glass.
