@@ -2899,7 +2899,9 @@ impl World {
                     let l = self.b.body(body).local_point(c);
                     let flip = if self.arrows[ai].reverse { -1.0 } else { 1.0 };
                     let (rot, mirror) = (self.blood.rand() * std::f64::consts::TAU, if self.blood.rand() > 0.5 { -1.0 } else { 1.0 });
-                    self.arrows[ai].blood.push((l.x * PS * flip, l.y * PS, rot, mirror));
+                    if !self.blood.off {
+                        self.arrows[ai].blood.push((l.x * PS * flip, l.y * PS, rot, mirror));
+                    }
                     if self.arrows[ai].flesh_sounds < 1 {
                         self.arrows[ai].flesh_sounds += 1;
                         self.play("BladeFlesh", 3, c);
@@ -2970,7 +2972,9 @@ impl World {
                     -o
                 };
                 let frame = (5.0 * self.blood.rand()).ceil().clamp(1.0, 5.0) as u8;
-                self.spikes[si].blood.push((i + o, frame));
+                if !self.blood.off {
+                    self.spikes[si].blood.push((i + o, frame));
+                }
                 if self.spikes[si].sounds < 2 {
                     self.spikes[si].sounds += 1;
                     self.play("ImpaleSpikes", 3, at);

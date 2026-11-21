@@ -3216,3 +3216,28 @@ fn blood_sprite_shot() {
     let sp = happywheels_core::sprites::Sprites::open(&assets, 1).unwrap();
     happywheels_core::render::render_level_scene(&level, &w, 500, 300, [1000.0, 330.0], Some(&sp), None).save(path).unwrap();
 }
+
+/// `paintBlood` returns immediately at bloodSetting 0: an impaled body leaves no blood stamp on the spikes (the control world with blood on does).
+#[test]
+fn no_spike_blood_stamps_without_blood() {
+    use box2d::{math::Vec2, shape::{Geometry, ShapeDef}, world::BodyDef};
+    let level = level::parse("<levelXML><info v='1.99' x='1000' y='300'/><shapes></shapes><specials><sp t='6' p0='1000' p1='400' p2='0' p3='t' p4='8' p5='f'/></specials></levelXML>").unwrap();
+    let run = |off: bool| {
+        let mut w = World::from_level(&level);
+        w.blood.off = off;
+        let spikes = w.special_bodies[0].unwrap();
+        let b = w.b2_mut();
+        let id = b.create_body(&BodyDef { position: Vec2::new(1000.0 / 62.5, 380.0 / 62.5), ..Default::default() });
+        let mut d = ShapeDef::new(Geometry::Polygon(vec![Vec2::new(-0.2, -0.2), Vec2::new(0.2, -0.2), Vec2::new(0.2, 0.2), Vec2::new(-0.2, 0.2)]));
+        d.density = 1.0;
+        let s = b.create_shape(id, &d);
+        b.shape_mut(s).material = 2;
+        b.set_mass_from_shapes(id);
+        for _ in 0..30 {
+            w.step();
+        }
+        w.spike_blood(spikes).len()
+    };
+    assert_eq!(run(false), 1, "control: one impale, one stamp");
+    assert_eq!(run(true), 0, "no blood setting: no stamp");
+}
