@@ -853,6 +853,27 @@ impl Sprites {
         }
     }
 
+    /// Arrows (`ArrowMC`) and harpoons (`HarpoonMC`) of the guns at their body's centre of mass and angle.
+    fn draw_arrows(&self, img: &mut RgbaImage, world: &World, cam: M) {
+        #[derive(Deserialize)]
+        struct File {
+            k: Vec<Node>,
+        }
+        static CLIPS: std::sync::OnceLock<[Vec<Node>; 2]> = std::sync::OnceLock::new();
+        let clips = CLIPS.get_or_init(|| {
+            let f = |s: &str| serde_json::from_str::<File>(s).map(|f| f.k).unwrap_or_default();
+            [f(include_str!("../data/game-ArrowMC.json")), f(include_str!("../data/game-HarpoonMC.json"))]
+        });
+        for (b, harpoon) in world.arrow_bodies() {
+            if world.body_center_px(b).is_none() {
+                continue;
+            }
+            for k in &clips[usize::from(harpoon)] {
+                self.draw_node(img, k, mul(cam, body_matrix(world, b)));
+            }
+        }
+    }
+
     pub fn draw_specials(&self, img: &mut RgbaImage, level: &crate::level::Level, world: &World, camera_offset: (f32, f32)) {
         let cam = local(f64::from(camera_offset.0), f64::from(camera_offset.1), 0.0, 1.0, 1.0);
         self.draw_food_chunks(img, world, cam);
@@ -861,6 +882,7 @@ impl Sprites {
         self.draw_glass_pieces(img, world, cam);
         self.draw_toilet_pieces(img, world, cam);
         self.draw_log_halves(img, world, cam);
+        self.draw_arrows(img, world, cam);
         for (i, sp) in level.specials.iter().enumerate() {
             if sp.kind == 0 {
                 self.draw_van(img, sp, world.special_parts.get(i).map(Vec::as_slice).unwrap_or(&[]), world, cam);

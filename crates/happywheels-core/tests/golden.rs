@@ -3261,6 +3261,13 @@ fn harpoon_blood_shot() {
     for _ in 0..120 {
         w.b2_mut().body_mut(b).linear_velocity = Vec2::default();
         w.step();
+        if std::env::var_os("HW_FLIGHT").is_some() && w.arrow_bodies().next().is_some() {
+            hit = true;
+            for _ in 0..3 {
+                w.step();
+            }
+            break;
+        }
         if w.blood.live() > 0 {
             hit = true;
             for _ in 0..4 {

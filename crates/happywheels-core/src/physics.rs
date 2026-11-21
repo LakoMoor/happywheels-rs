@@ -2210,6 +2210,11 @@ impl World {
         }
     }
 
+    /// Live gun projectiles for drawing: (body, harpoon?) — blade weapons (arrows carrying a `blade`) have their own art.
+    pub fn arrow_bodies(&self) -> impl Iterator<Item = (BodyId, bool)> + '_ {
+        self.arrows.iter().filter(|a| a.blade.is_none()).map(|a| (a.body, a.harpoon))
+    }
+
     /// Aim angle (rad) of the arrow gun / harpoon gun placed at special position (`x`, `y`) px with base angle `base` (rad), if it is modelled.
     pub fn gun_turret_angle(&self, x: f64, y: f64, base: f64, harpoon: bool) -> Option<f64> {
         let off = if harpoon { 35.0 } else { 27.0 };
