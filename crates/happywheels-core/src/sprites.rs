@@ -167,7 +167,7 @@ impl Sprites {
             return None;
         }
         // Atlas `game/l` holds the runtime special-element art (spikes, ...).
-        for g in ["l", "d"] {
+        for g in ["l", "d", "r"] {
             let game = assets.join(format!("animate/game/{g}"));
             if let (Ok(json), Ok(img)) = (std::fs::read_to_string(game.join(format!("{g}@0.3x.json"))), image::open(game.join(format!("{g}@0.3x.png")))) {
                 if let Ok(atlas) = serde_json::from_str::<AtlasFile>(&json) {
@@ -589,6 +589,9 @@ impl Sprites {
             6 => "spike-clean.png",
             3 => "i-beam-body.png",
             4 => "log-full.png",
+            1 => "table-mc-top.png",
+            2 => "mine-base-1.png",
+            5 => "springbox-mc-pad.png",
             _ => return false,
         };
         self.pages.iter().any(|(f, _)| f.contains_key(tex))
@@ -600,6 +603,10 @@ impl Sprites {
     pub fn draw_specials(&self, img: &mut RgbaImage, level: &crate::level::Level, world: &World, camera_offset: (f32, f32)) {
         let cam = local(f64::from(camera_offset.0), f64::from(camera_offset.1), 0.0, 1.0, 1.0);
         for (i, sp) in level.specials.iter().enumerate() {
+            if matches!(sp.kind, 1 | 2 | 5) {
+                self.draw_clip_special(img, sp, world.special_bodies.get(i).copied().flatten(), world, cam);
+                continue;
+            }
             if !matches!(sp.kind, 3 | 4 | 6) {
                 continue;
             }
@@ -624,6 +631,47 @@ impl Sprites {
             }
             let width = 15.0 * n as f64 - 2.0;
             self.blit(img, "spike-platform.png", mul(m, mul(local(0.0, 35.0 - lc_y, 0.0, 1.0, 1.0), local(-width / 2.0, -10.0, 0.0, width / 300.0, 1.0))));
+        }
+    }
+
+    /// Table / mine / spring box: the library clip tree (`data/game-*MC.json`, dumped from the oracle) at the body's centre of mass (a table without a
+    /// body stays at its level position). Spring box: `pad` follows the body lowered by its local-centre y (`pad.y = −localCenter.y`), `base` sits at the
+    /// level position and angle (original moves it to the foreground). The timer text / glow / arrows' animation and the launch are not drawn.
+    fn draw_clip_special(&self, img: &mut RgbaImage, sp: &crate::level::Special, body: Option<BodyId>, world: &World, cam: M) {
+        use std::sync::OnceLock;
+        static CLIPS: OnceLock<[Vec<Node>; 3]> = OnceLock::new();
+        #[derive(Deserialize)]
+        struct File {
+            k: Vec<Node>,
+        }
+        let clips = CLIPS.get_or_init(|| {
+            let f = |s: &str| serde_json::from_str::<File>(s).map(|f| f.k).unwrap_or_default();
+            [f(include_str!("../data/game-TableMC.json")), f(include_str!("../data/game-MineMC.json")), f(include_str!("../data/game-SpringBoxMC.json"))]
+        });
+        let (x, y, ang) = (f64::from(sp.num("x").unwrap_or(0.0)), f64::from(sp.num("y").unwrap_or(0.0)), f64::from(sp.num("angle").unwrap_or(0.0)).to_radians());
+        let live = body.filter(|&b| world.body_center_px(b).is_some());
+        let pose = match live {
+            Some(b) => body_matrix(world, b),
+            None => local(x, y, ang, 1.0, 1.0),
+        };
+        let clip = &clips[match sp.kind { 1 => 0, 2 => 1, _ => 2 }];
+        if sp.kind != 5 {
+            for n in clip {
+                self.draw_node(img, n, mul(cam, pose));
+            }
+            return;
+        }
+        let lc_y = live.map_or(0.0, |b| world.b2().body(b).sweep.local_center.y * 62.5);
+        for n in clip {
+            match n.n.as_str() {
+                "pad" => {
+                    for k in &n.k {
+                        self.draw_node(img, k, mul(cam, mul(pose, local(0.0, -lc_y, 0.0, 1.0, 1.0))));
+                    }
+                }
+                "base" => self.draw_node(img, n, mul(cam, local(x, y, ang, 1.0, 1.0))),
+                _ => {}
+            }
         }
     }
 
