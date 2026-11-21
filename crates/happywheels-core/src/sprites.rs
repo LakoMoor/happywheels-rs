@@ -167,7 +167,7 @@ impl Sprites {
             return None;
         }
         // Atlas `game/l` holds the runtime special-element art (spikes, ...).
-        for g in ["l", "d", "r", "o"] {
+        for g in ["l", "d", "r", "o", "c"] {
             let game = assets.join(format!("animate/game/{g}"));
             if let (Ok(json), Ok(img)) = (std::fs::read_to_string(game.join(format!("{g}@0.3x.json"))), image::open(game.join(format!("{g}@0.3x.png")))) {
                 if let Ok(atlas) = serde_json::from_str::<AtlasFile>(&json) {
@@ -599,6 +599,8 @@ impl Sprites {
             11 => "meteor.png",
             31 => "token-outer-ring.png",
             23 => "post.png",
+            8 => "fan-1522.png",
+            9 => "finish-line-asset-1480.png",
             _ => return false,
         };
         self.pages.iter().any(|(f, _)| f.contains_key(tex))
@@ -616,6 +618,32 @@ impl Sprites {
             }
             if matches!(sp.kind, 1 | 2 | 5 | 7 | 10) {
                 self.draw_clip_special(img, sp, world.special_bodies.get(i).copied().flatten(), world, cam);
+                continue;
+            }
+            // Fan (`blades.play()`: one of 6 frames per step) and finish line: static clips at the level position/angle.
+            if matches!(sp.kind, 8 | 9) {
+                static CLIPS: std::sync::OnceLock<[Vec<Node>; 2]> = std::sync::OnceLock::new();
+                #[derive(Deserialize)]
+                struct File {
+                    k: Vec<Node>,
+                }
+                let clips = CLIPS.get_or_init(|| {
+                    let f = |s: &str| serde_json::from_str::<File>(s).map(|f| f.k).unwrap_or_default();
+                    [f(include_str!("../data/game-FanMC.json")), f(include_str!("../data/game-FinishLineMC.json"))]
+                });
+                let m = mul(cam, local(f64::from(sp.num("x").unwrap_or(0.0)), f64::from(sp.num("y").unwrap_or(0.0)), f64::from(sp.num("angle").unwrap_or(0.0)).to_radians(), 1.0, 1.0));
+                for n in &clips[usize::from(sp.kind == 9)] {
+                    if n.n == "blades" && sp.kind == 8 {
+                        let f = (world.frame() % 6) as usize + 1;
+                        let kids = if f > 1 { n.alt.get(&f.to_string()).unwrap_or(&n.k) } else { &n.k };
+                        let bm = mul(m, local(n.x, n.y, n.r, n.sx, n.sy));
+                        for k in kids {
+                            self.draw_node(img, k, bm);
+                        }
+                    } else {
+                        self.draw_node(img, n, m);
+                    }
+                }
                 continue;
             }
             // SignPost: static `SignMC` frame `signPostType` (a single sign texture per frame) with `PostMC` behind it when `signPost` is set.
