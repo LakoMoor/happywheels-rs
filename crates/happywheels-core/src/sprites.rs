@@ -594,6 +594,7 @@ impl Sprites {
             5 => "springbox-mc-pad.png",
             10 => "soccer-ball.png",
             7 => "wrecking-ball-ball.png",
+            0 => "van-body.png",
             _ => return false,
         };
         self.pages.iter().any(|(f, _)| f.contains_key(tex))
@@ -605,6 +606,10 @@ impl Sprites {
     pub fn draw_specials(&self, img: &mut RgbaImage, level: &crate::level::Level, world: &World, camera_offset: (f32, f32)) {
         let cam = local(f64::from(camera_offset.0), f64::from(camera_offset.1), 0.0, 1.0, 1.0);
         for (i, sp) in level.specials.iter().enumerate() {
+            if sp.kind == 0 {
+                self.draw_van(img, sp, world.special_parts.get(i).map(Vec::as_slice).unwrap_or(&[]), world, cam);
+                continue;
+            }
             if matches!(sp.kind, 1 | 2 | 5 | 7 | 10) {
                 self.draw_clip_special(img, sp, world.special_bodies.get(i).copied().flatten(), world, cam);
                 continue;
@@ -633,6 +638,38 @@ impl Sprites {
             }
             let width = 15.0 * n as f64 - 2.0;
             self.blit(img, "spike-platform.png", mul(m, mul(local(0.0, 35.0 - lc_y, 0.0, 1.0, 1.0), local(-width / 2.0, -10.0, 0.0, width / 300.0, 1.0))));
+        }
+    }
+
+    /// Van (`createMovieClips`/`paint`): `VanBodyMC` at the van body's centre of mass, one `VanTireMC` per tire body; a van without bodies (not
+    /// interactive) is one static clip at the level position with the tires at (±58, 48).
+    fn draw_van(&self, img: &mut RgbaImage, sp: &crate::level::Special, parts: &[BodyId], world: &World, cam: M) {
+        use std::sync::OnceLock;
+        static CLIPS: OnceLock<[Vec<Node>; 2]> = OnceLock::new();
+        #[derive(Deserialize)]
+        struct File {
+            k: Vec<Node>,
+        }
+        let clips = CLIPS.get_or_init(|| {
+            let f = |s: &str| serde_json::from_str::<File>(s).map(|f| f.k).unwrap_or_default();
+            [f(include_str!("../data/game-VanBodyMC.json")), f(include_str!("../data/game-VanTireMC.json"))]
+        });
+        let draw = |s: &Self, img: &mut RgbaImage, clip: &[Node], m: M| {
+            for n in clip {
+                s.draw_node(img, n, m);
+            }
+        };
+        if parts.len() == 3 && parts.iter().all(|&b| world.body_center_px(b).is_some()) {
+            for (&b, clip) in parts[1..].iter().zip([&clips[1], &clips[1]]).chain([(&parts[0], &clips[0])]) {
+                draw(self, img, clip, mul(cam, body_matrix(world, b)));
+            }
+        } else {
+            let (x, y, ang) = (f64::from(sp.num("x").unwrap_or(0.0)), f64::from(sp.num("y").unwrap_or(0.0)), f64::from(sp.num("angle").unwrap_or(0.0)).to_radians());
+            let m = mul(cam, local(x, y, ang, 1.0, 1.0));
+            for tx in [-58.0, 58.0] {
+                draw(self, img, &clips[1], mul(m, local(tx, 48.0, 0.0, 1.0, 1.0)));
+            }
+            draw(self, img, &clips[0], m);
         }
     }
 
