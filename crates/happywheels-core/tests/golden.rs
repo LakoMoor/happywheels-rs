@@ -2796,3 +2796,45 @@ fn santa_sleigh_clip_is_recentred_after_ski_smash() {
     image::imageops::replace(&mut both, &after, 640, 0);
     both.save(concat!(env!("CARGO_MANIFEST_DIR"), "/../../screenshots/sprites_santa_ski_smash.png")).unwrap();
 }
+
+/// c4 cart groceries: the soda can spills and the cracker box bursts on a hard hit (screenshot screenshots/sprites_cart_groceries.png).
+#[test]
+fn cart_groceries_burst_and_spill() {
+    use happywheels_core::vehicle::Vehicle;
+    let assets = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../assets-99tnk64n1mubaoc8w");
+    let level = level::parse(
+        "<levelXML><info v='1.99' x='1000' y='250'/><shapes>\
+         <sh t='0' p0='1000' p1='425' p2='2000' p3='50' p4='0' p5='t' p6='f' p7='1' p8='0' p9='-1' p10='100' p11='1'/></shapes></levelXML>",
+    )
+    .unwrap();
+    let mut w = World::from_level(&level);
+    assert!(w.spawn_bike(4, [1000.0, 250.0]));
+    let mut sprites = happywheels_core::sprites::Sprites::open(&assets, 4);
+    if let Some(s) = sprites.as_mut() {
+        s.bind_vehicle_rider(&w, [1000.0, 250.0]);
+    }
+    let (mut cola, mut cracker) = (false, false);
+    for i in 0..200 {
+        if i == 10 {
+            // slam the soda can and the cracker box into the basket
+            if let Some(Vehicle::Cart(c)) = w.bike.as_ref() {
+                let (soda, box_) = (c.groceries[3], c.groceries[4]);
+                w.b2_mut().body_mut(soda).linear_velocity = box2d::math::Vec2::new(0.0, 60.0);
+                w.b2_mut().body_mut(box_).linear_velocity = box2d::math::Vec2::new(0.0, 300.0);
+            }
+        }
+        w.step();
+        if let Some(Vehicle::Cart(c)) = w.bike.as_ref() {
+            cola |= c.cola_open;
+            cracker |= c.cracker_gone;
+        }
+    }
+    assert!(cola, "soda can should spill");
+    assert!(cracker, "cracker box should burst");
+    eprintln!("cola {cola} cracker {cracker} sprites {}", w.blood.sprites.len());
+    if let Some(s) = sprites {
+        let mut img = image::RgbaImage::from_pixel(640, 360, image::Rgba([0xc8, 0xd8, 0xe8, 255]));
+        s.draw(&mut img, &w, (320.0 - 1000.0, 180.0 - 330.0));
+        img.save(concat!(env!("CARGO_MANIFEST_DIR"), "/../../screenshots/sprites_cart_groceries.png")).unwrap();
+    }
+}

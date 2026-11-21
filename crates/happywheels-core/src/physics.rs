@@ -1629,6 +1629,33 @@ impl World {
                 }
             }
         }
+        if self.joints_break {
+            // grocery cans: `crackerSmash` / `colaSmash` fire on any Result above 1 on the cracker box / soda can
+            let mut hits = (None, None);
+            if let Some(crate::vehicle::Vehicle::Cart(c)) = self.bike.as_ref() {
+                let over = |id: BodyId| self.b.body(id).alive && self.b.body(id).shapes.last().copied().is_some_and(|s| events.iter().any(|e| e.kind == ContactEventKind::Result && (e.shape1 == s || e.shape2 == s) && e.normal_impulse > 1.0));
+                if !c.cracker_gone && over(c.groceries[4]) {
+                    hits.0 = Some(c.groceries[4]);
+                }
+                if !c.cola_open && over(c.groceries[3]) {
+                    hits.1 = Some(c.groceries[3]);
+                }
+            }
+            if let Some(id) = hits.0 {
+                let at = self.b.body(id).sweep.c;
+                self.blood.sprite_burst(crate::blood::ShardKind::Crackers, [at.x * PS, at.y * PS], 30.0, 30.0, 40);
+                self.b.destroy_body(id);
+                if let Some(crate::vehicle::Vehicle::Cart(c)) = self.bike.as_mut() {
+                    c.cracker_gone = true;
+                }
+            }
+            if let Some(id) = hits.1 {
+                self.sprite_flow(crate::blood::ShardKind::Cola, 2.5, 4.0, id, Vec2::new(0.0, -10.0 / 62.5), 270.0, 300);
+                if let Some(crate::vehicle::Vehicle::Cart(c)) = self.bike.as_mut() {
+                    c.cola_open = true;
+                }
+            }
+        }
         if self.joints_break && matches!(self.bike, Some(crate::vehicle::Vehicle::Chair(ref c)) if !c.chair_smashed) {
             // `contactResultHandler` on chairShape1: impulse above 200 smashes the chair
             let hit = if let Some(crate::vehicle::Vehicle::Chair(c)) = self.bike.as_ref() {
@@ -2228,8 +2255,13 @@ impl World {
 
     /// `createBloodFlow(min, max, body, offset (local), angle°, total)`: one particle per step until `total` is exceeded. Returns the flow's index.
     pub fn blood_flow(&mut self, min: f64, max: f64, body: BodyId, offset: Vec2, angle_deg: f64, total: u32) -> usize {
-        self.blood.flows.push(crate::blood::Flow { body, offset, angle: angle_deg.to_radians(), min_speed: min, speed_range: max - min, total, count: 0, finished: false });
+        self.blood.flows.push(crate::blood::Flow { body, offset, angle: angle_deg.to_radians(), min_speed: min, speed_range: max - min, total, count: 0, finished: false, sprite: None });
         self.blood.flows.len() - 1
+    }
+
+    /// `createFlow(kind, min, max, body, offset, angle°, total)`: a sprite flow from a body point.
+    pub fn sprite_flow(&mut self, kind: crate::blood::ShardKind, min: f64, max: f64, body: BodyId, offset: Vec2, angle_deg: f64, total: u32) {
+        self.blood.flows.push(crate::blood::Flow { body, offset, angle: angle_deg.to_radians(), min_speed: min, speed_range: max - min, total, count: 0, finished: false, sprite: Some(kind) });
     }
 
     /// `stopSpewing`.
@@ -2244,9 +2276,9 @@ impl World {
         self.blood.step_particles();
         self.blood.step_sprites();
         for i in 0..self.blood.flows.len() {
-            let (body, offset, angle, min, range, total, count, finished) = {
+            let (body, offset, angle, min, range, total, count, finished, sprite) = {
                 let f = &self.blood.flows[i];
-                (f.body, f.offset, f.angle, f.min_speed, f.speed_range, f.total, f.count, f.finished)
+                (f.body, f.offset, f.angle, f.min_speed, f.speed_range, f.total, f.count, f.finished, f.sprite)
             };
             if finished {
                 continue;
@@ -2262,7 +2294,10 @@ impl World {
             let v = b.linear_velocity_from_local_point(offset);
             let at = b.world_point(offset);
             let vel = [a.cos() * speed + v.x, a.sin() * speed + v.y];
-            self.blood.spawn([at.x * PS, at.y * PS], vel);
+            match sprite {
+                Some(kind) => self.blood.spawn_sprite(kind, [at.x * PS, at.y * PS], vel),
+                None => self.blood.spawn([at.x * PS, at.y * PS], vel),
+            }
         }
     }
 

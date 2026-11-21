@@ -2639,6 +2639,9 @@ pub struct Cart {
     pub back_wheel: BodyId,
     pub front_wheel: BodyId,
     pub groceries: Vec<BodyId>,
+    /// `crackerSmash` / `colaSmash` happened (the cracker box is gone; the soda can shows frame 2 and spills).
+    pub cracker_gone: bool,
+    pub cola_open: bool,
     back_shock: BodyId,
     front_shock: BodyId,
     back_shock_joint: usize,
@@ -2873,6 +2876,8 @@ impl Cart {
             back_wheel,
             front_wheel,
             groceries,
+            cracker_gone: false,
+            cola_open: false,
             back_shock,
             front_shock,
             back_shock_joint,

@@ -770,7 +770,10 @@ impl Sprites {
             2 => Self::npc_doll(world, &self.clip[b.path[0]].n),
             _ => None,
         };
-        let frame = owner.map_or(1, |d| d.part_frame(&node.n));
+        let mut frame = owner.map_or(1, |d| d.part_frame(&node.n));
+        if b.path.len() == 1 && node.n == "box3" && matches!(world.bike.as_ref(), Some(crate::vehicle::Vehicle::Cart(c)) if c.cola_open) {
+            frame = 2;
+        }
         let children = if frame > 1 { node.alt.get(&frame.to_string()).unwrap_or(&node.k) } else { &node.k };
         self.show_wound.set(owner.is_some_and(|d| d.part_wound(&node.n)));
         for child in children {

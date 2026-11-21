@@ -40,6 +40,8 @@ pub struct Flow {
     pub total: u32,
     pub count: u32,
     pub finished: bool,
+    /// Sprite flow (`createFlow` of a debris clip) instead of blood.
+    pub sprite: Option<ShardKind>,
 }
 
 /// A sprite particle (`MA`): one frame of a debris clip flying under gravity (`createPointBurst`).
@@ -63,6 +65,8 @@ pub enum ShardKind {
     Mower,
     /// `jetshards` (the `metalShards` clip of the chair / dirt bike).
     Metal,
+    /// Cola spilling from the cart's soda can.
+    Cola,
 }
 
 impl ShardKind {
@@ -75,6 +79,7 @@ impl ShardKind {
             Self::Sleigh => ("sleighShards", None, 8),
             Self::Mower => ("mowerShards", None, 12),
             Self::Metal => ("metalShards", None, 12),
+            Self::Cola => ("cola", None, 13),
         }
     }
 }
@@ -134,6 +139,17 @@ impl Blood {
             let k = 62.5 / 30.0;
             self.sprites.push(SpriteParticle { kind, frame: frame.min(frames - 1), pos: [x, y], vel: [vx * k, vy * k] });
         }
+    }
+
+    /// One particle of a sprite flow (`Mk.createParticle`): velocity in m/s, centred on `at` (px).
+    pub fn spawn_sprite(&mut self, kind: ShardKind, at: [f64; 2], vel: [f64; 2]) {
+        if self.particles.len() + self.sprites.len() >= MAX_PARTICLES {
+            return;
+        }
+        let frames = kind.clip().2;
+        let frame = ((self.rand() * frames as f64).floor() as usize).min(frames - 1);
+        let k = 62.5 / 30.0;
+        self.sprites.push(SpriteParticle { kind, frame, pos: at, vel: [vel[0] * k, vel[1] * k] });
     }
 
     /// Advances the sprite particles one step (dropped below `Y_LIMIT`).
