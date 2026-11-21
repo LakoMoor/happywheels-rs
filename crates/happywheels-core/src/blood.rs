@@ -92,7 +92,21 @@ impl ShardKind {
     }
 }
 
-#[derive(Default)]
+/// Process-wide `bloodSetting` used by new worlds: 0 = no blood, 1 = bitmap particles (default), 2 = line particles.
+static BLOOD_SETTING: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(1);
+
+/// Sets the `bloodSetting` new worlds start with (values above 2, the original's metaball looks, behave like 2).
+pub fn set_blood_setting(setting: u8) {
+    BLOOD_SETTING.store(setting, std::sync::atomic::Ordering::Relaxed);
+}
+
+impl Default for Blood {
+    fn default() -> Self {
+        let setting = BLOOD_SETTING.load(std::sync::atomic::Ordering::Relaxed);
+        Self { particles: Vec::new(), sparks: Vec::new(), sprites: Vec::new(), flows: Vec::new(), line_blood: setting >= 2, off: setting == 0, rng: 0 }
+    }
+}
+
 pub struct Blood {
     pub particles: Vec<Particle>,
     pub sparks: Vec<Spark>,
@@ -100,6 +114,8 @@ pub struct Blood {
     pub flows: Vec<Flow>,
     /// `bloodSetting` 2 look (`BloodParticleLine`: a dark red line per particle); off = the default setting 1 (`Blood` bitmap sprites).
     pub line_blood: bool,
+    /// `bloodSetting` 0: `createBloodBurst/Flow` return empty emitters, nothing is spawned.
+    pub off: bool,
     rng: u64,
 }
 
@@ -163,6 +179,9 @@ impl Blood {
 
     /// `MP`/`Md.createParticles`: `total` particles around `start` (px), `vel` the source's velocity (m/s).
     pub fn burst(&mut self, start: [f64; 2], vel: Vec2, initial_range: f64, speed_range: f64, total: u32) {
+        if self.off {
+            return;
+        }
         for _ in 0..total {
             if self.particles.len() + self.sprites.len() >= MAX_PARTICLES {
                 return;
@@ -180,6 +199,9 @@ impl Blood {
     }
 
     pub fn spawn(&mut self, at: [f64; 2], vel: [f64; 2]) {
+        if self.off {
+            return;
+        }
         if !self.line_blood {
             self.spawn_sprite(ShardKind::Food(BLOOD), at, vel);
         } else if self.particles.len() < MAX_PARTICLES {
@@ -229,5 +251,27 @@ impl Blood {
     /// Advances every particle one frame and drops the dead ones.
     pub fn step_particles(&mut self) {
         self.particles.retain_mut(Particle::step);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn with(setting: u8) -> Blood {
+        let mut b = Blood { line_blood: setting >= 2, off: setting == 0, ..Blood::default() };
+        b.burst([0.0, 0.0], Vec2::new(0.0, 0.0), 10.0, 10.0, 20);
+        b.spawn([0.0, 0.0], [1.0, 1.0]);
+        b
+    }
+
+    #[test]
+    fn blood_settings_choose_the_particle_kind() {
+        let off = with(0);
+        assert_eq!(off.live(), 0, "setting 0 spawns nothing");
+        let sprites = with(1);
+        assert_eq!((sprites.particles.len(), sprites.live()), (0, 21), "setting 1: bitmap particles");
+        let lines = with(2);
+        assert_eq!((lines.particles.len(), lines.sprites.len()), (21, 0), "setting 2: lines");
     }
 }

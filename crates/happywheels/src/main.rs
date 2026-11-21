@@ -728,6 +728,7 @@ fn parse_options() -> Result<Option<Options>> {
             }
             "--check-assets" => options.check_assets = true,
             "--level" => options.level = Some(PathBuf::from(args.next().context("--level needs a file")?)),
+            "--blood" => happywheels_core::blood::set_blood_setting(args.next().context("--blood needs 0, 1 or 2")?.parse::<u8>()?),
             "--players" => options.players = args.next().context("--players needs a number")?.parse::<usize>()?.clamp(1, 2),
             "--host" => options.host = Some(args.next().context("--host needs a port")?.parse()?),
             "--join" => options.join = Some(args.next().context("--join needs HOST:PORT")?),
