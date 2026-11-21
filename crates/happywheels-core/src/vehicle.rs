@@ -1898,6 +1898,12 @@ impl Mower {
         b.set_shape_filter(shape, Filter { category_bits: 1, mask_bits: 9, group_index: -3 });
         b.shape_mut(shape).material = 0;
         self.contact_count.insert(body, 0);
+        // `grindShape` of the main rider (other ragdolls are not tracked)
+        if let Some(mut doll) = world.character.take() {
+            doll.grind_shape(world, body);
+            world.character = Some(doll);
+        }
+        let b = world.b2_mut();
         let angle = b.body(self.body).sweep.a;
         let rising = b.create_body(&BodyDef { position: at, angle, ..Default::default() });
         let mut d = ShapeDef::boxed(10.0 / 62.5, 10.0 / 62.5);

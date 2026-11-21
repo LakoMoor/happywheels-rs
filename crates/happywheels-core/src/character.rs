@@ -212,6 +212,8 @@ pub struct Ragdoll {
     pub sev: Vec<BodyId>,
     /// The limb each `sev` stump belongs to.
     pub sev_limbs: Vec<Limb>,
+    /// Parts in `GRIND_STATE` (a mower blade took them): their smash reactions are off (`grindShape` deletes the Result/Add listeners).
+    pub ground: Vec<Part>,
     /// `pelvisSmash` happened (stump thighs then show frame 8).
     pelvis_smashed: bool,
     sev_guides: [[f64; 5]; 3],
@@ -355,7 +357,7 @@ impl Ragdoll {
             joint_ids.push(b.create_revolute_joint(&d));
         }
         let joints = LIMB_ORDER.iter().copied().zip(joint_ids).collect();
-        Some(Self { poses: PoseSet::Base, bodies, joints, pose: 0, cancel: false, broken: Vec::new(), grabbing: false, grips: [None; 2], group, head_chunk_radius: guide.get("headChunkShape").map_or(0.0, |g| g[3] * 5.0 / CHARACTER_SCALE), chest_chunk_radius: guide.get("chestChunkShape").map_or(0.0, |g| g[3] * 5.0 / CHARACTER_SCALE), pelvis_chunk_radius: guide.get("pelvisChunkShape").map_or(0.0, |g| g[3] * 5.0 / CHARACTER_SCALE), foot_guide: guide.get("footShape").copied().unwrap_or_default(), ref_scale, chunks: Vec::new(), chunk_names: Vec::new(), brain: None, heart: None, feet: [None; 2], dead: false, helmet_geo: (1..=4).map(|k| guide.get(&format!("helmetVert{k}")).map(|g| Vec2::new(g[0] / CHARACTER_SCALE, g[1] / CHARACTER_SCALE))).collect::<Option<Vec<_>>>().unwrap_or_default(), helmet_on: guide.get("helmetVert1").is_some(), helmet: None, sev: Vec::new(), sev_limbs: Vec::new(), pelvis_smashed: false, blood_flows: Vec::new(), tag: "Char3", voices: [None; 6], voice_until: 0, voice_prio: -1, intestines: None, spine: None, ligaments: [None, None, None, None], chain_len: [guide.get("intestineShape").map_or(0.0, |g| 2.0 * g[3] * ref_scale / CHARACTER_SCALE), guide.get("ligamentShape").map_or(0.0, |g| 2.0 * g[3] * ref_scale / CHARACTER_SCALE)], spine_anchor: guide.get("spineAnchor").map_or([0.0; 2], |g| [g[0], g[1]]), sev_guides: ["sevArm1Shape", "sevLeg1Shape", "sevLeg2Shape"].map(|n| guide.get(n).copied().unwrap_or_default()) })
+        Some(Self { poses: PoseSet::Base, bodies, joints, pose: 0, cancel: false, broken: Vec::new(), grabbing: false, grips: [None; 2], group, head_chunk_radius: guide.get("headChunkShape").map_or(0.0, |g| g[3] * 5.0 / CHARACTER_SCALE), chest_chunk_radius: guide.get("chestChunkShape").map_or(0.0, |g| g[3] * 5.0 / CHARACTER_SCALE), pelvis_chunk_radius: guide.get("pelvisChunkShape").map_or(0.0, |g| g[3] * 5.0 / CHARACTER_SCALE), foot_guide: guide.get("footShape").copied().unwrap_or_default(), ref_scale, chunks: Vec::new(), chunk_names: Vec::new(), brain: None, heart: None, feet: [None; 2], dead: false, helmet_geo: (1..=4).map(|k| guide.get(&format!("helmetVert{k}")).map(|g| Vec2::new(g[0] / CHARACTER_SCALE, g[1] / CHARACTER_SCALE))).collect::<Option<Vec<_>>>().unwrap_or_default(), helmet_on: guide.get("helmetVert1").is_some(), helmet: None, sev: Vec::new(), sev_limbs: Vec::new(), ground: Vec::new(), pelvis_smashed: false, blood_flows: Vec::new(), tag: "Char3", voices: [None; 6], voice_until: 0, voice_prio: -1, intestines: None, spine: None, ligaments: [None, None, None, None], chain_len: [guide.get("intestineShape").map_or(0.0, |g| 2.0 * g[3] * ref_scale / CHARACTER_SCALE), guide.get("ligamentShape").map_or(0.0, |g| 2.0 * g[3] * ref_scale / CHARACTER_SCALE)], spine_anchor: guide.get("spineAnchor").map_or([0.0; 2], |g| [g[0], g[1]]), sev_guides: ["sevArm1Shape", "sevLeg1Shape", "sevLeg2Shape"].map(|n| guide.get(n).copied().unwrap_or_default()) })
     }
 
     /// `headSmash1`: the head body is destroyed (taking the neck joint with it) and replaced by four chunk balls on a
@@ -625,6 +627,9 @@ impl Ragdoll {
     /// `setLimits` smash thresholds (`contactImpulseDict`): impulse above which a part is smashed
     /// (head 3×, chest 7.5×, pelvis 5.5×, feet 4× their mass ratio). `None` for parts without a limit.
     pub fn smash_limit(&self, world: &World, part: Part) -> Option<f64> {
+        if self.ground.contains(&part) {
+            return None;
+        }
         let ratio = |p: Part, def: f64| world.b2().body(self.bodies[&p]).mass / def;
         match part {
             Part::Head => Some(3.0 * ratio(Part::Head, 0.05456)),
@@ -921,6 +926,22 @@ impl Ragdoll {
             self.voice_prio = -1;
         }
         self.voices = [None; 6];
+    }
+
+    /// `grindShape(shape)`: head / chest / pelvis go to `GRIND_STATE` (no more smash reactions) and the blood flows that feed from them stop
+    /// (head: head flow; chest: neck, shoulders, stomach; pelvis: hips). Limb shapes are not tracked (their stump flows keep running).
+    pub fn grind_shape(&mut self, world: &mut World, body: BodyId) {
+        let Some((&part, _)) = self.bodies.iter().find(|(_, &b)| b == body) else { return };
+        let kinds: &[u8] = match part {
+            Part::Head => &[0],
+            Part::Chest => &[1, 2, 4],
+            Part::Pelvis => &[5],
+            _ => return,
+        };
+        if !self.ground.contains(&part) {
+            self.ground.push(part);
+        }
+        self.stop_flows(world, kinds);
     }
 
     fn stop_flows(&mut self, world: &mut World, kinds: &[u8]) {

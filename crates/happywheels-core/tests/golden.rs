@@ -2907,3 +2907,18 @@ fn mower_blade_grinds_a_loose_body() {
     assert!(ground && loop_seen, "the blade should start grinding the box and request GrindLoop2");
     assert!(!w.b2().body(target).alive, "the ground body is removed once it leaves the clearance sensor");
 }
+
+/// `grindShape`: a ground head/chest/pelvis stops smashing (its listeners are deleted in the original) while the other parts keep their limits.
+#[test]
+fn ground_parts_stop_smashing() {
+    use happywheels_core::character::Part;
+    let level = level::parse("<levelXML><info v='1.99' x='1000' y='250'/><shapes></shapes></levelXML>").unwrap();
+    let mut w = World::from_level(&level);
+    assert!(w.spawn_bike(3, [1000.0, 250.0]));
+    let mut doll = w.character.take().unwrap();
+    assert!(doll.smash_limit(&w, Part::Head).is_some() && doll.smash_limit(&w, Part::Chest).is_some());
+    let head = doll.bodies[&Part::Head];
+    doll.grind_shape(&mut w, head);
+    assert!(doll.smash_limit(&w, Part::Head).is_none());
+    assert!(doll.smash_limit(&w, Part::Chest).is_some());
+}
