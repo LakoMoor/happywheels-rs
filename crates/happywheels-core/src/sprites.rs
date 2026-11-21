@@ -676,6 +676,9 @@ impl Sprites {
         if kind == 17 {
             return self.npc.get_or_init(|| Self::open_npc(&self.assets).map(Box::new)).is_some();
         }
+        if kind == 18 {
+            return true;
+        }
         let tex = match kind {
             6 => "spike-clean.png",
             3 => "i-beam-body.png",
@@ -1064,6 +1067,30 @@ impl Sprites {
                 let Some(bodies) = world.npc_bodies(chest) else { continue };
                 if let Some(npc) = self.npc.get_or_init(|| Self::open_npc(&self.assets).map(Box::new)) {
                     npc.draw_npc(img, sp, bodies, world, cam);
+                }
+                continue;
+            }
+            // Glass: a vector rectangle (fill 0x66CCFF, alpha .35) of shapeWidth × shapeHeight at the pane body's centre of mass; a shattered pane's body is
+            // gone, so nothing is drawn then. Shatter particles (`GlassShardsMC`) are not drawn.
+            if sp.kind == 18 {
+                let Some(body) = world.special_bodies.get(i).copied().flatten().filter(|&b| world.body_center_px(b).is_some()) else { continue };
+                let (w, h) = (f64::from(sp.num("shapeWidth").unwrap_or(10.0)), f64::from(sp.num("shapeHeight").unwrap_or(100.0)));
+                let m = mul(cam, body_matrix(world, body));
+                let Some(inv) = invert(m) else { continue };
+                let corners = [(-w / 2.0, -h / 2.0), (w / 2.0, -h / 2.0), (-w / 2.0, h / 2.0), (w / 2.0, h / 2.0)].map(|(x, y)| (m[0] * x + m[2] * y + m[4], m[1] * x + m[3] * y + m[5]));
+                let (x0, x1) = (corners.iter().map(|c| c.0).fold(f64::MAX, f64::min).floor().max(0.0) as i64, corners.iter().map(|c| c.0).fold(f64::MIN, f64::max).ceil().min(f64::from(img.width())) as i64);
+                let (y0, y1) = (corners.iter().map(|c| c.1).fold(f64::MAX, f64::min).floor().max(0.0) as i64, corners.iter().map(|c| c.1).fold(f64::MIN, f64::max).ceil().min(f64::from(img.height())) as i64);
+                for py in y0..y1 {
+                    for px in x0..x1 {
+                        let (sx, sy) = (px as f64 + 0.5, py as f64 + 0.5);
+                        let (u, v) = (inv[0] * sx + inv[2] * sy + inv[4], inv[1] * sx + inv[3] * sy + inv[5]);
+                        if u.abs() <= w / 2.0 && v.abs() <= h / 2.0 {
+                            let dst = img.get_pixel_mut(px as u32, py as u32);
+                            for (c, s) in dst.0.iter_mut().zip([0x66_u8, 0xCC, 0xFF]) {
+                                *c = (f64::from(*c) * 0.65 + f64::from(s) * 0.35).round() as u8;
+                            }
+                        }
+                    }
                 }
                 continue;
             }
