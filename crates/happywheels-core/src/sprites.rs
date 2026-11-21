@@ -604,6 +604,7 @@ impl Sprites {
             34 => "blade-weapon-1654.png",
             15 => "harpoon-gun-base-2.png",
             28 => "jet-ref.png",
+            35 => "paddle-paddle.png",
             25 => "homing-mine-jet.png",
             29 => "arrow-asset-1650.png",
             _ => return false,
@@ -743,6 +744,37 @@ impl Sprites {
                         self.draw_node(img, n, pose);
                     }
                 }
+                continue;
+            }
+            // Paddle: `PaddleBaseMC` static at the level position/angle, `PaddMC` at the pad body's centre of mass; `reverse` mirrors the nubs, arrow and timer x.
+            // The timer text, the `glow` and the moving-arrow state are not drawn.
+            if sp.kind == 35 {
+                static CLIPS: std::sync::OnceLock<[Vec<Node>; 2]> = std::sync::OnceLock::new();
+                #[derive(Deserialize)]
+                struct File {
+                    k: Vec<Node>,
+                }
+                let clips = CLIPS.get_or_init(|| {
+                    let f = |s: &str| serde_json::from_str::<File>(s).map(|f| f.k).unwrap_or_default();
+                    [f(include_str!("../data/game-PaddleBaseMC.json")), f(include_str!("../data/game-PaddMC.json"))]
+                });
+                let (x, y, a) = (f64::from(sp.num("x").unwrap_or(0.0)), f64::from(sp.num("y").unwrap_or(0.0)), f64::from(sp.num("angle").unwrap_or(0.0)).to_radians());
+                let rev = sp.flag("reverse").unwrap_or(false);
+                let place = |s: &Self, img: &mut RgbaImage, clip: &[Node], m: M| {
+                    for n in clip {
+                        let mx = if rev && matches!(n.n.as_str(), "nub" | "timer" | "arrow") { -1.0 } else { 1.0 };
+                        let nm = mul(m, local(n.x * mx, n.y, n.r, n.sx, n.sy));
+                        if let Some(tex) = &n.t {
+                            s.blit(img, tex, nm);
+                        }
+                        for k in n.k.iter().filter(|k| k.n != "glow") {
+                            s.draw_node(img, k, nm);
+                        }
+                    }
+                };
+                place(self, img, &clips[0], mul(cam, local(x, y, a, 1.0, 1.0)));
+                let pad = world.special_bodies.get(i).copied().flatten().filter(|&b| world.body_center_px(b).is_some());
+                place(self, img, &clips[1], mul(cam, pad.map_or_else(|| local(x, y, a, 1.0, 1.0), |b| body_matrix(world, b))));
                 continue;
             }
             // SignPost: static `SignMC` frame `signPostType` (a single sign texture per frame) with `PostMC` behind it when `signPost` is set.
