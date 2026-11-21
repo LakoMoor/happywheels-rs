@@ -606,6 +606,8 @@ impl Sprites {
             28 => "jet-ref.png",
             35 => "paddle-paddle.png",
             12 => "boost-1718.png",
+            24 => "toilet-ref-base.png",
+            26 => "trash-can-body.png",
             20 => "bottle-1724.png",
             21 => "tv-damage-0.png",
             22 => "boombox-1683.png",
@@ -872,6 +874,41 @@ impl Sprites {
                 let f = if sp.kind == 20 { (sp.num("bottleType").unwrap_or(1.0).max(1.0) as usize).min(frames.len().max(1)) - 1 } else { 0 };
                 for n in frames.get(f).map(Vec::as_slice).unwrap_or(&[]) {
                     self.draw_node(img, n, mul(cam, pose));
+                }
+                continue;
+            }
+            // Toilet (`ToiletMC.container` frame 1, x flipped by `reverse`) and trash can (`can` + `lid` when it contains trash; `shapes` — the spilled trash —
+            // stays hidden) at the body's COM, or the level position when not interactive. Break pieces / spill / squash frames are not drawn.
+            if matches!(sp.kind, 24 | 26) {
+                #[derive(Deserialize)]
+                struct File {
+                    k: Vec<Node>,
+                }
+                #[derive(Deserialize)]
+                struct Frames {
+                    frames: Vec<Vec<Node>>,
+                }
+                static TOILET: std::sync::OnceLock<Vec<Node>> = std::sync::OnceLock::new();
+                static CAN: std::sync::OnceLock<Vec<Node>> = std::sync::OnceLock::new();
+                let toilet = TOILET.get_or_init(|| serde_json::from_str::<File>(include_str!("../data/game-ToiletMC.json")).map(|f| f.k).unwrap_or_default());
+                let can = CAN.get_or_init(|| serde_json::from_str::<Frames>(include_str!("../data/game-TrashCanMC.json")).ok().and_then(|f| f.frames.into_iter().next()).unwrap_or_default());
+                let (x, y, a) = (f64::from(sp.num("x").unwrap_or(0.0)), f64::from(sp.num("y").unwrap_or(0.0)), f64::from(sp.num("angle").unwrap_or(0.0)).to_radians());
+                let pose = match world.special_bodies.get(i).copied().flatten() {
+                    Some(b) if world.body_center_px(b).is_some() => body_matrix(world, b),
+                    Some(_) => continue,
+                    None => local(x, y, a, 1.0, 1.0),
+                };
+                if sp.kind == 24 {
+                    let flip = if sp.flag("reverse").unwrap_or(false) { -1.0 } else { 1.0 };
+                    let m = mul(cam, mul(pose, local(0.0, 0.0, 0.0, flip, 1.0)));
+                    for n in toilet {
+                        self.draw_node(img, n, m);
+                    }
+                } else {
+                    let trash = sp.flag("containsTrash").unwrap_or(true);
+                    for n in can.iter().filter(|n| n.n == "can" || (n.n == "lid" && trash)) {
+                        self.draw_node(img, n, mul(cam, pose));
+                    }
                 }
                 continue;
             }
