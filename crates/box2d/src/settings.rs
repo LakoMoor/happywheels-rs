@@ -1,0 +1,21 @@
+//! Constants from the original (`c.b2_*` in box2d-pretty.js).
+pub const PI: f64 = std::f64::consts::PI;
+pub const MAX_MANIFOLD_POINTS: usize = 2;
+pub const MAX_POLYGON_VERTICES: usize = 10;
+pub const LINEAR_SLOP: f64 = 0.005;
+pub const ANGULAR_SLOP: f64 = 2.0 / 180.0 * PI;
+pub const TOI_SLOP: f64 = 8.0 * LINEAR_SLOP;
+pub const MAX_TOI_CONTACTS_PER_ISLAND: usize = 32;
+pub const MAX_TOI_ITERATIONS: usize = 5000;
+pub const VELOCITY_THRESHOLD: f64 = 1.0;
+pub const MAX_LINEAR_CORRECTION: f64 = 0.2;
+pub const MAX_ANGULAR_CORRECTION: f64 = 8.0 / 180.0 * PI;
+pub const MAX_LINEAR_VELOCITY: f64 = 200.0;
+pub const MAX_LINEAR_VELOCITY_SQUARED: f64 = MAX_LINEAR_VELOCITY * MAX_LINEAR_VELOCITY;
+pub const MAX_ANGULAR_VELOCITY: f64 = 250.0;
+pub const MAX_ANGULAR_VELOCITY_SQUARED: f64 = MAX_ANGULAR_VELOCITY * MAX_ANGULAR_VELOCITY;
+pub const CONTACT_BAUMGARTE: f64 = 0.2;
+pub const TIME_TO_SLEEP: f64 = 0.5;
+pub const LINEAR_SLEEP_TOLERANCE: f64 = 0.01;
+pub const ANGULAR_SLEEP_TOLERANCE: f64 = 2.0 / 180.0;
+pub const NULL_FEATURE: u8 = 255;

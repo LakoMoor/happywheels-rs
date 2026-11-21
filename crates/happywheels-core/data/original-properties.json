@@ -1,0 +1,1176 @@
+{
+ "shapes": {
+  "RectangleShape": [
+   {
+    "name": "x",
+    "default": 0
+   },
+   {
+    "name": "y",
+    "default": 0
+   },
+   {
+    "name": "shapeWidth",
+    "default": 100
+   },
+   {
+    "name": "shapeHeight",
+    "default": 100
+   },
+   {
+    "name": "angle",
+    "default": 0
+   },
+   {
+    "name": "immovable",
+    "default": true
+   },
+   {
+    "name": "sleeping",
+    "default": false
+   },
+   {
+    "name": "density",
+    "default": 1
+   },
+   {
+    "name": "color",
+    "default": 4032711
+   },
+   {
+    "name": "outlineColor",
+    "default": -1
+   },
+   {
+    "name": "opacity",
+    "default": 100
+   },
+   {
+    "name": "collision",
+    "default": 1
+   }
+  ],
+  "CircleShape": [
+   {
+    "name": "x",
+    "default": 0
+   },
+   {
+    "name": "y",
+    "default": 0
+   },
+   {
+    "name": "shapeWidth",
+    "default": 100
+   },
+   {
+    "name": "shapeHeight",
+    "default": 100
+   },
+   {
+    "name": "angle",
+    "default": 0
+   },
+   {
+    "name": "immovable",
+    "default": true
+   },
+   {
+    "name": "sleeping",
+    "default": false
+   },
+   {
+    "name": "density",
+    "default": 1
+   },
+   {
+    "name": "color",
+    "default": 4032711
+   },
+   {
+    "name": "outlineColor",
+    "default": -1
+   },
+   {
+    "name": "opacity",
+    "default": 100
+   },
+   {
+    "name": "collision",
+    "default": 1
+   },
+   {
+    "name": "innerCutout",
+    "default": 0
+   }
+  ],
+  "TriangleShape": [
+   {
+    "name": "x",
+    "default": 0
+   },
+   {
+    "name": "y",
+    "default": 0
+   },
+   {
+    "name": "shapeWidth",
+    "default": 100
+   },
+   {
+    "name": "shapeHeight",
+    "default": 300
+   },
+   {
+    "name": "angle",
+    "default": 0
+   },
+   {
+    "name": "immovable",
+    "default": true
+   },
+   {
+    "name": "sleeping",
+    "default": false
+   },
+   {
+    "name": "density",
+    "default": 1
+   },
+   {
+    "name": "color",
+    "default": 4032711
+   },
+   {
+    "name": "outlineColor",
+    "default": -1
+   },
+   {
+    "name": "opacity",
+    "default": 100
+   },
+   {
+    "name": "collision",
+    "default": 1
+   }
+  ],
+  "PolygonShape": [
+   {
+    "name": "x",
+    "default": 0
+   },
+   {
+    "name": "y",
+    "default": 0
+   },
+   {
+    "name": "shapeWidth",
+    "default": null
+   },
+   {
+    "name": "shapeHeight",
+    "default": null
+   },
+   {
+    "name": "angle",
+    "default": 0
+   },
+   {
+    "name": "immovable",
+    "default": true
+   },
+   {
+    "name": "sleeping",
+    "default": false
+   },
+   {
+    "name": "density",
+    "default": 1
+   },
+   {
+    "name": "color",
+    "default": 4032711
+   },
+   {
+    "name": "outlineColor",
+    "default": -1
+   },
+   {
+    "name": "opacity",
+    "default": 100
+   },
+   {
+    "name": "collision",
+    "default": 1
+   }
+  ],
+  "ArtShape": [
+   {
+    "name": "x",
+    "default": 0
+   },
+   {
+    "name": "y",
+    "default": 0
+   },
+   {
+    "name": "shapeWidth",
+    "default": null
+   },
+   {
+    "name": "shapeHeight",
+    "default": null
+   },
+   {
+    "name": "angle",
+    "default": 0
+   },
+   {
+    "name": "immovable",
+    "default": false
+   },
+   {
+    "name": "sleeping",
+    "default": false
+   },
+   {
+    "name": "density",
+    "default": 1
+   },
+   {
+    "name": "color",
+    "default": 4032711
+   },
+   {
+    "name": "outlineColor",
+    "default": -1
+   },
+   {
+    "name": "opacity",
+    "default": 100
+   },
+   {
+    "name": "collision",
+    "default": 1
+   }
+  ]
+ },
+ "specials": {
+  "VanRef": [
+   {
+    "name": "x",
+    "default": 0
+   },
+   {
+    "name": "y",
+    "default": 0
+   },
+   {
+    "name": "angle",
+    "default": 0
+   },
+   {
+    "name": "sleeping",
+    "default": false
+   },
+   {
+    "name": "interactive",
+    "default": true
+   }
+  ],
+  "TableRef": [
+   {
+    "name": "x",
+    "default": 0
+   },
+   {
+    "name": "y",
+    "default": 0
+   },
+   {
+    "name": "angle",
+    "default": 0
+   },
+   {
+    "name": "sleeping",
+    "default": false
+   },
+   {
+    "name": "interactive",
+    "default": true
+   }
+  ],
+  "MineRef": [
+   {
+    "name": "x",
+    "default": 0
+   },
+   {
+    "name": "y",
+    "default": 0
+   },
+   {
+    "name": "angle",
+    "default": 0
+   }
+  ],
+  "IBeamRef": [
+   {
+    "name": "x",
+    "default": 0
+   },
+   {
+    "name": "y",
+    "default": 0
+   },
+   {
+    "name": "shapeWidth",
+    "default": 400
+   },
+   {
+    "name": "shapeHeight",
+    "default": 32
+   },
+   {
+    "name": "angle",
+    "default": 0
+   },
+   {
+    "name": "immovable2",
+    "default": false
+   },
+   {
+    "name": "sleeping",
+    "default": false
+   }
+  ],
+  "LogRef": [
+   {
+    "name": "x",
+    "default": 0
+   },
+   {
+    "name": "y",
+    "default": 0
+   },
+   {
+    "name": "shapeWidth",
+    "default": 36
+   },
+   {
+    "name": "shapeHeight",
+    "default": 400
+   },
+   {
+    "name": "angle",
+    "default": 0
+   },
+   {
+    "name": "immovable2",
+    "default": false
+   },
+   {
+    "name": "sleeping",
+    "default": false
+   }
+  ],
+  "SpringBoxRef": [
+   {
+    "name": "x",
+    "default": 0
+   },
+   {
+    "name": "y",
+    "default": 0
+   },
+   {
+    "name": "angle",
+    "default": 0
+   },
+   {
+    "name": "springDelay",
+    "default": 0
+   }
+  ],
+  "SpikesRef": [
+   {
+    "name": "x",
+    "default": 0
+   },
+   {
+    "name": "y",
+    "default": 0
+   },
+   {
+    "name": "angle",
+    "default": 0
+   },
+   {
+    "name": "immovable2",
+    "default": true
+   },
+   {
+    "name": "numSpikes",
+    "default": 20
+   },
+   {
+    "name": "sleeping",
+    "default": false
+   }
+  ],
+  "WreckingBallRef": [
+   {
+    "name": "x",
+    "default": 0
+   },
+   {
+    "name": "y",
+    "default": 0
+   },
+   {
+    "name": "ropeLength",
+    "default": 350
+   }
+  ],
+  "FanRef": [
+   {
+    "name": "x",
+    "default": 0
+   },
+   {
+    "name": "y",
+    "default": 0
+   },
+   {
+    "name": "angle",
+    "default": 0
+   }
+  ],
+  "FinishLineRef": [
+   {
+    "name": "x",
+    "default": 0
+   },
+   {
+    "name": "y",
+    "default": 0
+   }
+  ],
+  "SoccerBallRef": [
+   {
+    "name": "x",
+    "default": 0
+   },
+   {
+    "name": "y",
+    "default": 0
+   }
+  ],
+  "MeteorRef": [
+   {
+    "name": "x",
+    "default": 0
+   },
+   {
+    "name": "y",
+    "default": 0
+   },
+   {
+    "name": "shapeWidth",
+    "default": 400
+   },
+   {
+    "name": "shapeHeight",
+    "default": 400
+   },
+   {
+    "name": "immovable2",
+    "default": false
+   },
+   {
+    "name": "sleeping",
+    "default": false
+   }
+  ],
+  "BoostRef": [
+   {
+    "name": "x",
+    "default": 0
+   },
+   {
+    "name": "y",
+    "default": 0
+   },
+   {
+    "name": "angle",
+    "default": 0
+   },
+   {
+    "name": "numPanels",
+    "default": 2
+   },
+   {
+    "name": "boostPower",
+    "default": 20
+   }
+  ],
+  "Building1Ref": [
+   {
+    "name": "x",
+    "default": 0
+   },
+   {
+    "name": "y",
+    "default": 0
+   },
+   {
+    "name": "floorWidth",
+    "default": 1
+   },
+   {
+    "name": "numFloors",
+    "default": 3
+   }
+  ],
+  "Building2Ref": [
+   {
+    "name": "x",
+    "default": 0
+   },
+   {
+    "name": "y",
+    "default": 0
+   },
+   {
+    "name": "floorWidth",
+    "default": 1
+   },
+   {
+    "name": "numFloors",
+    "default": 3
+   }
+  ],
+  "HarpoonGunRef": [
+   {
+    "name": "x",
+    "default": 0
+   },
+   {
+    "name": "y",
+    "default": 0
+   },
+   {
+    "name": "angle",
+    "default": 0
+   },
+   {
+    "name": "useAnchor",
+    "default": true
+   },
+   {
+    "name": "fixedAngleTurret",
+    "default": false
+   },
+   {
+    "name": "turretAngle",
+    "default": 0
+   },
+   {
+    "name": "triggerFiring",
+    "default": false
+   },
+   {
+    "name": "startDeactivated",
+    "default": false
+   }
+  ],
+  "TextBoxRef": [
+   {
+    "name": "x",
+    "default": 0
+   },
+   {
+    "name": "y",
+    "default": 0
+   },
+   {
+    "name": "angle",
+    "default": 0
+   },
+   {
+    "name": "color",
+    "default": 0
+   },
+   {
+    "name": "font",
+    "default": 2
+   },
+   {
+    "name": "fontSize",
+    "default": 15
+   },
+   {
+    "name": "align",
+    "default": 1
+   },
+   {
+    "name": "caption",
+    "default": "HERE'S SOME TEXT"
+   },
+   {
+    "name": "opacity",
+    "default": 100
+   }
+  ],
+  "NPCharacterRef": [
+   {
+    "name": "x",
+    "default": 0
+   },
+   {
+    "name": "y",
+    "default": 0
+   },
+   {
+    "name": "angle",
+    "default": 0
+   },
+   {
+    "name": "charIndex",
+    "default": 1
+   },
+   {
+    "name": "sleeping",
+    "default": false
+   },
+   {
+    "name": "reverse",
+    "default": false
+   },
+   {
+    "name": "holdPose",
+    "default": false
+   },
+   {
+    "name": "interactive",
+    "default": true
+   },
+   {
+    "name": "neckAngle",
+    "default": 0
+   },
+   {
+    "name": "shoulder1Angle",
+    "default": 0
+   },
+   {
+    "name": "shoulder2Angle",
+    "default": 0
+   },
+   {
+    "name": "elbow1Angle",
+    "default": 0
+   },
+   {
+    "name": "elbow2Angle",
+    "default": 0
+   },
+   {
+    "name": "hip1Angle",
+    "default": 0
+   },
+   {
+    "name": "hip2Angle",
+    "default": 0
+   },
+   {
+    "name": "knee1Angle",
+    "default": 0
+   },
+   {
+    "name": "knee2Angle",
+    "default": 0
+   },
+   {
+    "name": "destroyJointsUponDeath",
+    "default": false
+   }
+  ],
+  "GlassRef": [
+   {
+    "name": "x",
+    "default": 0
+   },
+   {
+    "name": "y",
+    "default": 0
+   },
+   {
+    "name": "shapeWidth",
+    "default": 10
+   },
+   {
+    "name": "shapeHeight",
+    "default": 100
+   },
+   {
+    "name": "angle",
+    "default": 0
+   },
+   {
+    "name": "sleeping",
+    "default": false
+   },
+   {
+    "name": "shatterStrength",
+    "default": 10
+   },
+   {
+    "name": "stabbing",
+    "default": true
+   }
+  ],
+  "ChairRef": [
+   {
+    "name": "x",
+    "default": 0
+   },
+   {
+    "name": "y",
+    "default": 0
+   },
+   {
+    "name": "angle",
+    "default": 0
+   },
+   {
+    "name": "reverse",
+    "default": false
+   },
+   {
+    "name": "sleeping",
+    "default": false
+   },
+   {
+    "name": "interactive",
+    "default": true
+   }
+  ],
+  "BottleRef": [
+   {
+    "name": "x",
+    "default": 0
+   },
+   {
+    "name": "y",
+    "default": 0
+   },
+   {
+    "name": "angle",
+    "default": 0
+   },
+   {
+    "name": "bottleType",
+    "default": 1
+   },
+   {
+    "name": "sleeping",
+    "default": false
+   },
+   {
+    "name": "interactive",
+    "default": true
+   }
+  ],
+  "TVRef": [
+   {
+    "name": "x",
+    "default": 0
+   },
+   {
+    "name": "y",
+    "default": 0
+   },
+   {
+    "name": "angle",
+    "default": 0
+   },
+   {
+    "name": "sleeping",
+    "default": false
+   },
+   {
+    "name": "interactive",
+    "default": true
+   }
+  ],
+  "BoomboxRef": [
+   {
+    "name": "x",
+    "default": 0
+   },
+   {
+    "name": "y",
+    "default": 0
+   },
+   {
+    "name": "angle",
+    "default": 0
+   },
+   {
+    "name": "sleeping",
+    "default": false
+   },
+   {
+    "name": "interactive",
+    "default": true
+   }
+  ],
+  "SignPostRef": [
+   {
+    "name": "x",
+    "default": 0
+   },
+   {
+    "name": "y",
+    "default": 0
+   },
+   {
+    "name": "angle",
+    "default": 0
+   },
+   {
+    "name": "signPostType",
+    "default": 1
+   },
+   {
+    "name": "signPost",
+    "default": true
+   }
+  ],
+  "ToiletRef": [
+   {
+    "name": "x",
+    "default": 0
+   },
+   {
+    "name": "y",
+    "default": 0
+   },
+   {
+    "name": "angle",
+    "default": 0
+   },
+   {
+    "name": "reverse",
+    "default": false
+   },
+   {
+    "name": "sleeping",
+    "default": false
+   },
+   {
+    "name": "interactive",
+    "default": true
+   }
+  ],
+  "HomingMineRef": [
+   {
+    "name": "x",
+    "default": 0
+   },
+   {
+    "name": "y",
+    "default": 0
+   },
+   {
+    "name": "seekSpeed",
+    "default": 1
+   },
+   {
+    "name": "explosionDelay",
+    "default": 0
+   }
+  ],
+  "TrashCanRef": [
+   {
+    "name": "x",
+    "default": 0
+   },
+   {
+    "name": "y",
+    "default": 0
+   },
+   {
+    "name": "angle",
+    "default": 0
+   },
+   {
+    "name": "sleeping",
+    "default": false
+   },
+   {
+    "name": "interactive",
+    "default": true
+   },
+   {
+    "name": "containsTrash",
+    "default": true
+   }
+  ],
+  "RailRef": [
+   {
+    "name": "x",
+    "default": 0
+   },
+   {
+    "name": "y",
+    "default": 0
+   },
+   {
+    "name": "shapeWidth",
+    "default": 250
+   },
+   {
+    "name": "shapeHeight",
+    "default": 18
+   },
+   {
+    "name": "angle",
+    "default": 0
+   }
+  ],
+  "JetRef": [
+   {
+    "name": "x",
+    "default": 0
+   },
+   {
+    "name": "y",
+    "default": 0
+   },
+   {
+    "name": "angle",
+    "default": 0
+   },
+   {
+    "name": "sleeping",
+    "default": false
+   },
+   {
+    "name": "power",
+    "default": 1
+   },
+   {
+    "name": "fireTime",
+    "default": 0
+   },
+   {
+    "name": "accelTime",
+    "default": 0
+   },
+   {
+    "name": "fixedRotation",
+    "default": false
+   }
+  ],
+  "ArrowGunRef": [
+   {
+    "name": "x",
+    "default": 0
+   },
+   {
+    "name": "y",
+    "default": 0
+   },
+   {
+    "name": "angle",
+    "default": 0
+   },
+   {
+    "name": "immovable2",
+    "default": true
+   },
+   {
+    "name": "rateOfFire",
+    "default": 5
+   },
+   {
+    "name": "dontShootPlayer",
+    "default": false
+   }
+  ],
+  "ChainRef": [
+   {
+    "name": "x",
+    "default": 0
+   },
+   {
+    "name": "y",
+    "default": 0
+   },
+   {
+    "name": "angle",
+    "default": 0
+   },
+   {
+    "name": "sleeping",
+    "default": false
+   },
+   {
+    "name": "interactive",
+    "default": true
+   },
+   {
+    "name": "linkCount",
+    "default": 20
+   },
+   {
+    "name": "linkScale",
+    "default": 1
+   },
+   {
+    "name": "linkAngle",
+    "default": 0
+   }
+  ],
+  "TokenRef": [
+   {
+    "name": "x",
+    "default": 0
+   },
+   {
+    "name": "y",
+    "default": 0
+   },
+   {
+    "name": "tokenType",
+    "default": 1
+   }
+  ],
+  "FoodItemRef": [
+   {
+    "name": "x",
+    "default": 0
+   },
+   {
+    "name": "y",
+    "default": 0
+   },
+   {
+    "name": "angle",
+    "default": 0
+   },
+   {
+    "name": "sleeping",
+    "default": false
+   },
+   {
+    "name": "interactive",
+    "default": true
+   },
+   {
+    "name": "foodItemType",
+    "default": 1
+   }
+  ],
+  "CannonRef": [
+   {
+    "name": "x",
+    "default": 0
+   },
+   {
+    "name": "y",
+    "default": 0
+   },
+   {
+    "name": "angle",
+    "default": 0
+   },
+   {
+    "name": "startRotation",
+    "default": 0
+   },
+   {
+    "name": "firingRotation",
+    "default": 0
+   },
+   {
+    "name": "cannonType",
+    "default": 1
+   },
+   {
+    "name": "cannonDelay",
+    "default": 1
+   },
+   {
+    "name": "muzzleScale",
+    "default": 1
+   },
+   {
+    "name": "cannonPower",
+    "default": 5
+   }
+  ],
+  "BladeWeaponRef": [
+   {
+    "name": "x",
+    "default": 0
+   },
+   {
+    "name": "y",
+    "default": 0
+   },
+   {
+    "name": "angle",
+    "default": 0
+   },
+   {
+    "name": "reverse",
+    "default": false
+   },
+   {
+    "name": "sleeping",
+    "default": false
+   },
+   {
+    "name": "interactive",
+    "default": true
+   },
+   {
+    "name": "bladeWeaponType",
+    "default": 1
+   }
+  ],
+  "PaddleRef": [
+   {
+    "name": "x",
+    "default": 0
+   },
+   {
+    "name": "y",
+    "default": 0
+   },
+   {
+    "name": "angle",
+    "default": 0
+   },
+   {
+    "name": "springDelay",
+    "default": 0
+   },
+   {
+    "name": "reverse",
+    "default": false
+   },
+   {
+    "name": "paddleAngle",
+    "default": 90
+   },
+   {
+    "name": "paddleSpeed",
+    "default": 10
+   }
+  ]
+ }
+}

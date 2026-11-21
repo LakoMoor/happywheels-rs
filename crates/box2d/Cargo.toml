@@ -1,0 +1,10 @@
+[package]
+name = "box2d"
+version = "0.1.0"
+edition = "2021"
+description = "Faithful port of the Box2D 2.0.x variant embedded in Happy Wheels (f64, same solver order)"
+
+[dependencies]
+
+[dev-dependencies]
+serde_json = "1"
