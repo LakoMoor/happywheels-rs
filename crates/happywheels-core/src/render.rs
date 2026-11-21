@@ -50,7 +50,10 @@ pub fn render_level_scene(level: &Level, world: &World, width: u32, height: u32,
         draw_shape(&mut img, s, (px, py), angle, col, &to_screen);
     }
     // Specials modelled as rigid bodies: draw each shape in grey.
-    for h in world.special_parts.iter().flatten() {
+    for (si, h) in world.special_parts.iter().enumerate().flat_map(|(si, v)| v.iter().map(move |h| (si, h))) {
+        if sprites.is_some_and(|s| level.specials.get(si).is_some_and(|sp| s.covers_special(sp.kind))) {
+            continue;
+        }
         let col = Rgba([0x80, 0x70, 0x60, 255]);
         for sh in world.body_draw_shapes(*h) {
             match sh {
@@ -109,6 +112,7 @@ pub fn render_level_scene(level: &Level, world: &World, width: u32, height: u32,
         }
     }
     if let Some(sp) = sprites {
+        sp.draw_specials(&mut img, level, world, (width as f32 / 2.0 - cx, height as f32 / 2.0 - cy));
         sp.draw(&mut img, world, (width as f32 / 2.0 - cx, height as f32 / 2.0 - cy));
     }
     // Blood: one dark red segment per particle (last → current position), like `BloodParticle.step`.

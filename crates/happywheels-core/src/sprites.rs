@@ -166,6 +166,13 @@ impl Sprites {
         if pages.is_empty() {
             return None;
         }
+        // Atlas `game/l` holds the runtime special-element art (spikes, ...).
+        let game = assets.join("animate/game/l");
+        if let (Ok(json), Ok(img)) = (std::fs::read_to_string(game.join("l@0.3x.json")), image::open(game.join("l@0.3x.png"))) {
+            if let Ok(atlas) = serde_json::from_str::<AtlasFile>(&json) {
+                pages.push((atlas.frames, img.to_rgba8()));
+            }
+        }
         // Some clips reuse textures that live in another character's atlas (the dirt bike's `metalShards` use `fat-lady-asset-44`): load those pages too.
         let mut missing = Vec::new();
         Self::textures(&clip, &mut missing);
@@ -574,6 +581,36 @@ impl Sprites {
     }
 
     /// Draws every bound part plus the debris a smash leaves (chunks, brain, heart, helmet); `camera_offset` translates world px to image px.
+    /// True when special element `kind` has sprite art here (and so replaces the grey fallback).
+    pub fn covers_special(&self, kind: usize) -> bool {
+        kind == 6 && self.pages.iter().any(|(f, _)| f.contains_key("spike-clean.png"))
+    }
+
+    /// Spikes (`Spikes.setupMC`, `paint`): clip at the body's centre of mass; `spikes` row at (−halfWidth, −25) and `base` (`spike-platform`, stretched
+    /// to 15·n−2) at (0, 35), both lowered by the body's local-centre y; one `spike-clean` per 15 px. NOT verified: clips with fewer than 20 spikes
+    /// (the library clip has 20 children; the original's `setupMC` adds more only above 20).
+    pub fn draw_specials(&self, img: &mut RgbaImage, level: &crate::level::Level, world: &World, camera_offset: (f32, f32)) {
+        let cam = local(f64::from(camera_offset.0), f64::from(camera_offset.1), 0.0, 1.0, 1.0);
+        for (i, sp) in level.specials.iter().enumerate() {
+            if sp.kind != 6 {
+                continue;
+            }
+            let Some(body) = world.special_bodies.get(i).copied().flatten() else { continue };
+            if world.body_center_px(body).is_none() {
+                continue;
+            }
+            let n = sp.num("numSpikes").unwrap_or(3.0).max(1.0) as usize;
+            let lc_y = world.b2().body(body).sweep.local_center.y * 62.5;
+            let m = mul(cam, body_matrix(world, body));
+            let half = 7.5 * n as f64;
+            for k in 0..n {
+                self.blit(img, "spike-clean.png", mul(m, mul(local(-half + 15.0 * k as f64, -25.0 - lc_y, 0.0, 1.0, 1.0), local(0.0, 0.0, 0.0, 0.333, 0.333))));
+            }
+            let width = 15.0 * n as f64 - 2.0;
+            self.blit(img, "spike-platform.png", mul(m, mul(local(0.0, 35.0 - lc_y, 0.0, 1.0, 1.0), local(-width / 2.0, -10.0, 0.0, width / 300.0, 1.0))));
+        }
+    }
+
     pub fn draw(&self, img: &mut RgbaImage, world: &World, camera_offset: (f32, f32)) {
         {
             let mut h = self.hidden.borrow_mut();

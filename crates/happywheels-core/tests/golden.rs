@@ -2922,3 +2922,16 @@ fn ground_parts_stop_smashing() {
     assert!(doll.smash_limit(&w, Part::Head).is_none());
     assert!(doll.smash_limit(&w, Part::Chest).is_some());
 }
+
+/// Spikes are drawn from the `game/l` atlas (`spike-clean` row + `spike-platform` base) instead of grey boxes.
+#[test]
+fn spikes_have_sprite_art() {
+    let Some(assets) = std::env::var_os("HW_ASSETS").map(std::path::PathBuf::from).or_else(|| Some(std::path::PathBuf::from("../../../assets-99tnk64n1mubaoc8w"))).filter(|p| p.join("animate/game/l").exists()) else { return };
+    let level = level::parse("<levelXML><info v='1.99' x='1000' y='300'/><shapes></shapes><specials><sp t='6' p0='1000' p1='400' p2='0' p3='t' p4='8' p5='f'/></specials></levelXML>").unwrap();
+    let w = World::from_level(&level);
+    let sp = happywheels_core::sprites::Sprites::open(&assets, 1).unwrap();
+    assert!(sp.covers_special(6) && !sp.covers_special(0));
+    let plain = happywheels_core::render::render_level_at(&level, &w, 400, 300, [1000.0, 400.0]);
+    let art = happywheels_core::render::render_level_sprites(&level, &w, 400, 300, [1000.0, 400.0], Some(&sp));
+    assert_ne!(plain.as_raw(), art.as_raw());
+}
