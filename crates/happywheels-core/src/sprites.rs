@@ -576,6 +576,12 @@ impl Sprites {
                     }
                 }
             }
+            // `mainSmash` pieces are the body shapes newest first: seat-side order is verified in the cart_smash screenshot.
+            Some(crate::vehicle::Vehicle::Cart(c)) => {
+                for (&body, name) in c.pieces.iter().zip(["mainRear", "mainSeat", "mainBase", "mainFront"]) {
+                    self.draw_loose(img, world, camera_offset, name, body);
+                }
+            }
             Some(crate::vehicle::Vehicle::Pogo(p)) => {
                 for (&body, name) in p.pieces.iter().zip(["brokenframe1", "brokenframe2", "spring"]) {
                     self.draw_loose(img, world, camera_offset, name, body);
