@@ -266,6 +266,8 @@ struct Toilet {
     base: Option<ShapeId>,
     bowl: Option<ShapeId>,
     done: bool,
+    /// Frame until which the `ToiletSmash` handle is still playing.
+    sound_until: u32,
     /// (body, 0 base1 / 1 base2 / 2 back1 / 3 back2, mirror sign)
     pieces: Vec<(BodyId, u8, f64)>,
 }
@@ -1031,7 +1033,7 @@ impl World {
             self.b.c.report_results = true;
             let s = self.b.body(body).shapes.clone();
             let sign = if sp.flag("reverse").unwrap_or(false) { -1.0 } else { 1.0 };
-            self.toilets.push(Toilet { body, sign, back: s.first().copied(), base: s.get(1).copied(), bowl: s.get(2).copied(), done: false, pieces: Vec::new() });
+            self.toilets.push(Toilet { body, sign, back: s.first().copied(), base: s.get(1).copied(), bowl: s.get(2).copied(), done: false, sound_until: 0, pieces: Vec::new() });
         }
         self.b.set_mass_from_shapes(body);
         if let Some(spec) = sb.jet {
@@ -3522,7 +3524,7 @@ impl World {
                 }
                 let src = self.b.body(b).clone();
                 self.rect_burst(&src, b, crate::blood::ShardKind::Food(5), 10.0, particles);
-                self.play(&format!("Glass{suffix}{}", 1 + (s % 2)), 2, src.sweep.c);
+                self.play(&format!("Glass{suffix}"), 2, src.sweep.c);
                 self.b.destroy_body(b);
             }
         }
@@ -3629,7 +3631,11 @@ impl World {
                 self.rect_burst(&src, p1, crate::blood::ShardKind::Food(6), 20.0, 30);
                 self.toilets[k].pieces.push((p1, 0, sign));
                 self.toilets[k].pieces.push((p2, 1, sign));
-                self.play(&format!("ToiletSmash{}", 1 + (self.toilets[k].pieces.len() % 3)), 3, at);
+                if self.frame >= self.toilets[k].sound_until {
+                    // `playSound`: one ToiletSmash handle per toilet until the sound ends
+                    self.play("ToiletSmash", 3, at);
+                    self.toilets[k].sound_until = self.frame + sound_frames(&self.sounds.last().map(|s| s.0.clone()).unwrap_or_default());
+                }
             }
             if t_back && self.toilets[k].back.is_some() {
                 let back = self.toilets[k].back.take().unwrap();
@@ -3639,7 +3645,11 @@ impl World {
                 self.rect_burst(&src, p2, crate::blood::ShardKind::Food(6), 20.0, 30);
                 self.toilets[k].pieces.push((p1, 2, sign));
                 self.toilets[k].pieces.push((p2, 3, sign));
-                self.play(&format!("ToiletSmash{}", 1 + (self.toilets[k].pieces.len() % 3)), 3, at);
+                if self.frame >= self.toilets[k].sound_until {
+                    // `playSound`: one ToiletSmash handle per toilet until the sound ends
+                    self.play("ToiletSmash", 3, at);
+                    self.toilets[k].sound_until = self.frame + sound_frames(&self.sounds.last().map(|s| s.0.clone()).unwrap_or_default());
+                }
             }
             if self.toilets[k].base.is_none() && self.toilets[k].back.is_none() {
                 self.b.destroy_body(body);
@@ -4599,6 +4609,27 @@ mod tests {
         assert!((4..=8).contains(&n), "2 triangles per intact side (6 when the impact is on an edge, 8 mid-pane), got {n}");
         assert!(w.glass_pieces().all(|(b, _)| w.b.c.bodies[b].alive));
         assert!(w.blood.sprites.iter().any(|p| matches!(p.kind, crate::blood::ShardKind::Food(5))));
+    }
+
+    /// Both pieces of a toilet that breaks in one step share one ToiletSmash handle (a single sound), and every requested sound exists in the sprite.
+    #[test]
+    fn toilet_smash_sounds_exist_and_play_once() {
+        let xml = "<levelXML><info v='1.99'/><shapes><sh t='0' p0='1000' p1='450' p2='3000' p3='50' p4='0' p5='t' p6='f' p7='1' p8='0' p9='-1' p10='100' p11='1'/></shapes><specials><sp t='24' p0='1300' p1='360' p2='0' p3='f' p4='f' p5='t'/><sp t='18' p0='900' p1='380' p2='100' p3='20' p4='0' p5='f' p6='10' p7='t'/></specials></levelXML>";
+        let mut w = World::from_level(&crate::level::parse(xml).unwrap());
+        let (toilet, pane) = (w.special_bodies[0].unwrap(), w.special_bodies[1].unwrap());
+        w.b.body_mut(toilet).linear_velocity = Vec2::new(0.0, 60.0);
+        w.b.body_mut(pane).linear_velocity = Vec2::new(0.0, 60.0);
+        let mut sounds = Vec::new();
+        for _ in 0..40 {
+            w.step();
+            sounds.extend(w.take_sounds());
+        }
+        let table: serde_json::Value = serde_json::from_str(include_str!("../data/audiosprite.json")).unwrap();
+        for (name, _) in &sounds {
+            assert!(table.get(name.as_str()).is_some(), "{name} is not in the audiosprite");
+        }
+        assert!(sounds.iter().any(|s| s.0.starts_with("ToiletSmash")));
+        assert!(sounds.iter().any(|s| s.0.starts_with("Glass")));
     }
 
     /// A toilet hit hard on the back loses its back (two pieces); hit on the base/bowl it loses the base (two pieces, with the bowl split); both -> body gone.
