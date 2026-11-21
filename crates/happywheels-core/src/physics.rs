@@ -3386,6 +3386,10 @@ impl World {
             self.boomboxes[k].crack_impulse = shatter;
             if imp > shatter {
                 self.boomboxes[k].broken = true;
+                if !tv {
+                    // `Boombox.checkContact`: a shattering hit deletes the ADD listener, so BoomboxHit never plays again (the TV keeps its listener)
+                    self.hit_sounds.retain(|h| h.body != body);
+                }
             }
             let at = self.b.body(body).sweep.c;
             let src = self.b.body(body).clone();
@@ -4594,6 +4598,22 @@ mod tests {
         assert!(w.b.c.bodies[soft].alive);
         assert_eq!(w.log_halves().count(), 2, "{:?}", w.b.c.bodies[hard].alive);
         assert!(!w.b.c.bodies[hard].alive);
+    }
+
+    /// A boombox hit hard enough to shatter drops its `BoomboxHit` impact sound listener; a merely cracked one keeps it.
+    #[test]
+    fn shattered_boombox_stops_playing_hit_sounds() {
+        let xml = "<levelXML><info v='1.99'/><shapes><sh t='0' p0='1000' p1='450' p2='3000' p3='50' p4='0' p5='t' p6='f' p7='1' p8='0' p9='-1' p10='100' p11='1'/></shapes><specials><sp t='22' p0='900' p1='380' p2='0' p3='f' p4='t'/><sp t='22' p0='1200' p1='380' p2='0' p3='f' p4='t'/></specials></levelXML>";
+        let mut w = World::from_level(&crate::level::parse(xml).unwrap());
+        let (a, b) = (w.special_bodies[0].unwrap(), w.special_bodies[1].unwrap());
+        w.b.body_mut(b).linear_velocity = Vec2::new(0.0, 60.0);
+        let _ = a;
+        assert_eq!(w.hit_sounds.iter().filter(|h| h.name == "BoomboxHit").count(), 2);
+        for _ in 0..20 {
+            w.step();
+        }
+        assert!(w.hit_sounds.iter().all(|h| h.body != b), "shattered one lost its listener");
+        assert!(w.hit_sounds.iter().any(|h| h.body == a && h.name == "BoomboxHit"), "the untouched one keeps it");
     }
 
     /// Glass pieces are shards too: a hard hit on a piece (Result above 10·its mass) destroys it with a burst of glass.
