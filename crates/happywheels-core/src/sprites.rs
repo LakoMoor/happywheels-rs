@@ -770,10 +770,32 @@ impl Sprites {
         }
     }
 
+    /// Pieces of broken chairs (`chair_leg`, `chair_back_broken`, `chair_top` at the piece body's pose; the seat mirrors with `reverse`).
+    fn draw_chair_pieces(&self, img: &mut RgbaImage, world: &World, cam: M) {
+        #[derive(Deserialize)]
+        struct File {
+            k: Vec<Node>,
+        }
+        static PARTS: std::sync::OnceLock<[Vec<Node>; 3]> = std::sync::OnceLock::new();
+        let parts = PARTS.get_or_init(|| {
+            let f = |s: &str| serde_json::from_str::<File>(s).map(|f| f.k).unwrap_or_default();
+            [f(include_str!("../data/game-chair_leg.json")), f(include_str!("../data/game-chair_back_broken.json")), f(include_str!("../data/game-chair_top.json"))]
+        });
+        for (b, kind, mirror) in world.chair_pieces() {
+            if world.body_center_px(b).is_none() {
+                continue;
+            }
+            for k in &parts[usize::from(kind)] {
+                self.draw_node(img, k, mul(cam, mul(body_matrix(world, b), local(0.0, 0.0, 0.0, mirror, 1.0))));
+            }
+        }
+    }
+
     pub fn draw_specials(&self, img: &mut RgbaImage, level: &crate::level::Level, world: &World, camera_offset: (f32, f32)) {
         let cam = local(f64::from(camera_offset.0), f64::from(camera_offset.1), 0.0, 1.0, 1.0);
         self.draw_food_chunks(img, world, cam);
         self.draw_boombox_pieces(img, world, cam);
+        self.draw_chair_pieces(img, world, cam);
         for (i, sp) in level.specials.iter().enumerate() {
             if sp.kind == 0 {
                 self.draw_van(img, sp, world.special_parts.get(i).map(Vec::as_slice).unwrap_or(&[]), world, cam);

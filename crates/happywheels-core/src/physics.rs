@@ -233,6 +233,15 @@ struct Boombox {
     pieces: Vec<(BodyId, u8)>,
 }
 
+/// Chair special (`Chair`): a Result above 10 on any of its four shapes breaks it into a left leg, right leg, back and seat body.
+struct BreakChair {
+    body: BodyId,
+    sign: f64,
+    done: bool,
+    /// (body, 0 leg / 1 back / 2 seat, mirror sign)
+    pieces: Vec<(BodyId, u8, f64)>,
+}
+
 /// A special's `checkAdd`: a contact starting on one of its shapes with a non-sensor body that is static or at least as heavy, closing speed along the
 /// normal above `threshold`, plays `name` (`variants` picks `name1..n`). `lock_frames` > 0 = the original keeps a handle until the sound ends (toilet, trash can).
 struct HitSound {
@@ -409,6 +418,7 @@ pub struct World {
     /// Chunk bodies born from smashed food: (body, food type, chunk index).
     food_chunks: Vec<(BodyId, u8, u8)>,
     boomboxes: Vec<Boombox>,
+    chairs: Vec<BreakChair>,
     cans: Vec<TrashCan>,
     hit_sounds: Vec<HitSound>,
     /// Bodies born from specials (trash, hollow cans…) that only the renderer cares about.
@@ -479,6 +489,7 @@ impl World {
             foods: Vec::new(),
             food_chunks: Vec::new(),
             boomboxes: Vec::new(),
+            chairs: Vec::new(),
             cans: Vec::new(),
             hit_sounds: Vec::new(),
             loose: Vec::new(),
@@ -901,6 +912,11 @@ impl World {
         if let Some((name, variants, threshold, lock_frames)) = hit {
             let first = self.b.body(body).shapes[0];
             self.hit_sounds.push(HitSound { body, shapes: vec![first], name, variants, threshold, lock_frames, free_at: 0 });
+        }
+        if sp.kind == 19 && sp.flag("interactive") != Some(false) {
+            self.b.c.report_results = true;
+            let sign = if sp.flag("reverse").unwrap_or(false) { -1.0 } else { 1.0 };
+            self.chairs.push(BreakChair { body, sign, done: false, pieces: Vec::new() });
         }
         if matches!(sp.kind, 21 | 22) {
             self.b.c.report_results = true;
@@ -1856,6 +1872,7 @@ impl World {
         self.token_events(&events);
         self.food_events(&events);
         self.boombox_events(&events);
+        self.chair_events(&events);
         self.mine_events(&events);
         self.arrow_events(&events);
         self.spike_events(&events);
@@ -3344,6 +3361,49 @@ impl World {
         }
     }
 
+    /// `Chair.checkContact` / `actions`: above an impulse of 10 the chair's four shapes become four bodies (left leg, right leg, back, seat) at the
+    /// chair's centre with its angle, each moving with the old body's velocity at its own local centre; `TableBreak1` plays.
+    fn chair_events(&mut self, events: &[box2d::world::ContactEvent]) {
+        for k in 0..self.chairs.len() {
+            if self.chairs[k].done {
+                continue;
+            }
+            let body = self.chairs[k].body;
+            let shapes = self.b.body(body).shapes.clone();
+            if !events.iter().any(|e| e.kind == ContactEventKind::Result && (shapes.contains(&e.shape1) || shapes.contains(&e.shape2)) && e.normal_impulse > 10.0) {
+                continue;
+            }
+            self.chairs[k].done = true;
+            let sign = self.chairs[k].sign;
+            let src = self.b.body(body).clone();
+            let (ang, w, c) = (src.sweep.a, src.angular_velocity, src.sweep.c);
+            // (half w, half h, centre x, centre y) px in chair-local coordinates; creation order of the original: left leg, right leg, back, seat
+            let parts: [(f64, f64, f64, f64, u8, f64); 4] = [(3.0, 16.0, -18.0, 16.0, 0, 1.0), (3.0, 16.0, 18.0, 16.0, 0, 1.0), (3.0, 25.0, -18.0 * sign, -31.0, 1, 1.0), (21.0, 3.0, 0.0, -3.0, 2, sign)];
+            for (hw, hh, cx, cy, kind, mirror) in parts {
+                let piece = self.b.create_body(&BodyDef { position: c, angle: ang, ..Default::default() });
+                let mut sd = ShapeDef::oriented_box(hw / PS, hh / PS, Vec2::new(cx / PS, cy / PS), 0.0);
+                sd.density = 5.0;
+                sd.friction = 0.1;
+                sd.restitution = 0.2;
+                sd.filter = Filter { category_bits: 8, mask_bits: 0xFFFF, group_index: 0 };
+                self.b.create_shape(piece, &sd);
+                self.b.set_mass_from_shapes(piece);
+                let lc = self.b.body(piece).sweep.local_center;
+                self.b.body_mut(piece).linear_velocity = src.linear_velocity_from_local_point(lc);
+                self.b.body_mut(piece).angular_velocity = w;
+                self.chairs[k].pieces.push((piece, kind, mirror));
+                self.loose.push(piece);
+            }
+            self.b.destroy_body(body);
+            self.play("TableBreak1", 1, c);
+        }
+    }
+
+    /// Pieces of broken chairs: (body, 0 leg / 1 back / 2 seat, mirror).
+    pub fn chair_pieces(&self) -> impl Iterator<Item = (BodyId, u8, f64)> + '_ {
+        self.chairs.iter().flat_map(|c| c.pieces.iter().copied())
+    }
+
     /// Current `BoomboxMC` frame (1 intact, 2..4 cracked) of the boombox whose body is `body`.
     pub fn boombox_frame(&self, body: BodyId) -> usize {
         self.boomboxes.iter().find(|b| b.body == body).map_or(1, |b| b.frame)
@@ -4190,6 +4250,23 @@ mod tests {
         assert_eq!(w.boombox_pieces().count(), 3);
         assert!(w.boombox_pieces().all(|(p, _)| w.b.c.bodies[p].alive));
         assert!(w.blood.sprites.iter().any(|p| matches!(p.kind, crate::blood::ShardKind::Food(4))));
+    }
+
+    /// A chair hit above an impulse of 10 falls apart into leg, leg, back and seat bodies.
+    #[test]
+    fn chair_breaks_into_four_pieces() {
+        let xml = "<levelXML><info v='1.99'/><shapes><sh t='0' p0='1000' p1='450' p2='3000' p3='50' p4='0' p5='t' p6='f' p7='1' p8='0' p9='-1' p10='100' p11='1'/></shapes><specials><sp t='19' p0='900' p1='360' p2='0' p3='f' p4='f' p5='t'/><sp t='19' p0='1200' p1='360' p2='0' p3='f' p4='f' p5='t'/></specials></levelXML>";
+        let mut w = World::from_level(&crate::level::parse(xml).unwrap());
+        let (soft, hard) = (w.special_bodies[0].unwrap(), w.special_bodies[1].unwrap());
+        w.b.body_mut(soft).linear_velocity = Vec2::new(0.0, 2.0);
+        w.b.body_mut(hard).linear_velocity = Vec2::new(0.0, 50.0);
+        for _ in 0..40 {
+            w.step();
+        }
+        assert!(w.b.c.bodies[soft].alive, "a soft landing keeps the chair whole");
+        assert!(!w.b.c.bodies[hard].alive, "a hard hit breaks it");
+        assert_eq!(w.chair_pieces().count(), 4);
+        assert!(w.chair_pieces().all(|(b, _, _)| w.b.c.bodies[b].alive));
     }
 
     /// A smashed food item leaves four circle chunks and 30 juice particles, and its body is gone.
