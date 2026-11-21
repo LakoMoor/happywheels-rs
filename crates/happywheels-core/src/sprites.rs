@@ -714,7 +714,15 @@ impl Sprites {
         if world.body_center_px(b.body).is_none() {
             return;
         }
-        let g = mul(local(f64::from(camera_offset.0), f64::from(camera_offset.1), 0.0, 1.0, 1.0), mul(body_matrix(world, b.body), b.rest));
+        // `skiSmash` on an intact sleigh re-centres the clip (`sleighMC.inner` follows the new local centre): keep it fixed to the body origin.
+        let recentre = match world.bike.as_ref() {
+            Some(crate::vehicle::Vehicle::Santa(s)) if s.sleigh == b.body => {
+                let lc = world.b2().body(b.body).sweep.local_center;
+                local((s.sleigh_lc0.x - lc.x) * 62.5, (s.sleigh_lc0.y - lc.y) * 62.5, 0.0, 1.0, 1.0)
+            }
+            _ => local(0.0, 0.0, 0.0, 1.0, 1.0),
+        };
+        let g = mul(local(f64::from(camera_offset.0), f64::from(camera_offset.1), 0.0, 1.0, 1.0), mul(body_matrix(world, b.body), mul(recentre, b.rest)));
         let mut node = &self.clip[b.path[0]];
         for &i in &b.path[1..] {
             node = &node.k[i];

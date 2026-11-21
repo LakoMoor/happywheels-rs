@@ -2761,3 +2761,38 @@ fn sprites_draw_chair_jet_shards() {
     sprites.draw(&mut img, &w, (320.0 - 1000.0, 180.0 - 330.0));
     img.save(concat!(env!("CARGO_MANIFEST_DIR"), "/../../screenshots/sprites_chair_jet_shards.png")).unwrap();
 }
+
+/// Santa: skiSmash on an intact sleigh moves its local centre but the sleigh clip stays where it was (screenshot screenshots/sprites_santa_ski_smash.png: before | after).
+#[test]
+fn santa_sleigh_clip_is_recentred_after_ski_smash() {
+    use happywheels_core::vehicle::Vehicle;
+    let assets = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../assets-99tnk64n1mubaoc8w");
+    let Some(mut sprites) = happywheels_core::sprites::Sprites::open(&assets, 8) else { return };
+    let level = level::parse(
+        "<levelXML><info v='1.99' x='1000' y='250'/><shapes>\
+         <sh t='0' p0='1000' p1='425' p2='2000' p3='50' p4='0' p5='t' p6='f' p7='1' p8='0' p9='-1' p10='100' p11='1'/></shapes></levelXML>",
+    )
+    .unwrap();
+    let mut w = World::from_level(&level);
+    assert!(w.spawn_bike(8, [1000.0, 250.0]));
+    sprites.bind_vehicle_rider(&w, [1000.0, 250.0]);
+    for _ in 0..3 {
+        w.step();
+    }
+    let render = |w: &World| {
+        let mut img = image::RgbaImage::from_pixel(640, 360, image::Rgba([0xc8, 0xd8, 0xe8, 255]));
+        sprites.draw(&mut img, w, (320.0 - 1000.0, 180.0 - 330.0));
+        img
+    };
+    let before = render(&w);
+    let Some(Vehicle::Santa(mut s)) = w.bike.take() else { panic!() };
+    let lc0 = w.b2().body(s.sleigh).sweep.local_center;
+    s.ski_smash(&mut w);
+    assert!(w.b2().body(s.sleigh).sweep.local_center != lc0, "base swap should move the local centre");
+    w.bike = Some(Vehicle::Santa(s));
+    let after = render(&w);
+    let mut both = image::RgbaImage::new(1280, 360);
+    image::imageops::replace(&mut both, &before, 0, 0);
+    image::imageops::replace(&mut both, &after, 640, 0);
+    both.save(concat!(env!("CARGO_MANIFEST_DIR"), "/../../screenshots/sprites_santa_ski_smash.png")).unwrap();
+}
