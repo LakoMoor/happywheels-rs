@@ -212,6 +212,8 @@ pub struct Ragdoll {
     pub sev: Vec<BodyId>,
     /// The limb each `sev` stump belongs to.
     pub sev_limbs: Vec<Limb>,
+    /// `pelvisSmash` happened (stump thighs then show frame 8).
+    pelvis_smashed: bool,
     sev_guides: [[f64; 5]; 3],
     /// Exposed intestines (torso break below `intestineLimit`) and spinal cord (neck break below `spineLimit`).
     pub intestines: Option<Chain>,
@@ -353,7 +355,7 @@ impl Ragdoll {
             joint_ids.push(b.create_revolute_joint(&d));
         }
         let joints = LIMB_ORDER.iter().copied().zip(joint_ids).collect();
-        Some(Self { poses: PoseSet::Base, bodies, joints, pose: 0, cancel: false, broken: Vec::new(), grabbing: false, grips: [None; 2], group, head_chunk_radius: guide.get("headChunkShape").map_or(0.0, |g| g[3] * 5.0 / CHARACTER_SCALE), chest_chunk_radius: guide.get("chestChunkShape").map_or(0.0, |g| g[3] * 5.0 / CHARACTER_SCALE), pelvis_chunk_radius: guide.get("pelvisChunkShape").map_or(0.0, |g| g[3] * 5.0 / CHARACTER_SCALE), foot_guide: guide.get("footShape").copied().unwrap_or_default(), ref_scale, chunks: Vec::new(), chunk_names: Vec::new(), brain: None, heart: None, feet: [None; 2], dead: false, helmet_geo: (1..=4).map(|k| guide.get(&format!("helmetVert{k}")).map(|g| Vec2::new(g[0] / CHARACTER_SCALE, g[1] / CHARACTER_SCALE))).collect::<Option<Vec<_>>>().unwrap_or_default(), helmet_on: guide.get("helmetVert1").is_some(), helmet: None, sev: Vec::new(), sev_limbs: Vec::new(), blood_flows: Vec::new(), tag: "Char3", voices: [None; 6], voice_until: 0, voice_prio: -1, intestines: None, spine: None, ligaments: [None, None, None, None], chain_len: [guide.get("intestineShape").map_or(0.0, |g| 2.0 * g[3] * ref_scale / CHARACTER_SCALE), guide.get("ligamentShape").map_or(0.0, |g| 2.0 * g[3] * ref_scale / CHARACTER_SCALE)], spine_anchor: guide.get("spineAnchor").map_or([0.0; 2], |g| [g[0], g[1]]), sev_guides: ["sevArm1Shape", "sevLeg1Shape", "sevLeg2Shape"].map(|n| guide.get(n).copied().unwrap_or_default()) })
+        Some(Self { poses: PoseSet::Base, bodies, joints, pose: 0, cancel: false, broken: Vec::new(), grabbing: false, grips: [None; 2], group, head_chunk_radius: guide.get("headChunkShape").map_or(0.0, |g| g[3] * 5.0 / CHARACTER_SCALE), chest_chunk_radius: guide.get("chestChunkShape").map_or(0.0, |g| g[3] * 5.0 / CHARACTER_SCALE), pelvis_chunk_radius: guide.get("pelvisChunkShape").map_or(0.0, |g| g[3] * 5.0 / CHARACTER_SCALE), foot_guide: guide.get("footShape").copied().unwrap_or_default(), ref_scale, chunks: Vec::new(), chunk_names: Vec::new(), brain: None, heart: None, feet: [None; 2], dead: false, helmet_geo: (1..=4).map(|k| guide.get(&format!("helmetVert{k}")).map(|g| Vec2::new(g[0] / CHARACTER_SCALE, g[1] / CHARACTER_SCALE))).collect::<Option<Vec<_>>>().unwrap_or_default(), helmet_on: guide.get("helmetVert1").is_some(), helmet: None, sev: Vec::new(), sev_limbs: Vec::new(), pelvis_smashed: false, blood_flows: Vec::new(), tag: "Char3", voices: [None; 6], voice_until: 0, voice_prio: -1, intestines: None, spine: None, ligaments: [None, None, None, None], chain_len: [guide.get("intestineShape").map_or(0.0, |g| 2.0 * g[3] * ref_scale / CHARACTER_SCALE), guide.get("ligamentShape").map_or(0.0, |g| 2.0 * g[3] * ref_scale / CHARACTER_SCALE)], spine_anchor: guide.get("spineAnchor").map_or([0.0; 2], |g| [g[0], g[1]]), sev_guides: ["sevArm1Shape", "sevLeg1Shape", "sevLeg2Shape"].map(|n| guide.get(n).copied().unwrap_or_default()) })
     }
 
     /// `headSmash1`: the head body is destroyed (taking the neck joint with it) and replaced by four chunk balls on a
@@ -535,10 +537,10 @@ impl Ragdoll {
             "head" => if has(Limb::Neck) { 2 } else { 1 },
             "chest" => if has(Limb::Waist) { 2 } else { 1 },
             "pelvis" => if has(Limb::Hip1) && !sev(Limb::Hip1) || has(Limb::Hip2) && !sev(Limb::Hip2) { 2 } else { 1 },
-            "upperArm3" => if sev(Limb::Shoulder1) { 2 } else { 1 },
-            "upperArm4" => if sev(Limb::Shoulder2) { 2 } else { 1 },
-            "upperLeg3" => if sev(Limb::Hip1) { 2 } else { 1 },
-            "upperLeg4" if sev(Limb::Hip2) => 2,
+            "upperArm3" if sev(Limb::Shoulder1) => if self.chest_gone() { 8 } else { 2 },
+            "upperArm4" if sev(Limb::Shoulder2) => if self.chest_gone() { 8 } else { 2 },
+            "upperLeg3" if sev(Limb::Hip1) => if self.pelvis_smashed { 8 } else { 2 },
+            "upperLeg4" if sev(Limb::Hip2) => if self.pelvis_smashed { 8 } else { 2 },
             _ => 1,
         }
     }
@@ -561,6 +563,7 @@ impl Ragdoll {
         if !world.b2().body(self.bodies[&Part::Pelvis]).alive {
             return;
         }
+        self.pelvis_smashed = true;
         self.sound(world, Part::Pelvis, "PelvisSmash", 1);
         world.blood_burst(5.0, 15.0, self.bodies[&Part::Pelvis], 200, Vec2::default());
         self.stop_flows(world, &[5]);

@@ -2652,3 +2652,19 @@ fn sprites_draw_limb_break_frames() {
     sprites.draw(&mut img, &w, (320.0 - 1000.0, 180.0 - 330.0));
     img.save(concat!(env!("CARGO_MANIFEST_DIR"), "/../../screenshots/sprites_limb_breaks.png")).unwrap();
 }
+
+/// Stump clips show frame 8 after the chest / pelvis smash (original chestSmash / pelvisSmash).
+#[test]
+fn stump_frames_follow_chest_and_pelvis_smash() {
+    use happywheels_core::character::Limb;
+    let level = level::parse("<levelXML><info v='1.99' x='1000' y='250'/><shapes></shapes></levelXML>").unwrap();
+    let mut w = World::from_level(&level);
+    assert!(w.spawn_bike(3, [1000.0, 250.0]));
+    let mut doll = w.character.take().unwrap();
+    doll.break_limb(&mut w, Limb::Shoulder1, 1.0);
+    doll.break_limb(&mut w, Limb::Hip2, 1.0);
+    assert_eq!((doll.part_frame("upperArm3"), doll.part_frame("upperLeg4")), (2, 2));
+    doll.smash_chest(&mut w);
+    doll.smash_pelvis(&mut w);
+    assert_eq!((doll.part_frame("upperArm3"), doll.part_frame("upperLeg4")), (8, 8));
+}
