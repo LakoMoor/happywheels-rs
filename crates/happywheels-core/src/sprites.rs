@@ -167,7 +167,7 @@ impl Sprites {
             return None;
         }
         // Atlas `game/l` holds the runtime special-element art (spikes, ...).
-        for g in ["l", "d", "r"] {
+        for g in ["l", "d", "r", "o"] {
             let game = assets.join(format!("animate/game/{g}"));
             if let (Ok(json), Ok(img)) = (std::fs::read_to_string(game.join(format!("{g}@0.3x.json"))), image::open(game.join(format!("{g}@0.3x.png")))) {
                 if let Ok(atlas) = serde_json::from_str::<AtlasFile>(&json) {
@@ -592,6 +592,8 @@ impl Sprites {
             1 => "table-mc-top.png",
             2 => "mine-base-1.png",
             5 => "springbox-mc-pad.png",
+            10 => "soccer-ball.png",
+            7 => "wrecking-ball-ball.png",
             _ => return false,
         };
         self.pages.iter().any(|(f, _)| f.contains_key(tex))
@@ -603,7 +605,7 @@ impl Sprites {
     pub fn draw_specials(&self, img: &mut RgbaImage, level: &crate::level::Level, world: &World, camera_offset: (f32, f32)) {
         let cam = local(f64::from(camera_offset.0), f64::from(camera_offset.1), 0.0, 1.0, 1.0);
         for (i, sp) in level.specials.iter().enumerate() {
-            if matches!(sp.kind, 1 | 2 | 5) {
+            if matches!(sp.kind, 1 | 2 | 5 | 7 | 10) {
                 self.draw_clip_special(img, sp, world.special_bodies.get(i).copied().flatten(), world, cam);
                 continue;
             }
@@ -639,14 +641,14 @@ impl Sprites {
     /// level position and angle (original moves it to the foreground). The timer text / glow / arrows' animation and the launch are not drawn.
     fn draw_clip_special(&self, img: &mut RgbaImage, sp: &crate::level::Special, body: Option<BodyId>, world: &World, cam: M) {
         use std::sync::OnceLock;
-        static CLIPS: OnceLock<[Vec<Node>; 3]> = OnceLock::new();
+        static CLIPS: OnceLock<[Vec<Node>; 5]> = OnceLock::new();
         #[derive(Deserialize)]
         struct File {
             k: Vec<Node>,
         }
         let clips = CLIPS.get_or_init(|| {
             let f = |s: &str| serde_json::from_str::<File>(s).map(|f| f.k).unwrap_or_default();
-            [f(include_str!("../data/game-TableMC.json")), f(include_str!("../data/game-MineMC.json")), f(include_str!("../data/game-SpringBoxMC.json"))]
+            [f(include_str!("../data/game-TableMC.json")), f(include_str!("../data/game-MineMC.json")), f(include_str!("../data/game-SpringBoxMC.json")), f(include_str!("../data/game-SoccerBallMC.json")), f(include_str!("../data/game-WreckingBallMC.json"))]
         });
         let (x, y, ang) = (f64::from(sp.num("x").unwrap_or(0.0)), f64::from(sp.num("y").unwrap_or(0.0)), f64::from(sp.num("angle").unwrap_or(0.0)).to_radians());
         let live = body.filter(|&b| world.body_center_px(b).is_some());
@@ -654,7 +656,35 @@ impl Sprites {
             Some(b) => body_matrix(world, b),
             None => local(x, y, ang, 1.0, 1.0),
         };
-        let clip = &clips[match sp.kind { 1 => 0, 2 => 1, _ => 2 }];
+        let clip = &clips[match sp.kind { 1 => 0, 2 => 1, 5 => 2, 10 => 3, _ => 4 }];
+        if sp.kind == 7 {
+            // WreckingBall: `ball` at the body's centre of mass, `rope` at the pivot (x, y); both rotated by the ball's angle; `base.y = L − 136.5`,
+            // stem stretched to L − 120 (clip height 214.5).
+            let Some(b) = live else { return };
+            let len = f64::from(sp.num("ropeLength").unwrap_or(350.0));
+            let a = f64::from(world.body_angle(b));
+            for n in clip {
+                match n.n.as_str() {
+                    "ball" => {
+                        for k in &n.k {
+                            self.draw_node(img, k, mul(cam, body_matrix(world, b)));
+                        }
+                    }
+                    "rope" => {
+                        let m = mul(cam, local(x, y, a, 1.0, 1.0));
+                        for k in &n.k {
+                            match k.n.as_str() {
+                                "base" => self.draw_node_at(img, k, m, Some(len - 136.5), None),
+                                "stem" => self.draw_node_at(img, k, m, None, Some((len - 120.0) / 214.5)),
+                                _ => self.draw_node(img, k, m),
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            return;
+        }
         if sp.kind != 5 {
             for n in clip {
                 self.draw_node(img, n, mul(cam, pose));
@@ -881,6 +911,14 @@ impl Sprites {
             self.draw_node(img, child, g);
         }
         self.show_wound.set(false);
+    }
+
+    /// `draw_node` with the node's y and/or vertical scale replaced (runtime-resized clips).
+    fn draw_node_at(&self, img: &mut RgbaImage, n: &Node, parent: M, y: Option<f64>, sy: Option<f64>) {
+        let m = mul(parent, local(n.x, y.unwrap_or(n.y), n.r, n.sx, sy.unwrap_or(n.sy)));
+        for k in &n.k {
+            self.draw_node(img, k, m);
+        }
     }
 
     fn draw_node(&self, img: &mut RgbaImage, n: &Node, parent: M) {
