@@ -2935,3 +2935,27 @@ fn spikes_have_sprite_art() {
     let art = happywheels_core::render::render_level_sprites(&level, &w, 400, 300, [1000.0, 400.0], Some(&sp));
     assert_ne!(plain.as_raw(), art.as_raw());
 }
+
+/// Spikes impale a flesh body that touches their sensor: a motor-held joint appears and one blood stamp is recorded on the spike bitmap.
+#[test]
+fn spikes_impale_and_record_blood() {
+    use box2d::{math::Vec2, shape::{Geometry, ShapeDef}, world::BodyDef};
+    let level = level::parse("<levelXML><info v='1.99' x='1000' y='300'/><shapes></shapes><specials><sp t='6' p0='1000' p1='400' p2='0' p3='t' p4='8' p5='f'/></specials></levelXML>").unwrap();
+    let mut w = World::from_level(&level);
+    let spikes = w.special_bodies[0].unwrap();
+    let target = {
+        let b = w.b2_mut();
+        let id = b.create_body(&BodyDef { position: Vec2::new(1000.0 / 62.5, 380.0 / 62.5), ..Default::default() });
+        let mut d = ShapeDef::new(Geometry::Polygon(vec![Vec2::new(-0.2, -0.2), Vec2::new(0.2, -0.2), Vec2::new(0.2, 0.2), Vec2::new(-0.2, 0.2)]));
+        d.density = 1.0;
+        let s = b.create_shape(id, &d);
+        b.shape_mut(s).material = 2;
+        b.set_mass_from_shapes(id);
+        id
+    };
+    for _ in 0..30 {
+        w.step();
+    }
+    assert!(w.b2().body(target).alive);
+    assert_eq!(w.spike_blood(spikes).len(), 1, "one impale → one blood stamp");
+}

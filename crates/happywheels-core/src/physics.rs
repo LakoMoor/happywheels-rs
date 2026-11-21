@@ -266,6 +266,21 @@ const CAN_BLOCKER: [f64; 2] = [46.5, 72.54];
 const CAN_CRUSH_H: [f64; 2] = [27.931519508361816, 72.3830795288086];
 const CAN_CRUSH_V: [f64; 2] = [46.35346031188965, 36.118720054626465];
 
+/// Spikes special (`Spikes`: 50 px impale sensor over the 20 px base): bodies whose shape has material bits 2/4 and touches the sensor get a motor-held
+/// prismatic joint along the spikes' axis; the impale point leaves blood on the spike bitmap.
+struct Spike {
+    body: BodyId,
+    sensor: ShapeId,
+    angle: f64,
+    half_width: f64,
+    pinned: Vec<(BodyId, usize, i32)>,
+    queue_add: Vec<BodyId>,
+    queue_remove: Vec<BodyId>,
+    sounds: u32,
+    /// Blood stamps on the spike bitmap: (x in the spike row's coordinates, `spike_blood` frame 1..=5).
+    blood: Vec<(f64, u8)>,
+}
+
 /// Arrow fired by an ArrowGun (`i3`): sensor tip + solid shaft; pins itself to material-6 / massless shapes with locked prismatic joints.
 struct Arrow {
     body: BodyId,
@@ -365,6 +380,7 @@ pub struct World {
     boosts: Vec<Boost>,
     jets: Vec<Jet>,
     cannons: Vec<Cannon>,
+    spikes: Vec<Spike>,
     /// Token specials: (body, sensor shape); collected ones are removed.
     tokens: Vec<(BodyId, ShapeId)>,
     /// FoodItem specials: (body, shape, smash impulse).
@@ -434,6 +450,7 @@ impl World {
             boosts: Vec::new(),
             jets: Vec::new(),
             cannons: Vec::new(),
+            spikes: Vec::new(),
             tokens: Vec::new(),
             foods: Vec::new(),
             cans: Vec::new(),
@@ -865,6 +882,21 @@ impl World {
                 self.can_make_hollow(k);
                 self.cans[k].spill_impulse = 12.0;
             }
+        }
+        if sp.kind == 6 {
+            // Spikes.createBody: sensor box (halfWidth × 25, density .25, category 8, group −20) over the base; the dynamic body's mass includes it.
+            let half_width = 7.5 * f64::from(sp.num("numSpikes").unwrap_or(1.0));
+            let mut sd = ShapeDef::boxed(half_width / PS, 25.0 / PS);
+            sd.is_sensor = true;
+            sd.density = if sb.fixed { 0.0 } else { 0.25 };
+            sd.friction = 0.3;
+            sd.restitution = 0.1;
+            sd.filter = Filter { category_bits: 8, mask_bits: 0xFFFF, group_index: -20 };
+            let sensor = self.b.create_shape(body, &sd);
+            if !sb.fixed {
+                self.b.set_mass_from_shapes(body);
+            }
+            self.spikes.push(Spike { body, sensor, angle, half_width, pinned: Vec::new(), queue_add: Vec::new(), queue_remove: Vec::new(), sounds: 0, blood: Vec::new() });
         }
         if sp.kind == 32 {
             // FoodItem: material 4; a Result impulse above 8 (watermelon/pumpkin) or 3 (pineapple) smashes it (chunks/juice not ported)
@@ -1790,6 +1822,7 @@ impl World {
         self.food_events(&events);
         self.mine_events(&events);
         self.arrow_events(&events);
+        self.spike_events(&events);
         self.npc_smashes(&events);
         self.step_blood();
         self.can_events(&events);
@@ -2687,6 +2720,81 @@ impl World {
                 }
             }
         }
+    }
+
+    /// `Spikes.checkAdd`/`checkRemove` (sensor contacts with material bits 2/4) and `actions` → `createPrisJoint` / `removeJoint`.
+    fn spike_events(&mut self, events: &[box2d::world::ContactEvent]) {
+        for ev in events {
+            for si in 0..self.spikes.len() {
+                let sensor = self.spikes[si].sensor;
+                if ev.shape1 != sensor && ev.shape2 != sensor {
+                    continue;
+                }
+                let o = if ev.shape1 == sensor { ev.shape2 } else { ev.shape1 };
+                if self.b.shape_material(o) & 6 == 0 {
+                    continue;
+                }
+                let body = self.b.c.shapes[o].body;
+                match ev.kind {
+                    ContactEventKind::Add => self.spikes[si].queue_add.push(body),
+                    ContactEventKind::Remove if self.spikes[si].pinned.iter().any(|p| p.0 == body) || self.spikes[si].queue_add.contains(&body) => self.spikes[si].queue_remove.push(body),
+                    _ => {}
+                }
+            }
+        }
+        for si in 0..self.spikes.len() {
+            for other in std::mem::take(&mut self.spikes[si].queue_add) {
+                if !self.b.c.bodies[other].alive {
+                    continue;
+                }
+                if let Some(p) = self.spikes[si].pinned.iter_mut().find(|p| p.0 == other) {
+                    p.2 += 1;
+                    continue;
+                }
+                let (body, angle) = (self.spikes[si].body, self.spikes[si].angle);
+                let at = self.b.body(other).sweep.c;
+                let mut jd = PrismaticJointDef::initialize(self.b.body(body), body, self.b.body(other), other, at, Vec2::new(-angle.sin(), angle.cos()));
+                jd.collide_connected = true;
+                jd.enable_motor = true;
+                jd.max_motor_force = 30.0;
+                jd.motor_speed = 0.0;
+                let j = self.b.create_prismatic_joint(&jd);
+                self.spikes[si].pinned.push((other, j, 1));
+                self.blood.burst([at.x * PS, at.y * PS], Vec2::default(), 5.0, 15.0, 50);
+                // paintBlood: the impale point in the spike row's coordinates, snapped to the nearest spike (JS `%` keeps the dividend's sign)
+                let local = self.b.body(body).local_point(at);
+                let i = local.x * PS + self.spikes[si].half_width;
+                let mut o = i % 15.0;
+                o = if o < 0.0 {
+                    if o < -7.5 { -15.0 - o } else { -o }
+                } else if o > 7.5 {
+                    15.0 - o
+                } else {
+                    -o
+                };
+                let frame = (5.0 * self.blood.rand()).ceil().clamp(1.0, 5.0) as u8;
+                self.spikes[si].blood.push((i + o, frame));
+                if self.spikes[si].sounds < 2 {
+                    self.spikes[si].sounds += 1;
+                    let n = if (3.0 * self.blood.rand()).ceil() < 2.0 { "ImpaleSpikes1" } else { "ImpaleSpikes2" };
+                    self.play(n, 1, at);
+                }
+            }
+            for other in std::mem::take(&mut self.spikes[si].queue_remove) {
+                if let Some(k) = self.spikes[si].pinned.iter().position(|p| p.0 == other) {
+                    self.spikes[si].pinned[k].2 -= 1;
+                    if self.spikes[si].pinned[k].2 == 0 {
+                        let (_, j, _) = self.spikes[si].pinned.remove(k);
+                        self.b.destroy_joint(j);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Blood stamps (x in the spike row, frame) of the spikes special whose body is `body`.
+    pub fn spike_blood(&self, body: BodyId) -> &[(f64, u8)] {
+        self.spikes.iter().find(|s| s.body == body).map_or(&[], |s| s.blood.as_slice())
     }
 
     /// Arrow tip sensor (`checkAdd`/`checkRemove`), gun range sensors, and `arrowResultHandler` (shaft impulse > 1 on a pinned arrow snaps it).
