@@ -1783,7 +1783,7 @@ fn blood_burst_sprays_and_dies() {
     let mut doll = w.character.take().unwrap();
     doll.smash_head(&mut w);
     w.character = Some(doll);
-    assert_eq!(w.blood.particles.len(), 200);
+    assert_eq!(w.blood.live(), 200);
     for _ in 0..6 {
         w.step();
     }
@@ -1794,7 +1794,7 @@ fn blood_burst_sprays_and_dies() {
         w.step();
     }
     let _ = flow;
-    assert!(w.blood.particles.is_empty(), "{} particles left", w.blood.particles.len());
+    assert!(w.blood.live() == 0, "{} particles left", w.blood.live());
     assert!(w.blood.flows[0].finished);
 }
 
@@ -1825,7 +1825,7 @@ fn limb_breaks_spew_blood_flows() {
         heard.extend(w.take_sounds().into_iter().map(|s| s.0));
     }
     assert!(heard.iter().any(|n| n == "Char3Pelvis"), "no pelvis vocal in {heard:?}");
-    assert!(!w.blood.particles.is_empty());
+    assert!(w.blood.live() > 0);
     let chest = w.b2().body(w.character.as_ref().unwrap().bodies[&happywheels_core::character::Part::Chest]).xf.position;
     happywheels_core::render::render_level_at(&level, &w, 800, 500, [(chest.x * 62.5) as f32, (chest.y * 62.5) as f32 + 20.0]).save(format!("{dir}/blood_flow_pelvis.png")).unwrap();
 }
@@ -3068,8 +3068,8 @@ fn mower_blade_sprays_blood_while_grinding() {
     let mut sprayed = 0;
     for s in 0..240 {
         w.step();
-        let grew = w.blood.particles.len() > sprayed;
-        sprayed = sprayed.max(w.blood.particles.len());
+        let grew = w.blood.live() > sprayed;
+        sprayed = sprayed.max(w.blood.live());
         if let (Some(path), true) = (std::env::var_os("HW_SHOT_SPRAY"), grew && s > 0) {
             let c = w.b2().body(match w.bike.as_ref() { Some(Vehicle::Mower(m)) => m.body, _ => panic!() }).sweep.c;
             happywheels_core::render::render_level_scene(&level, &w, 640, 360, [(c.x * 62.5) as f32, (c.y * 62.5) as f32], None, None).save(path).unwrap();
@@ -3199,4 +3199,20 @@ fn glass_shot() {
     }
     let sp = happywheels_core::sprites::Sprites::open(&assets, 1).unwrap();
     happywheels_core::render::render_level_scene(&level, &w, 700, 360, [1000.0, 300.0], Some(&sp), None).save(path).unwrap();
+}
+
+/// HW_SHOT_BLOOD=<png>: a blood burst drawn with the default bloodSetting-1 look (`Blood` bitmap particles).
+#[test]
+fn blood_sprite_shot() {
+    use box2d::math::Vec2;
+    let Some(path) = std::env::var_os("HW_SHOT_BLOOD") else { return };
+    let Some(assets) = Some(std::path::PathBuf::from("../../../assets-99tnk64n1mubaoc8w")).filter(|p| p.join("animate/game/l").exists()) else { return };
+    let level = level::parse("<levelXML><info v='1.99'/><shapes><sh t='0' p0='1000' p1='450' p2='3000' p3='50' p4='0' p5='t' p6='f' p7='1' p8='0' p9='-1' p10='100' p11='1'/></shapes></levelXML>").unwrap();
+    let mut w = World::from_level(&level);
+    w.blood.burst([1000.0, 380.0], Vec2::new(0.0, 0.0), 20.0, 30.0, 120);
+    for _ in 0..10 {
+        w.step();
+    }
+    let sp = happywheels_core::sprites::Sprites::open(&assets, 1).unwrap();
+    happywheels_core::render::render_level_scene(&level, &w, 500, 300, [1000.0, 330.0], Some(&sp), None).save(path).unwrap();
 }

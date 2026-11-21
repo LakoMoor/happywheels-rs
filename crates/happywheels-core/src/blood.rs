@@ -8,6 +8,8 @@ const SCALER: f64 = 62.5 / 30.0;
 const GRAVITY: f64 = 10.0 * 62.5 / 900.0;
 const Y_LIMIT: f64 = 850.0;
 const MAX_PARTICLES: usize = 2000;
+/// `ShardKind::Food` index of the 13-frame `Blood` clip (bloodSetting 1 particles).
+pub const BLOOD: u8 = 8;
 
 #[derive(Clone, Copy)]
 pub struct Particle {
@@ -85,7 +87,7 @@ impl ShardKind {
             Self::Metal => ("metalShards", None, 12),
             Self::Cola => ("cola", None, 13),
             Self::Snow => ("snowflakes", None, 7),
-            Self::Food(ty) => ("", None, [15, 9, 8, 6, 9, 11, 5, 13][ty as usize % 8]),
+            Self::Food(ty) => ("", None, [15, 9, 8, 6, 9, 11, 5, 13, 13][ty as usize % 9]),
         }
     }
 }
@@ -96,6 +98,8 @@ pub struct Blood {
     pub sparks: Vec<Spark>,
     pub sprites: Vec<SpriteParticle>,
     pub flows: Vec<Flow>,
+    /// `bloodSetting` 2 look (`BloodParticleLine`: a dark red line per particle); off = the default setting 1 (`Blood` bitmap sprites).
+    pub line_blood: bool,
     rng: u64,
 }
 
@@ -152,22 +156,33 @@ impl Blood {
         (self.rng >> 11) as f64 / (1u64 << 53) as f64
     }
 
+    /// Live blood particles of either look (lines or `Blood` sprites).
+    pub fn live(&self) -> usize {
+        self.particles.len() + self.sprites.iter().filter(|s| s.kind == ShardKind::Food(BLOOD)).count()
+    }
+
     /// `MP`/`Md.createParticles`: `total` particles around `start` (px), `vel` the source's velocity (m/s).
     pub fn burst(&mut self, start: [f64; 2], vel: Vec2, initial_range: f64, speed_range: f64, total: u32) {
         for _ in 0..total {
-            if self.particles.len() >= MAX_PARTICLES {
+            if self.particles.len() + self.sprites.len() >= MAX_PARTICLES {
                 return;
             }
             let vx = vel.x + self.rand() * (self.rand() * speed_range - speed_range / 2.0);
             let vy = vel.y + self.rand() * (self.rand() * speed_range - speed_range * 0.75);
             let x = start[0] + self.rand() * initial_range - initial_range / 2.0;
             let y = start[1] + self.rand() * initial_range - initial_range / 2.0;
-            self.particles.push(Particle::new(x, y, vx, vy));
+            if self.line_blood {
+                self.particles.push(Particle::new(x, y, vx, vy));
+            } else {
+                self.spawn_sprite(ShardKind::Food(BLOOD), [x, y], [vx, vy]);
+            }
         }
     }
 
     pub fn spawn(&mut self, at: [f64; 2], vel: [f64; 2]) {
-        if self.particles.len() < MAX_PARTICLES {
+        if !self.line_blood {
+            self.spawn_sprite(ShardKind::Food(BLOOD), at, vel);
+        } else if self.particles.len() < MAX_PARTICLES {
             self.particles.push(Particle::new(at[0], at[1], vel[0], vel[1]));
         }
     }
