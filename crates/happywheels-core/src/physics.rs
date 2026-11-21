@@ -2260,6 +2260,7 @@ impl World {
     }
 
     /// `createFlow(kind, min, max, body, offset, angle°, total)`: a sprite flow from a body point.
+    #[allow(clippy::too_many_arguments)]
     pub fn sprite_flow(&mut self, kind: crate::blood::ShardKind, min: f64, max: f64, body: BodyId, offset: Vec2, angle_deg: f64, total: u32) {
         self.blood.flows.push(crate::blood::Flow { body, offset, angle: angle_deg.to_radians(), min_speed: min, speed_range: max - min, total, count: 0, finished: false, sprite: Some(kind) });
     }
