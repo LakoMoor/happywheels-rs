@@ -2060,6 +2060,11 @@ impl World {
         self.arrow_guns.iter().find(|g| g.harpoon == harpoon && (g.pos.x - px).abs() < 1e-9 && (g.pos.y - py).abs() < 1e-9).map(|g| g.angle)
     }
 
+    /// Jet engine state for drawing: (`accelScaler`, still burning) of the jet owning `body`.
+    pub fn jet_state(&self, body: BodyId) -> Option<(f64, bool)> {
+        self.jets.iter().find(|j| j.body == body).map(|j| (j.accel, !j.done && j.fired < j.spec.fire_total))
+    }
+
     pub fn frame(&self) -> u32 {
         self.frame
     }

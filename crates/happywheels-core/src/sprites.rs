@@ -603,6 +603,8 @@ impl Sprites {
             9 => "finish-line-asset-1480.png",
             34 => "blade-weapon-1654.png",
             15 => "harpoon-gun-base-2.png",
+            28 => "jet-ref.png",
+            25 => "homing-mine-jet.png",
             29 => "arrow-asset-1650.png",
             _ => return false,
         };
@@ -702,6 +704,43 @@ impl Sprites {
                         }
                     } else {
                         self.draw_node(img, n, m);
+                    }
+                }
+                continue;
+            }
+            // Jet (`jet_mc` scaled 1 + (power−1)/9 at the body's COM; flames only while burning, scaled .95·accel + .05) and HomingMine (`HomingMineMC` at the
+            // mine body's COM; its four thruster flames scale with the thrust impulse, which is not tracked, so they stay hidden).
+            if matches!(sp.kind, 25 | 28) {
+                static CLIPS: std::sync::OnceLock<[Vec<Node>; 2]> = std::sync::OnceLock::new();
+                #[derive(Deserialize)]
+                struct File {
+                    k: Vec<Node>,
+                }
+                let clips = CLIPS.get_or_init(|| {
+                    let f = |s: &str| serde_json::from_str::<File>(s).map(|f| f.k).unwrap_or_default();
+                    [f(include_str!("../data/game-jet_mc.json")), f(include_str!("../data/game-HomingMineMC.json"))]
+                });
+                let Some(body) = world.special_bodies.get(i).copied().flatten().filter(|&b| world.body_center_px(b).is_some()) else { continue };
+                let pose = mul(cam, body_matrix(world, body));
+                if sp.kind == 28 {
+                    let s = 1.0 + (f64::from(sp.num("power").unwrap_or(1.0)) - 1.0) / 9.0;
+                    let m = mul(pose, local(0.0, 0.0, 0.0, s, s));
+                    let (accel, burning) = world.jet_state(body).unwrap_or((1.0, false));
+                    for n in &clips[0] {
+                        if n.n == "flames" {
+                            if burning {
+                                let fs = 0.95 * accel + 0.05;
+                                for k in &n.k {
+                                    self.draw_node(img, k, mul(m, local(n.x, n.y, n.r, fs, fs)));
+                                }
+                            }
+                        } else {
+                            self.draw_node(img, n, m);
+                        }
+                    }
+                } else {
+                    for n in clips[1].iter().filter(|n| !n.n.starts_with("jet")) {
+                        self.draw_node(img, n, pose);
                     }
                 }
                 continue;
