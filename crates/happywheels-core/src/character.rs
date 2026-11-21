@@ -906,6 +906,32 @@ impl Ragdoll {
         world.play(name, variants, at);
     }
 
+    /// `shapeImpale(shape, fatal, point, radius²)`: chest/pelvis impaled → a random vocal (name picked by the last digit of the body's x position);
+    /// head: a fatal impale (no point given, or within `radius²` of the head's centre) ejects the rider and kills it, otherwise just a vocal.
+    /// Returns `true` when the rider has to be ejected from its vehicle.
+    pub fn shape_impale(&mut self, world: &mut World, body: BodyId, fatal: bool, point: Option<Vec2>, radius2: f64) -> bool {
+        let Some((&part, _)) = self.bodies.iter().find(|(_, &b)| b == body) else { return false };
+        let vocal = |s: &mut Self, world: &World| {
+            let x = format!("{}", world.b2().body(body).xf.position.x);
+            let digit = x.chars().last().and_then(|c| c.to_digit(10)).unwrap_or(0) as usize;
+            s.vocal(["Elbow1", "Elbow2", "Knee1", "Knee2", "Shoulder1", "Shoulder2", "Hip1", "Hip2", "Knee1", "Spikes"][digit], 5);
+        };
+        match part {
+            Part::Chest | Part::Pelvis => vocal(self, world),
+            Part::Head => {
+                let center = world.b2().body(body).sweep.c;
+                let lethal = fatal && point.is_none_or(|p| (p.x - center.x).powi(2) + (p.y - center.y).powi(2) < radius2);
+                if lethal {
+                    self.die(world);
+                    return true;
+                }
+                vocal(self, world);
+            }
+            _ => {}
+        }
+        false
+    }
+
     /// `addVocals(name, priority)`.
     pub fn vocal(&mut self, name: &'static str, priority: usize) {
         self.voices[priority] = Some(name);

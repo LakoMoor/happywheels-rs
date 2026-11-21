@@ -2137,6 +2137,19 @@ impl World {
         Some((c.crush_frame, c.contains_trash && !c.spilled && !c.crushed, hollow && !c.crushed))
     }
 
+    /// `shapeImpale` of the main rider (spikes call it with defaults, blades with `(fatal, tip, 0.01)`): chest/pelvis vocals, a lethal head impale
+    /// ejects the rider from its vehicle and kills it.
+    pub(crate) fn shape_impale(&mut self, body: BodyId, fatal: bool, point: Option<Vec2>, radius2: f64) {
+        let Some(mut doll) = self.character.take() else { return };
+        if doll.shape_impale(self, body, fatal, point, radius2) {
+            if let Some(mut bike) = self.bike.take() {
+                bike.rider_hurt(self, &mut doll, true, &[]);
+                self.bike = Some(bike);
+            }
+        }
+        self.character = Some(doll);
+    }
+
     /// Whether `body` is a food item (its grinding sprays juice particles, not blood).
     pub(crate) fn is_food(&self, body: BodyId) -> bool {
         self.foods.iter().any(|f| f.0 == body)
@@ -2754,6 +2767,8 @@ impl World {
                 self.arrows[ai].pinned.push((other, j, 1));
                 self.arrows[ai].armed = true;
                 if self.arrows[ai].blade.is_some() && self.b.shape_material(self.b.body(other).shapes[0]) & 6 != 0 {
+                    let tip = self.b.body(body).sweep.c;
+                    self.shape_impale(other, true, Some(tip), 0.01);
                     // BladeWeapon.createPrisJoint on a new flesh body: 50-particle blood burst at its centre, `paintBlood` stamp, BladeFlesh sound
                     let c = self.b.body(other).sweep.c;
                     self.blood.burst([c.x * PS, c.y * PS], Vec2::default(), 5.0, 15.0, 50);
@@ -2808,6 +2823,7 @@ impl World {
                     p.2 += 1;
                     continue;
                 }
+                self.shape_impale(other, true, None, 0.0);
                 let (body, angle) = (self.spikes[si].body, self.spikes[si].angle);
                 let at = self.b.body(other).sweep.c;
                 let mut jd = PrismaticJointDef::initialize(self.b.body(body), body, self.b.body(other), other, at, Vec2::new(-angle.sin(), angle.cos()));
@@ -2833,8 +2849,7 @@ impl World {
                 self.spikes[si].blood.push((i + o, frame));
                 if self.spikes[si].sounds < 2 {
                     self.spikes[si].sounds += 1;
-                    let n = if (3.0 * self.blood.rand()).ceil() < 2.0 { "ImpaleSpikes1" } else { "ImpaleSpikes2" };
-                    self.play(n, 1, at);
+                    self.play("ImpaleSpikes", 3, at);
                 }
             }
             for other in std::mem::take(&mut self.spikes[si].queue_remove) {
@@ -3952,6 +3967,26 @@ mod tests {
         };
         assert!(run(false) > 0, "control: a 60 m/s impact smashes the NPC");
         assert_eq!(run(true), 0);
+    }
+
+    /// `shapeImpale`: a fatal head impale kills the rider, a blade tip far from the head (radius² .01 m²) or a body impale only makes it vocalise.
+    #[test]
+    fn head_impale_kills_but_distant_tip_does_not() {
+        use crate::character::Part;
+        let lvl = crate::level::parse("<levelXML><info v='1.99' x='1000' y='300'/><shapes></shapes></levelXML>").unwrap();
+        let mut w = World::from_level(&lvl);
+        w.spawn_character(1, [1000.0, 300.0]);
+        let head = w.character.as_ref().unwrap().bodies[&Part::Head];
+        let chest = w.character.as_ref().unwrap().bodies[&Part::Chest];
+        w.shape_impale(chest, true, None, 0.0);
+        assert!(!w.character.as_ref().unwrap().dead, "a chest impale only makes noise");
+        let far = w.b.body(head).sweep.c + Vec2::new(1.0, 0.0);
+        w.shape_impale(head, true, Some(far), 0.01);
+        assert!(!w.character.as_ref().unwrap().dead, "tip outside the radius");
+        w.shape_impale(head, false, None, 0.0);
+        assert!(!w.character.as_ref().unwrap().dead, "non-fatal");
+        w.shape_impale(head, true, None, 0.0);
+        assert!(w.character.as_ref().unwrap().dead);
     }
 
     /// A trash can built without trash is replaced by a hollow body at level load; the special's sprite pose must follow the live body and show
