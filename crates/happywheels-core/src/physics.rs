@@ -4611,6 +4611,28 @@ mod tests {
         assert!(w.blood.sprites.iter().any(|p| matches!(p.kind, crate::blood::ShardKind::Food(5))));
     }
 
+    /// Static check: every literal sound name handed to `play("Name", n, …)` (n variants → Name1..Name_n) exists in the audiosprite table.
+    #[test]
+    fn literal_play_calls_name_existing_sounds() {
+        let table: serde_json::Value = serde_json::from_str(include_str!("../data/audiosprite.json")).unwrap();
+        let mut missing = Vec::new();
+        for src in [include_str!("physics.rs"), include_str!("vehicle.rs"), include_str!("character.rs")] {
+            let mut rest = src;
+            while let Some(i) = rest.find("play(\"") {
+                rest = &rest[i + 6..];
+                let Some(end) = rest.find('"') else { break };
+                let (name, tail) = (&rest[..end], &rest[end + 1..]);
+                let variants: u32 = tail.trim_start_matches(',').trim_start().split(|c: char| !c.is_ascii_digit()).next().and_then(|d| d.parse().ok()).unwrap_or(1);
+                if name.contains('{') || name.is_empty() || name == "Name" {
+                    continue;
+                }
+                let names: Vec<String> = if variants > 1 { (1..=variants).map(|v| format!("{name}{v}")).collect() } else { vec![name.to_string()] };
+                missing.extend(names.into_iter().filter(|n| table.get(n.as_str()).is_none()));
+            }
+        }
+        assert!(missing.is_empty(), "sounds missing from the audiosprite: {missing:?}");
+    }
+
     /// Both pieces of a toilet that breaks in one step share one ToiletSmash handle (a single sound), and every requested sound exists in the sprite.
     #[test]
     fn toilet_smash_sounds_exist_and_play_once() {
