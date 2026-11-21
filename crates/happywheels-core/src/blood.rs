@@ -61,6 +61,8 @@ pub enum ShardKind {
     Crackers,
     Sleigh,
     Mower,
+    /// `jetshards` (the `metalShards` clip of the chair / dirt bike).
+    Metal,
 }
 
 impl ShardKind {
@@ -72,6 +74,7 @@ impl ShardKind {
             Self::Crackers => ("crackers", None, 11),
             Self::Sleigh => ("sleighShards", None, 8),
             Self::Mower => ("mowerShards", None, 12),
+            Self::Metal => ("metalShards", None, 12),
         }
     }
 }

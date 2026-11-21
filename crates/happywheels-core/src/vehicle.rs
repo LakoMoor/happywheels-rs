@@ -967,6 +967,8 @@ impl Chair {
     /// `jetSmash` (original 36345, limit 30): the loose jet body is destroyed.
     pub fn jet_smash(&mut self, world: &mut World) {
         if let Some(jet) = self.jet.take() {
+            let c = world.b2().body(jet).sweep.c;
+            world.shard_burst(crate::blood::ShardKind::Metal, c, 5.0, 50.0, 50);
             world.b2_mut().destroy_body(jet);
             self.debris.retain(|&d| d != jet);
         }
@@ -991,6 +993,7 @@ impl Chair {
             b.body_mut(body).apply_impulse(Vec2::new(a.cos() * t * 10.0, a.sin() * t * 10.0), wc);
         }
         b.destroy_body(tank);
+        world.shard_burst(crate::blood::ShardKind::Metal, c, 5.0, 50.0, 50);
         self.debris.retain(|&d| d != tank);
     }
 
@@ -2662,7 +2665,10 @@ impl Cart {
         {
             let at = world.b2().body(self.body).sweep.c;
             world.play("MetalSmashLight", 1, at);
-            world.shard_burst(crate::blood::ShardKind::Cart, at, 30.0, 30.0, 20);
+            let body = world.b2().body(self.body);
+            let lc = body.sweep.local_center;
+            let p = body.world_point(Vec2::new(lc.x + 35.0 / 62.5, lc.y - 15.0 / 62.5));
+            world.shard_burst(crate::blood::ShardKind::Cart, p, 30.0, 30.0, 20);
         }
         let b = world.b2_mut();
         if let Some(&s) = b.body(self.body).shapes.get(2) {
