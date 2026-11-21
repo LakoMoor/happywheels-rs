@@ -10,6 +10,8 @@ const Y_LIMIT: f64 = 850.0;
 const MAX_PARTICLES: usize = 2000;
 /// `ShardKind::Food` index of the 13-frame `Blood` clip (bloodSetting 1 particles).
 pub const BLOOD: u8 = 8;
+/// `ShardKind::Food` index of the 13-frame `WaterMC` clip (toilet water sprays).
+pub const WATER: u8 = 9;
 
 #[derive(Clone, Copy)]
 pub struct Particle {
@@ -87,7 +89,7 @@ impl ShardKind {
             Self::Metal => ("metalShards", None, 12),
             Self::Cola => ("cola", None, 13),
             Self::Snow => ("snowflakes", None, 7),
-            Self::Food(ty) => ("", None, [15, 9, 8, 6, 9, 11, 5, 13, 13][ty as usize % 9]),
+            Self::Food(ty) => ("", None, [15, 9, 8, 6, 9, 11, 5, 13, 13, 13][ty as usize % 10]),
         }
     }
 }

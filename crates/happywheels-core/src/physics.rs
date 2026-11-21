@@ -284,6 +284,21 @@ struct Log {
     halves: Vec<(BodyId, u8)>,
 }
 
+/// `createSpray` emitter (`Mu`): `per_frame` sprite particles per step from a segment of the body (local m), until `count` passes `total`.
+struct Spray {
+    body: BodyId,
+    start: Vec2,
+    range: Vec2,
+    min: f64,
+    max: f64,
+    angle_range: f64,
+    rot: f64,
+    per_frame: u32,
+    total: u32,
+    count: u32,
+    kind: crate::blood::ShardKind,
+}
+
 /// A special's `checkAdd`: a contact starting on one of its shapes with a non-sensor body that is static or at least as heavy, closing speed along the
 /// normal above `threshold`, plays `name` (`variants` picks `name1..n`). `lock_frames` > 0 = the original keeps a handle until the sound ends (toilet, trash can).
 struct HitSound {
@@ -461,6 +476,7 @@ pub struct World {
     food_chunks: Vec<(BodyId, u8, u8)>,
     boomboxes: Vec<Boombox>,
     chairs: Vec<BreakChair>,
+    sprays: Vec<Spray>,
     logs: Vec<Log>,
     toilets: Vec<Toilet>,
     glasses: Vec<Glass>,
@@ -535,6 +551,7 @@ impl World {
             food_chunks: Vec::new(),
             boomboxes: Vec::new(),
             chairs: Vec::new(),
+            sprays: Vec::new(),
             logs: Vec::new(),
             toilets: Vec::new(),
             glasses: Vec::new(),
@@ -2540,6 +2557,7 @@ impl World {
         self.blood.step_sparks();
         self.blood.step_sprites();
         self.snow_spray();
+        self.step_sprays();
         for i in 0..self.blood.flows.len() {
             let (body, offset, angle, min, range, total, count, finished, sprite) = {
                 let f = &self.blood.flows[i];
@@ -2564,6 +2582,42 @@ impl World {
                 None => self.blood.spawn([at.x * PS, at.y * PS], vel),
             }
         }
+    }
+
+    /// `ParticleController.createSpray(kind, body, from, to, minSpeed, maxSpeed, angleDeg, perFrame, total)`: positions `from`/`to` are in the body's local px.
+    #[allow(clippy::too_many_arguments)]
+    fn create_spray(&mut self, kind: crate::blood::ShardKind, body: BodyId, from: (f64, f64), to: (f64, f64), min: f64, max: f64, angle_deg: f64, per_frame: u32, total: u32) {
+        let (start, range) = (Vec2::new(from.0 / PS, from.1 / PS), Vec2::new((to.0 - from.0) / PS, (to.1 - from.1) / PS));
+        let angle_range = angle_deg.to_radians();
+        let rot = range.y.atan2(range.x) + (std::f64::consts::FRAC_PI_2 - angle_range * 0.5);
+        self.sprays.push(Spray { body, start, range, min, max, angle_range, rot, per_frame, total, count: 0, kind });
+    }
+
+    /// `Mu.step`: each emitter creates `per_frame` particles per step, placed along its segment and thrown at `rot + angleRange·rand` plus the body's velocity there.
+    fn step_sprays(&mut self) {
+        for i in 0..self.sprays.len() {
+            let s = &self.sprays[i];
+            if s.count > s.total || !self.b.body(s.body).alive {
+                continue;
+            }
+            for _ in 0..self.sprays[i].per_frame {
+                let s = &self.sprays[i];
+                if s.count > s.total {
+                    break;
+                }
+                let (body, start, range, min, max, angle_range, rot, kind) = (s.body, s.start, s.range, s.min, s.max, s.angle_range, s.rot, s.kind);
+                self.sprays[i].count += 1;
+                let t = self.blood.rand();
+                let local = Vec2::new(start.x + range.x * t, start.y + range.y * t);
+                let speed = self.blood.rand() * (max - min) + min;
+                let b = self.b.body(body);
+                let a = b.sweep.a + rot + angle_range * self.blood.rand();
+                let v = b.linear_velocity_from_local_point(local);
+                let at = b.world_point(local);
+                self.blood.spawn_sprite(kind, [at.x * PS, at.y * PS], [a.cos() * speed + v.x, a.sin() * speed + v.y]);
+            }
+        }
+        self.sprays.retain(|s| s.count <= s.total && self.b.c.bodies[s.body].alive);
     }
 
     /// Whether `h` is a broken-special piece (chair, glass, toilet, log, boombox/TV, food chunk) that the sprite renderer draws with its own art.
@@ -3629,6 +3683,8 @@ impl World {
                 let quad = if sign > 0.0 { vec![g, wv, x, bq] } else { vec![wv, g, bq, x] };
                 let p2 = make(self, vec![Geometry::Polygon(quad)]);
                 self.rect_burst(&src, p1, crate::blood::ShardKind::Food(6), 20.0, 30);
+                let (from, to) = if sign > 0.0 { ((11.0, 22.0), (1.0, 13.0)) } else { ((-1.0, 13.0), (-11.0, 22.0)) };
+                self.create_spray(crate::blood::ShardKind::Food(crate::blood::WATER), p1, from, to, 0.0, 2.0, 15.0, 3, 95);
                 self.toilets[k].pieces.push((p1, 0, sign));
                 self.toilets[k].pieces.push((p2, 1, sign));
                 if self.frame >= self.toilets[k].sound_until {
@@ -3643,6 +3699,8 @@ impl World {
                 let p1 = make(self, vec![bx(10.0, 12.5, -14.0, -31.0)]);
                 let p2 = make(self, vec![bx(10.0, 11.0, -14.0, -7.0)]);
                 self.rect_burst(&src, p2, crate::blood::ShardKind::Food(6), 20.0, 30);
+                let (from, to) = if sign > 0.0 { ((-7.0, -14.0), (-23.0, -13.0)) } else { ((23.0, -13.0), (7.0, -14.0)) };
+                self.create_spray(crate::blood::ShardKind::Food(crate::blood::WATER), p2, from, to, 0.0, 1.0, 15.0, 3, 80);
                 self.toilets[k].pieces.push((p1, 2, sign));
                 self.toilets[k].pieces.push((p2, 3, sign));
                 if self.frame >= self.toilets[k].sound_until {
@@ -4662,9 +4720,12 @@ mod tests {
         let (soft, hard) = (w.special_bodies[0].unwrap(), w.special_bodies[1].unwrap());
         w.b.body_mut(hard).linear_velocity = Vec2::new(0.0, 60.0);
         let _ = soft;
+        let mut water = 0;
         for _ in 0..40 {
             w.step();
+            water = water.max(w.blood.sprites.iter().filter(|s| s.kind == crate::blood::ShardKind::Food(crate::blood::WATER)).count());
         }
+        assert!(water > 20, "a broken toilet sprays water ({water})");
         assert_eq!(w.toilet_parts(Some(soft)), (true, true));
         assert!(w.toilet_pieces().count() >= 2, "a hard drop breaks something off");
         assert!(w.toilet_pieces().all(|(b, _, _)| w.b.c.bodies[b].alive));

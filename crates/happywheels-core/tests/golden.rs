@@ -3328,3 +3328,20 @@ fn fixed_log_shot() {
     let sp = happywheels_core::sprites::Sprites::open(&assets, 1).unwrap();
     happywheels_core::render::render_level_scene(&level, &w, 500, 300, [1000.0, 330.0], Some(&sp), None).save(path).unwrap();
 }
+
+/// HW_SHOT_TOILET=<png>: a toilet dropped hard breaks and sprays water (WaterMC drops) from its pieces.
+#[test]
+fn toilet_water_shot() {
+    use box2d::math::Vec2;
+    let Some(path) = std::env::var_os("HW_SHOT_TOILET") else { return };
+    let Some(assets) = Some(std::path::PathBuf::from("../../../assets-99tnk64n1mubaoc8w")).filter(|p| p.join("animate/game/l").exists()) else { return };
+    let level = level::parse("<levelXML><info v='1.99'/><shapes><sh t='0' p0='1000' p1='450' p2='3000' p3='50' p4='0' p5='t' p6='f' p7='1' p8='0' p9='-1' p10='100' p11='1'/></shapes><specials><sp t='24' p0='1000' p1='380' p2='0' p3='f' p4='f' p5='t'/></specials></levelXML>").unwrap();
+    let mut w = World::from_level(&level);
+    let t = w.special_bodies[0].unwrap();
+    w.b2_mut().body_mut(t).linear_velocity = Vec2::new(0.0, 60.0);
+    for _ in 0..14 {
+        w.step();
+    }
+    let sp = happywheels_core::sprites::Sprites::open(&assets, 1).unwrap();
+    happywheels_core::render::render_level_scene(&level, &w, 500, 300, [1000.0, 340.0], Some(&sp), None).save(path).unwrap();
+}
