@@ -4,7 +4,10 @@
 //! `G = body_xf · rest_body_xf⁻¹ · rest_part_world` followed by the clip's own nested transforms; textures come from the
 //! `@0.3x` atlas (frame sizes relative to `origSize` give the pixel ratio).
 
-use std::{collections::HashMap, path::Path};
+use std::{
+    collections::HashMap,
+    path::{Path, PathBuf},
+};
 
 use box2d::world::BodyId;
 use image::{Rgba, RgbaImage};
@@ -111,6 +114,9 @@ pub struct Sprites {
     hidden: std::cell::RefCell<Vec<&'static str>>,
     /// `wound` overlays of the chest / pelvis are drawn only while this is set (see `Ragdoll::part_wound`).
     show_wound: std::cell::Cell<bool>,
+    /// Asset root (kept for the lazily opened NPC clips) and those clips (`NPCSprite1..12` as top-level nodes `npc1..12`).
+    assets: std::path::PathBuf,
+    npc: std::cell::OnceCell<Option<Box<Sprites>>>,
 }
 
 /// One baked `drawBuilding` result: the top `W` rows drawn once (and again `dup` px to the right) and `k` tiled rows below them.
@@ -197,7 +203,89 @@ impl Sprites {
                 pages.push((atlas.frames, img.to_rgba8()));
             }
         }
-        Some(Self { clip, pages, bindings: Vec::new(), shift: [0.0, 0.0], city: Vec::new(), hidden: Default::default(), show_wound: Default::default() })
+        Some(Self { clip, pages, bindings: Vec::new(), shift: [0.0, 0.0], city: Vec::new(), hidden: Default::default(), show_wound: Default::default(), assets: assets.to_path_buf(), npc: Default::default() })
+    }
+
+    /// Clip set of the NPC ragdolls: `NPCSprite1..12` (dumped from the oracle) with the atlas pages that hold their textures (game atlases and the
+    /// character atlases).
+    fn open_npc(assets: &Path) -> Option<Self> {
+        #[derive(Deserialize)]
+        struct File {
+            k: Vec<Node>,
+        }
+        let sources = [
+            include_str!("../data/game-NPCSprite1.json"),
+            include_str!("../data/game-NPCSprite2.json"),
+            include_str!("../data/game-NPCSprite3.json"),
+            include_str!("../data/game-NPCSprite4.json"),
+            include_str!("../data/game-NPCSprite5.json"),
+            include_str!("../data/game-NPCSprite6.json"),
+            include_str!("../data/game-NPCSprite7.json"),
+            include_str!("../data/game-NPCSprite8.json"),
+            include_str!("../data/game-NPCSprite9.json"),
+            include_str!("../data/game-NPCSprite10.json"),
+            include_str!("../data/game-NPCSprite11.json"),
+            include_str!("../data/game-NPCSprite12.json"),
+        ];
+        let mut clip = Vec::new();
+        for (i, s) in sources.iter().enumerate() {
+            let f: File = serde_json::from_str(s).ok()?;
+            clip.push(Node { n: format!("npc{}", i + 1), x: 0.0, y: 0.0, r: 0.0, sx: 1.0, sy: 1.0, t: None, k: f.k, alt: HashMap::new() });
+        }
+        let mut missing = Vec::new();
+        Self::textures(&clip, &mut missing);
+        let mut folders: Vec<(PathBuf, String)> = Vec::new();
+        for g in ["d", "e", "f", "g", "h", "i", "j", "k", "l"] {
+            folders.push((assets.join(format!("animate/game/{g}")), g.to_string()));
+        }
+        for c in 1..=11 {
+            let dir = assets.join(format!("animate/character{c}"));
+            folders.push((dir.clone(), format!("character{c}")));
+            for sub in ["a", "b", "c"] {
+                folders.push((dir.join(sub), sub.to_string()));
+            }
+        }
+        let mut pages = Vec::new();
+        for (folder, stem) in folders {
+            if missing.is_empty() {
+                break;
+            }
+            let Ok(json) = std::fs::read_to_string(folder.join(format!("{stem}@0.3x.json"))) else { continue };
+            let Ok(atlas) = serde_json::from_str::<AtlasFile>(&json) else { continue };
+            if !missing.iter().any(|t| atlas.frames.contains_key(t)) {
+                continue;
+            }
+            let Ok(img) = image::open(folder.join(format!("{stem}@0.3x.png"))) else { continue };
+            missing.retain(|t| !atlas.frames.contains_key(t));
+            pages.push((atlas.frames, img.to_rgba8()));
+        }
+        Some(Self { clip, pages, bindings: Vec::new(), shift: [0.0, 0.0], city: Vec::new(), hidden: Default::default(), show_wound: Default::default(), assets: assets.to_path_buf(), npc: Default::default() })
+    }
+
+    /// Draws the NPC of special `sp` (frame 1 of every part, `shape` guides hidden): each part clip sits at its body's centre of mass with the body's
+    /// angle and scale ±0.5 (`createMovieClips`; x flipped by `reverse`). Wounds, limb frames and detached parts are not drawn.
+    fn draw_npc(&self, img: &mut RgbaImage, sp: &crate::level::Special, bodies: [BodyId; 11], world: &World, cam: M) {
+        const NAMES: [&str; 11] = ["chest", "head", "pelvis", "upperArm1", "upperArm2", "lowerArm1", "lowerArm2", "upperLeg1", "upperLeg2", "lowerLeg1", "lowerLeg2"];
+        let idx = (sp.num("charIndex").unwrap_or(1.0).max(1.0) as usize).min(self.clip.len()) - 1;
+        let flip = if sp.flag("reverse").unwrap_or(false) { -1.0 } else { 1.0 };
+        let root = &self.clip[idx];
+        // draw order of `createMovieClips`: arm2, arm1, head, chest, pelvis, leg2, leg1
+        for name in ["upperArm2", "lowerArm2", "upperArm1", "lowerArm1", "head", "chest", "pelvis", "upperLeg2", "lowerLeg2", "upperLeg1", "lowerLeg1"] {
+            let Some(bi) = NAMES.iter().position(|n| *n == name) else { continue };
+            let body = bodies[bi];
+            if world.body_center_px(body).is_none() {
+                continue;
+            }
+            let Some(path) = Self::find_path(&root.k, name, &mut Vec::new()) else { continue };
+            let mut node = &root.k[path[0]];
+            for &i in &path[1..] {
+                node = &node.k[i];
+            }
+            let m = mul(cam, mul(body_matrix(world, body), local(0.0, 0.0, 0.0, 0.5 * flip * node.sx, 0.5 * node.sy)));
+            for child in &node.k {
+                self.draw_node(img, child, m);
+            }
+        }
     }
 
     /// Every texture name used anywhere in `nodes` (including alternate frames).
@@ -267,7 +355,7 @@ impl Sprites {
         if pages.is_empty() {
             return None;
         }
-        Some(Self { clip, pages, bindings: Vec::new(), shift: [0.0, 0.0], city: Vec::new(), hidden: Default::default(), show_wound: Default::default() })
+        Some(Self { clip, pages, bindings: Vec::new(), shift: [0.0, 0.0], city: Vec::new(), hidden: Default::default(), show_wound: Default::default(), assets: assets.to_path_buf(), npc: Default::default() })
     }
 
     /// City backdrop (`bg='2'`): `city_bd1` (fixed sky/clouds) below two layers of baked buildings (`backdrop2`: multiplier .25, blur 5;
@@ -585,6 +673,9 @@ impl Sprites {
     /// Draws every bound part plus the debris a smash leaves (chunks, brain, heart, helmet); `camera_offset` translates world px to image px.
     /// True when special element `kind` has sprite art here (and so replaces the grey fallback).
     pub fn covers_special(&self, kind: usize) -> bool {
+        if kind == 17 {
+            return self.npc.get_or_init(|| Self::open_npc(&self.assets).map(Box::new)).is_some();
+        }
         let tex = match kind {
             6 => "spike-clean.png",
             3 => "i-beam-body.png",
@@ -964,6 +1055,15 @@ impl Sprites {
                         }
                         self.draw_node(img, n, m);
                     }
+                }
+                continue;
+            }
+            // NPCharacter: see `draw_npc` (clips and atlases are opened on first use).
+            if sp.kind == 17 {
+                let Some(chest) = world.special_bodies.get(i).copied().flatten() else { continue };
+                let Some(bodies) = world.npc_bodies(chest) else { continue };
+                if let Some(npc) = self.npc.get_or_init(|| Self::open_npc(&self.assets).map(Box::new)) {
+                    npc.draw_npc(img, sp, bodies, world, cam);
                 }
                 continue;
             }

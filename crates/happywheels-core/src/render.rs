@@ -69,7 +69,9 @@ pub fn render_level_scene(level: &Level, world: &World, width: u32, height: u32,
         }
     }
     // NPC ragdolls (and what is left of them after smashes).
-    for h in world.npc_draw_bodies() {
+    let npc_art = sprites.is_some_and(|s| s.covers_special(17));
+    let npc_main = if npc_art { world.npc_main_bodies() } else { Vec::new() };
+    for h in world.npc_draw_bodies().into_iter().filter(|h| !npc_main.contains(h)) {
         let col = Rgba([0x70, 0x50, 0x90, 255]);
         for sh in world.body_draw_shapes(h) {
             match sh {

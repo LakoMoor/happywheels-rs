@@ -2065,6 +2065,16 @@ impl World {
         self.jets.iter().find(|j| j.body == body).map(|j| (j.accel, !j.done && j.fired < j.spec.fire_total))
     }
 
+    /// The eleven bodies (chest, head, pelvis, arms, legs — `NAMES` order of `npc`) of the NPC whose chest is `chest`.
+    pub fn npc_bodies(&self, chest: BodyId) -> Option<[BodyId; 11]> {
+        self.npcs.iter().find(|n| n.bodies[0] == chest).map(|n| n.bodies)
+    }
+
+    /// Bodies of the NPCs' eleven main parts (those a sprite set draws; detached pieces are not included).
+    pub fn npc_main_bodies(&self) -> Vec<BodyId> {
+        self.npcs.iter().flat_map(|n| n.bodies).collect()
+    }
+
     pub fn frame(&self) -> u32 {
         self.frame
     }
