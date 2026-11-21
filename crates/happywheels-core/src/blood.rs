@@ -117,7 +117,7 @@ impl Spark {
         self.speed[0] *= 0.65;
         self.speed[1] *= 0.65;
         self.gravity += 1.0 / 3.0 * 62.5 / 30.0;
-        !(self.speed[1].abs() < 1.0) || !(self.speed[0].abs() < 1.0)
+        self.speed[1].abs() >= 1.0 || self.speed[0].abs() >= 1.0
     }
 }
 
