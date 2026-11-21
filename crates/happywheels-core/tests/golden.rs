@@ -2520,7 +2520,7 @@ fn sprites_draw_dirt_and_pogo_smash() {
         }
         w.bike = bike;
         w.character = Some(doll);
-        for _ in 0..4 {
+        for _ in 0..if name == "cart" { 20 } else { 4 } {
             w.step();
         }
         let mut img = image::RgbaImage::from_pixel(640, 360, image::Rgba([0xc8, 0xd8, 0xe8, 255]));
