@@ -2612,3 +2612,40 @@ fn city_backdrop_draws_buildings() {
     let a = happywheels_core::render::render_level_scene(&level, &w, 900, 500, [450.0, 1500.0], None, Some(&back));
     a.save(concat!(env!("CARGO_MANIFEST_DIR"), "/../../screenshots/backdrop_city.png")).unwrap();
 }
+
+/// Limb breaks switch part frames and draw severed stumps (screenshot screenshots/sprites_limb_breaks.png).
+#[test]
+fn sprites_draw_limb_break_frames() {
+    use happywheels_core::character::Limb;
+    let assets = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../assets-99tnk64n1mubaoc8w");
+    let Some(mut sprites) = happywheels_core::sprites::Sprites::open(&assets, 3) else { return };
+    let level = level::parse(
+        "<levelXML><info v='1.99' x='1000' y='250'/><shapes>\
+         <sh t='0' p0='1000' p1='425' p2='2000' p3='50' p4='0' p5='t' p6='f' p7='1' p8='0' p9='-1' p10='100' p11='1'/></shapes></levelXML>",
+    )
+    .unwrap();
+    let mut w = World::from_level(&level);
+    assert!(w.spawn_bike(3, [1000.0, 250.0]));
+    sprites.bind_vehicle_rider(&w, [1000.0, 250.0]);
+    for _ in 0..3 {
+        w.step();
+    }
+    let mut doll = w.character.take().unwrap();
+    doll.break_limb(&mut w, Limb::Shoulder1, 1.0);
+    doll.break_limb(&mut w, Limb::Elbow2, 1.0);
+    doll.break_limb(&mut w, Limb::Hip2, 1.0);
+    doll.break_limb(&mut w, Limb::Knee1, 1.0);
+    doll.break_limb(&mut w, Limb::Neck, 1.0);
+    assert_eq!(doll.part_frame("upperArm1"), 3);
+    assert_eq!(doll.part_frame("lowerArm2"), 2);
+    assert_eq!(doll.part_frame("upperLeg2"), 3);
+    assert_eq!(doll.part_frame("lowerLeg1"), 2);
+    assert_eq!(doll.part_frame("head"), 2);
+    w.character = Some(doll);
+    for _ in 0..4 {
+        w.step();
+    }
+    let mut img = image::RgbaImage::from_pixel(640, 360, image::Rgba([0xc8, 0xd8, 0xe8, 255]));
+    sprites.draw(&mut img, &w, (320.0 - 1000.0, 180.0 - 330.0));
+    img.save(concat!(env!("CARGO_MANIFEST_DIR"), "/../../screenshots/sprites_limb_breaks.png")).unwrap();
+}

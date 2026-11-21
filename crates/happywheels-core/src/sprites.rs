@@ -22,6 +22,9 @@ struct Node {
     sy: f64,
     t: Option<String>,
     k: Vec<Node>,
+    /// Children of the clip at its other frames (`gotoAndStop(n)`, n ≥ 2) for multi-frame parts.
+    #[serde(default)]
+    alt: HashMap<String, Vec<Node>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -203,7 +206,7 @@ impl Sprites {
         ];
         let clip: Vec<Node> = layers
             .iter()
-            .map(|s| serde_json::from_str::<File>(s).ok().map(|f| Node { n: "layer".into(), x: 0.0, y: 0.0, r: 0.0, sx: 1.0, sy: 1.0, t: None, k: f.k }))
+            .map(|s| serde_json::from_str::<File>(s).ok().map(|f| Node { n: "layer".into(), x: 0.0, y: 0.0, r: 0.0, sx: 1.0, sy: 1.0, t: None, k: f.k, alt: HashMap::new() }))
             .collect::<Option<_>>()?;
         let mut pages = Vec::new();
         for i in 1..=3 {
@@ -229,7 +232,7 @@ impl Sprites {
         let load = |s: &str| serde_json::from_str::<File>(s).ok();
         let (l1, l2, sky) = (load(include_str!("../data/backdrop-city-backdrop1.json"))?, load(include_str!("../data/backdrop-city-backdrop2.json"))?, load(include_str!("../data/backdrop-city-city_bd1.json"))?);
         let mut s = Self::open_backdrop(assets)?;
-        s.clip = vec![Node { n: "layer".into(), x: 0.0, y: 0.0, r: 0.0, sx: 1.0, sy: 1.0, t: None, k: sky.k }];
+        s.clip = vec![Node { n: "layer".into(), x: 0.0, y: 0.0, r: 0.0, sx: 1.0, sy: 1.0, t: None, k: sky.k, alt: HashMap::new() }];
         // (W, k, duplicate offset) per building b1..b4
         let near = [(90.0, 88.0, Some(5000.0)), (140.0, 90.0, Some(5000.0)), (60.0, 102.0, Some(5000.0)), (160.0, 101.0, Some(5000.0))];
         let far = [(90.0, 88.0, None), (40.0, 50.0, Some(2500.0)), (46.0, 50.0, Some(2500.0)), (15.0, 50.0, Some(2500.0))];
@@ -617,6 +620,16 @@ impl Sprites {
         extras.extend(doll.spine.iter().flat_map(|c| c.bodies.iter()).zip(&spine_names).map(|(&b, n)| (n.as_str(), b)));
         extras.extend(doll.intestines.iter().flat_map(|c| c.bodies.iter()).zip(&gut_names).map(|(&b, n)| (n.as_str(), b)));
         extras.extend(doll.helmet.map(|b| ("helmet", b)));
+        for (&body, limb) in doll.sev.iter().zip(&doll.sev_limbs) {
+            use crate::character::Limb;
+            let name = match limb {
+                Limb::Shoulder1 => "upperArm3",
+                Limb::Shoulder2 => "upperArm4",
+                Limb::Hip1 => "upperLeg3",
+                _ => "upperLeg4",
+            };
+            extras.push((name, body));
+        }
         for (name, body) in extras {
             self.draw_loose(img, world, camera_offset, name, body);
         }
@@ -639,7 +652,10 @@ impl Sprites {
         for &i in &b.path[1..] {
             node = &node.k[i];
         }
-        for child in &node.k {
+        // Top-level rider parts switch frames when limbs break (`gotoAndStop`); NPC / nested parts stay on frame 1.
+        let frame = if b.path.len() == 1 { world.character.as_ref().map_or(1, |d| d.part_frame(&node.n)) } else { 1 };
+        let children = if frame > 1 { node.alt.get(&frame.to_string()).unwrap_or(&node.k) } else { &node.k };
+        for child in children {
             self.draw_node(img, child, g);
         }
     }

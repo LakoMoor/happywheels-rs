@@ -210,6 +210,8 @@ pub struct Ragdoll {
     pub helmet: Option<BodyId>,
     /// Severed-limb stumps (`upperArm3/4Body`, `upperLeg3/4Body`) left when a shoulder/hip breaks softly (below its snap limit).
     pub sev: Vec<BodyId>,
+    /// The limb each `sev` stump belongs to.
+    pub sev_limbs: Vec<Limb>,
     sev_guides: [[f64; 5]; 3],
     /// Exposed intestines (torso break below `intestineLimit`) and spinal cord (neck break below `spineLimit`).
     pub intestines: Option<Chain>,
@@ -351,7 +353,7 @@ impl Ragdoll {
             joint_ids.push(b.create_revolute_joint(&d));
         }
         let joints = LIMB_ORDER.iter().copied().zip(joint_ids).collect();
-        Some(Self { poses: PoseSet::Base, bodies, joints, pose: 0, cancel: false, broken: Vec::new(), grabbing: false, grips: [None; 2], group, head_chunk_radius: guide.get("headChunkShape").map_or(0.0, |g| g[3] * 5.0 / CHARACTER_SCALE), chest_chunk_radius: guide.get("chestChunkShape").map_or(0.0, |g| g[3] * 5.0 / CHARACTER_SCALE), pelvis_chunk_radius: guide.get("pelvisChunkShape").map_or(0.0, |g| g[3] * 5.0 / CHARACTER_SCALE), foot_guide: guide.get("footShape").copied().unwrap_or_default(), ref_scale, chunks: Vec::new(), chunk_names: Vec::new(), brain: None, heart: None, feet: [None; 2], dead: false, helmet_geo: (1..=4).map(|k| guide.get(&format!("helmetVert{k}")).map(|g| Vec2::new(g[0] / CHARACTER_SCALE, g[1] / CHARACTER_SCALE))).collect::<Option<Vec<_>>>().unwrap_or_default(), helmet_on: guide.get("helmetVert1").is_some(), helmet: None, sev: Vec::new(), blood_flows: Vec::new(), tag: "Char3", voices: [None; 6], voice_until: 0, voice_prio: -1, intestines: None, spine: None, ligaments: [None, None, None, None], chain_len: [guide.get("intestineShape").map_or(0.0, |g| 2.0 * g[3] * ref_scale / CHARACTER_SCALE), guide.get("ligamentShape").map_or(0.0, |g| 2.0 * g[3] * ref_scale / CHARACTER_SCALE)], spine_anchor: guide.get("spineAnchor").map_or([0.0; 2], |g| [g[0], g[1]]), sev_guides: ["sevArm1Shape", "sevLeg1Shape", "sevLeg2Shape"].map(|n| guide.get(n).copied().unwrap_or_default()) })
+        Some(Self { poses: PoseSet::Base, bodies, joints, pose: 0, cancel: false, broken: Vec::new(), grabbing: false, grips: [None; 2], group, head_chunk_radius: guide.get("headChunkShape").map_or(0.0, |g| g[3] * 5.0 / CHARACTER_SCALE), chest_chunk_radius: guide.get("chestChunkShape").map_or(0.0, |g| g[3] * 5.0 / CHARACTER_SCALE), pelvis_chunk_radius: guide.get("pelvisChunkShape").map_or(0.0, |g| g[3] * 5.0 / CHARACTER_SCALE), foot_guide: guide.get("footShape").copied().unwrap_or_default(), ref_scale, chunks: Vec::new(), chunk_names: Vec::new(), brain: None, heart: None, feet: [None; 2], dead: false, helmet_geo: (1..=4).map(|k| guide.get(&format!("helmetVert{k}")).map(|g| Vec2::new(g[0] / CHARACTER_SCALE, g[1] / CHARACTER_SCALE))).collect::<Option<Vec<_>>>().unwrap_or_default(), helmet_on: guide.get("helmetVert1").is_some(), helmet: None, sev: Vec::new(), sev_limbs: Vec::new(), blood_flows: Vec::new(), tag: "Char3", voices: [None; 6], voice_until: 0, voice_prio: -1, intestines: None, spine: None, ligaments: [None, None, None, None], chain_len: [guide.get("intestineShape").map_or(0.0, |g| 2.0 * g[3] * ref_scale / CHARACTER_SCALE), guide.get("ligamentShape").map_or(0.0, |g| 2.0 * g[3] * ref_scale / CHARACTER_SCALE)], spine_anchor: guide.get("spineAnchor").map_or([0.0; 2], |g| [g[0], g[1]]), sev_guides: ["sevArm1Shape", "sevLeg1Shape", "sevLeg2Shape"].map(|n| guide.get(n).copied().unwrap_or_default()) })
     }
 
     /// `headSmash1`: the head body is destroyed (taking the neck joint with it) and replaced by four chunk balls on a
@@ -500,6 +502,47 @@ impl Ragdoll {
         b.destroy_body(chest);
     }
 
+    /// Frame of a part clip (`gotoAndStop` calls of the original's break functions): limbs show 1 intact, 3 soft hip/shoulder break, 4 hard break,
+    /// +elbow/knee break → 5/6/7; lower arms 2 once the elbow is gone; lower legs 2 knee / 3 foot / 4 both; head and pelvis 2 when
+    /// the neck / a hard hip break happened; chest 2 after the waist; stump clips (`upperArm3/4`, `upperLeg3/4`) 2.
+    pub fn part_frame(&self, name: &str) -> usize {
+        let has = |l: Limb| self.broken.contains(&l);
+        let sev = |l: Limb| self.sev_limbs.contains(&l);
+        let limb = |joint: Limb, bend: Limb| match (has(joint), sev(joint), has(bend)) {
+            (false, _, false) => 1,
+            (false, _, true) => 5,
+            (true, true, false) => 3,
+            (true, true, true) => 6,
+            (true, false, false) => 4,
+            (true, false, true) => 7,
+        };
+        let side = usize::from(name.ends_with('2'));
+        match name {
+            "upperArm1" => limb(Limb::Shoulder1, Limb::Elbow1),
+            "upperArm2" => limb(Limb::Shoulder2, Limb::Elbow2),
+            "upperLeg1" => limb(Limb::Hip1, Limb::Knee1),
+            "upperLeg2" => limb(Limb::Hip2, Limb::Knee2),
+            "lowerArm1" | "lowerArm2" => if has(if side == 0 { Limb::Elbow1 } else { Limb::Elbow2 }) { 2 } else { 1 },
+            "lowerLeg1" | "lowerLeg2" => {
+                let knee = has(if side == 0 { Limb::Knee1 } else { Limb::Knee2 });
+                match (knee, self.feet[side].is_some()) {
+                    (false, false) => 1,
+                    (true, false) => 2,
+                    (false, true) => 3,
+                    (true, true) => 4,
+                }
+            }
+            "head" => if has(Limb::Neck) { 2 } else { 1 },
+            "chest" => if has(Limb::Waist) { 2 } else { 1 },
+            "pelvis" => if has(Limb::Hip1) && !sev(Limb::Hip1) || has(Limb::Hip2) && !sev(Limb::Hip2) { 2 } else { 1 },
+            "upperArm3" => if sev(Limb::Shoulder1) { 2 } else { 1 },
+            "upperArm4" => if sev(Limb::Shoulder2) { 2 } else { 1 },
+            "upperLeg3" => if sev(Limb::Hip1) { 2 } else { 1 },
+            "upperLeg4" if sev(Limb::Hip2) => 2,
+            _ => 1,
+        }
+    }
+
     fn chest_gone(&self) -> bool {
         self.heart.is_some()
     }
@@ -646,6 +689,7 @@ impl Ragdoll {
         let new_joint = b.create_revolute_joint(&jd);
         self.joints.insert(limb, new_joint);
         self.sev.push(stump);
+        self.sev_limbs.push(limb);
         let (us, ls) = (b.body(src).shapes[0], b.body(self.bodies[&lower]).shapes[0]);
         if shoulder {
             b.set_shape_filter(us, zero);
