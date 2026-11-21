@@ -2053,6 +2053,13 @@ impl World {
         }
     }
 
+    /// Aim angle (rad) of the arrow gun / harpoon gun placed at special position (`x`, `y`) px with base angle `base` (rad), if it is modelled.
+    pub fn gun_turret_angle(&self, x: f64, y: f64, base: f64, harpoon: bool) -> Option<f64> {
+        let off = if harpoon { 35.0 } else { 27.0 };
+        let (px, py) = ((x + off * base.sin()) / PS, (y - off * base.cos()) / PS);
+        self.arrow_guns.iter().find(|g| g.harpoon == harpoon && (g.pos.x - px).abs() < 1e-9 && (g.pos.y - py).abs() < 1e-9).map(|g| g.angle)
+    }
+
     pub fn frame(&self) -> u32 {
         self.frame
     }

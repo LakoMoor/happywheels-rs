@@ -602,6 +602,8 @@ impl Sprites {
             8 => "fan-1522.png",
             9 => "finish-line-asset-1480.png",
             34 => "blade-weapon-1654.png",
+            15 => "harpoon-gun-base-2.png",
+            29 => "arrow-asset-1650.png",
             _ => return false,
         };
         self.pages.iter().any(|(f, _)| f.contains_key(tex))
@@ -671,6 +673,36 @@ impl Sprites {
                 let frame = (sp.num("bladeWeaponType").unwrap_or(1.0).max(1.0) as usize).min(frames.len().max(1)) - 1;
                 for n in frames.get(frame).map(Vec::as_slice).unwrap_or(&[]) {
                     self.draw_node(img, n, m);
+                }
+                continue;
+            }
+            // HarpoonGun / ArrowGun: static base clip at the level position/angle; `turret` is rotated by (aim angle − base angle) (`paint`). Firing frames,
+            // the harpoon gun's light and the loaded harpoon's disappearance are not drawn.
+            if matches!(sp.kind, 15 | 29) {
+                static GUNS: std::sync::OnceLock<[Vec<Node>; 2]> = std::sync::OnceLock::new();
+                #[derive(Deserialize)]
+                struct File {
+                    k: Vec<Node>,
+                }
+                let guns = GUNS.get_or_init(|| {
+                    let f = |s: &str| serde_json::from_str::<File>(s).map(|f| f.k).unwrap_or_default();
+                    [f(include_str!("../data/game-HarpoonGunMC.json")), f(include_str!("../data/game-ArrowGunMC.json"))]
+                });
+                let harpoon = sp.kind == 15;
+                let (x, y, a) = (f64::from(sp.num("x").unwrap_or(0.0)), f64::from(sp.num("y").unwrap_or(0.0)), f64::from(sp.num("angle").unwrap_or(0.0)).to_radians());
+                let turret = world.gun_turret_angle(x, y, a, harpoon).map_or(0.0, |t| t - a);
+                let m = mul(cam, local(x, y, a, 1.0, 1.0));
+                for n in &guns[usize::from(!harpoon)] {
+                    if n.n == "turret" {
+                        let tm = mul(m, local(n.x, n.y, turret, n.sx, n.sy));
+                        for k in &n.k {
+                            if k.n != "light" {
+                                self.draw_node(img, k, tm);
+                            }
+                        }
+                    } else {
+                        self.draw_node(img, n, m);
+                    }
                 }
                 continue;
             }
