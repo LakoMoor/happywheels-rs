@@ -90,12 +90,55 @@ impl ShardKind {
 #[derive(Default)]
 pub struct Blood {
     pub particles: Vec<Particle>,
+    pub sparks: Vec<Spark>,
     pub sprites: Vec<SpriteParticle>,
     pub flows: Vec<Flow>,
     rng: u64,
 }
 
+/// `SparkBurst` particle (`MV`): a one-pixel line in a 0xFFFF00 + random-blue colour that decays by .65 per step and falls under 1/3·62.5/30 px/step².
+#[derive(Clone, Copy)]
+pub struct Spark {
+    pub pos: [f64; 2],
+    pub speed: [f64; 2],
+    pub gravity: f64,
+    /// Segment drawn this step: (from, to).
+    pub seg: [[f64; 2]; 2],
+    pub blue: u8,
+}
+
+impl Spark {
+    /// `MV.step`: draw the tail segment, move, decay; `false` once both speeds are below 1 px.
+    fn step(&mut self) -> bool {
+        let change = self.speed[1] + self.gravity;
+        self.seg = [[self.pos[0] - self.speed[0], self.pos[1] - change], self.pos];
+        self.pos[1] += change;
+        self.pos[0] += self.speed[0];
+        self.speed[0] *= 0.65;
+        self.speed[1] *= 0.65;
+        self.gravity += 1.0 / 3.0 * 62.5 / 30.0;
+        !(self.speed[1].abs() < 1.0) || !(self.speed[0].abs() < 1.0)
+    }
+}
+
 impl Blood {
+    /// `createSparkBurstPoint(start (m), vel (px/step), initialRange, speedRange, total)`: the particles' speeds are in px per step already.
+    pub fn spark_burst(&mut self, start: Vec2, vel: Vec2, initial_range: f64, speed_range: f64, total: u32) {
+        let scaler = 62.5 / 30.0;
+        for _ in 0..total {
+            let vx = vel.x + self.rand() * (self.rand() * speed_range - speed_range / 2.0);
+            let vy = vel.y + self.rand() * (self.rand() * speed_range - speed_range / 2.0);
+            let x = start.x * 62.5 + self.rand() * initial_range - initial_range / 2.0;
+            let y = start.y * 62.5 + self.rand() * initial_range - initial_range / 2.0;
+            let blue = (self.rand() * 255.0).round() as u8;
+            self.sparks.push(Spark { pos: [x, y], speed: [vx * scaler, vy * scaler], gravity: 0.0, seg: [[x, y], [x, y]], blue });
+        }
+    }
+
+    pub fn step_sparks(&mut self) {
+        self.sparks.retain_mut(Spark::step);
+    }
+
     pub fn rand(&mut self) -> f64 {
         if self.rng == 0 {
             self.rng = 0x9E37_79B9_7F4A_7C15;

@@ -2375,6 +2375,7 @@ impl World {
     /// Per-step blood update: particles advance, then every running flow emits one particle (the original's emitter `step` order).
     fn step_blood(&mut self) {
         self.blood.step_particles();
+        self.blood.step_sparks();
         self.blood.step_sprites();
         self.snow_spray();
         for i in 0..self.blood.flows.len() {

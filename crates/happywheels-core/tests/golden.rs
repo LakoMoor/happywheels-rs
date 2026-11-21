@@ -2996,3 +2996,42 @@ fn blade_records_blood_when_it_stabs_flesh() {
     let blade = w.special_bodies.iter().flatten().copied().find(|&b| !w.blade_blood(b).is_empty());
     assert!(blade.is_some(), "no blood stamp recorded");
 }
+
+/// A mower blade hitting a body that cannot be ground (material 0) shoves it and throws a 20-spark burst.
+#[test]
+fn mower_blade_throws_sparks_on_hard_hits() {
+    use box2d::{math::Vec2, shape::{Geometry, ShapeDef}, world::BodyDef};
+    use happywheels_core::vehicle::Vehicle;
+    let level = level::parse(
+        "<levelXML><info v='1.99' x='1000' y='250'/><shapes>\
+         <sh t='0' p0='1000' p1='425' p2='3000' p3='50' p4='0' p5='t' p6='f' p7='1' p8='0' p9='-1' p10='100' p11='1'/></shapes></levelXML>",
+    )
+    .unwrap();
+    let mut w = World::from_level(&level);
+    assert!(w.spawn_bike(6, [1000.0, 250.0]));
+    for _ in 0..20 {
+        w.step();
+    }
+    let Some(Vehicle::Mower(m)) = w.bike.as_ref() else { panic!() };
+    let mc = w.b2().body(m.body).sweep.c;
+    {
+        let b = w.b2_mut();
+        let id = b.create_body(&BodyDef { position: Vec2::new(mc.x, mc.y + 0.55), ..Default::default() });
+        let mut d = ShapeDef::new(Geometry::Polygon(vec![Vec2::new(-0.15, -0.15), Vec2::new(0.15, -0.15), Vec2::new(0.15, 0.15), Vec2::new(-0.15, 0.15)]));
+        d.density = 1.0;
+        let s = b.create_shape(id, &d);
+        b.shape_mut(s).material = 0;
+        b.set_mass_from_shapes(id);
+    }
+    let mut seen = 0;
+    for _ in 0..120 {
+        w.step();
+        seen = seen.max(w.blood.sparks.len());
+        if let (Some(dir), true) = (std::env::var_os("HW_SHOT"), w.blood.sparks.len() >= 15 && seen == w.blood.sparks.len()) {
+            // screenshot of the burst (first frame with the full burst): `HW_SHOT=path.png cargo test mower_blade_throws`
+            let c = mc;
+            happywheels_core::render::render_level_scene(&level, &w, 640, 360, [(c.x * 62.5) as f32, (c.y * 62.5) as f32], None, None).save(dir).unwrap();
+        }
+    }
+    assert!(seen >= 20, "expected a 20-spark burst, saw {seen}");
+}

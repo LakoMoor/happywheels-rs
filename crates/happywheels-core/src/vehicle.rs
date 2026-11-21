@@ -1785,6 +1785,10 @@ pub struct Mower {
     /// `bladeCenter`, `bladeX` (half width) and (the body starts at the origin, so world = local at creation).
     blade_center: Vec2,
     blade_x: f64,
+    /// `bladeShape.GetVertices()[2].y`: the blade's lower edge in body-local metres (sparks fly from there).
+    blade_bottom: f64,
+    /// Frame until which the previous `MowerImpact` sound is still playing (`mowerImpactSound`).
+    impact_until: u32,
     mower_mass: f64,
     /// Grinding in progress: (target body, rising body) pairs, new pairs queued by `handleBladeContacts`, and the clearance-sensor contact counts per body.
     pub targets: Vec<(BodyId, BodyId)>,
@@ -1860,12 +1864,26 @@ impl Mower {
                 let a1 = o * 1.2217 - 1.5708 + angle;
                 let a2 = a1 - std::f64::consts::PI;
                 let b = world.b2_mut();
-                if mass > 0.0 {
+                // spark burst vector: the second impulse (on the other body) × 5, or the negated mower impulse × 5 against static shapes
+                let spark_vel = if mass > 0.0 {
                     let share = mass / (mass + self.mower_mass);
                     b.body_mut(self.body).apply_impulse(Vec2::new(a1.cos() * 3.0 * share, a1.sin() * 3.0 * share), at);
-                    b.body_mut(body).apply_impulse(Vec2::new(a2.cos() * 3.0 * (1.0 - share), a2.sin() * 3.0 * (1.0 - share)), at);
+                    let (yy, yf) = (a2.cos() * 3.0 * (1.0 - share), a2.sin() * 3.0 * (1.0 - share));
+                    b.body_mut(body).apply_impulse(Vec2::new(yy, yf), at);
+                    Vec2::new(yy * 5.0, yf * 5.0)
                 } else {
-                    b.body_mut(self.body).apply_impulse(Vec2::new(a1.cos() * 3.0, a1.sin() * 3.0), at);
+                    let (yy, yf) = (a1.cos() * 3.0, a1.sin() * 3.0);
+                    b.body_mut(self.body).apply_impulse(Vec2::new(yy, yf), at);
+                    Vec2::new(-yy * 5.0, -yf * 5.0)
+                };
+                if self.targets.is_empty() && world.frame() >= self.impact_until {
+                    // `MowerImpact1..3` plus a 20-spark burst at the blade edge under the hit
+                    let name = format!("MowerImpact{}", 1 + world.frame() % 3);
+                    self.impact_until = world.frame() + crate::physics::sound_frames(&name);
+                    let lx = world.b2().body(self.body).local_point(at).x;
+                    let spark_at = world.b2().body(self.body).world_point(Vec2::new(lx, self.blade_bottom));
+                    world.play("MowerImpact", 3, at);
+                    world.blood.spark_burst(spark_at, spark_vel, 5.0, 50.0, 20);
                 }
             }
         }
@@ -2105,6 +2123,7 @@ impl Mower {
         let gb = guide.get("bladeShape")?;
         let blade_center = at("bladeShape")?;
         let blade_x = gb[3] * 5.0 / CHARACTER_SCALE;
+        let blade_bottom = blade_center.y + gb[4] * 5.0 / CHARACTER_SCALE;
         let wheel = |b: &mut box2d::world::World, name: &str| -> Option<BodyId> {
             let g = guide.get(name)?;
             let w = b.create_body(&BodyDef { position: at(name)?, angle: g[2] / deg, ..Default::default() });
@@ -2183,6 +2202,8 @@ impl Mower {
             clearance_shape,
             blade_center,
             blade_x,
+            blade_bottom,
+            impact_until: 0,
             mower_mass,
             targets: Vec::new(),
             added: Vec::new(),

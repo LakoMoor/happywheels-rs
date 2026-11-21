@@ -124,6 +124,12 @@ pub fn render_level_scene(level: &Level, world: &World, width: u32, height: u32,
         imageproc::drawing::draw_line_segment_mut(&mut img, (x0, y0), (x1, y1), Rgba([0x99, 0x00, 0x00, 255]));
         imageproc::drawing::draw_line_segment_mut(&mut img, (x0, y0 + 1.0), (x1, y1 + 1.0), Rgba([0x99, 0x00, 0x00, 255]));
     }
+    // Mower sparks: one yellow segment per spark (tail → head).
+    for s in &world.blood.sparks {
+        let (x0, y0) = to_screen(s.seg[0][0] as f32, s.seg[0][1] as f32);
+        let (x1, y1) = to_screen(s.seg[1][0] as f32, s.seg[1][1] as f32);
+        imageproc::drawing::draw_line_segment_mut(&mut img, (x0, y0), (x1, y1), Rgba([0xFF, 0xFF, s.blue, 255]));
+    }
     // Groups: children follow the group body (child coords assumed world-space at start).
     for (gi, g) in level.groups.iter().enumerate() {
         let Some(&h) = world.group_bodies.get(gi) else { continue };
