@@ -616,6 +616,11 @@ impl Sprites {
         if let Some(doll) = world.character.as_ref() {
             self.draw_doll_extras(img, world, camera_offset, doll, None);
         }
+        if let Some(crate::vehicle::Vehicle::Family(f)) = world.bike.as_ref() {
+            for (&body, name) in f.daughter.debris.iter().zip(["fork", "brokenFrame", "seat"]) {
+                self.draw_loose_in(img, world, camera_offset, "daughter", name, body);
+            }
+        }
         for name in ["kid", "girl", "daughter", "son", "elf1", "elf2"] {
             if let Some(doll) = Self::npc_doll(world, name) {
                 self.draw_doll_extras(img, world, camera_offset, doll, Some(name));

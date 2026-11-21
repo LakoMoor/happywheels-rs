@@ -2701,3 +2701,31 @@ fn sprites_draw_kid_debris_and_frames() {
     sprites.draw(&mut img, &w, (320.0 - 1000.0, 180.0 - 330.0));
     img.save(concat!(env!("CARGO_MANIFEST_DIR"), "/../../screenshots/sprites_kid_smash.png")).unwrap();
 }
+
+/// Family: the daughter's frame smash drawn with her fork / broken frame / seat pieces (screenshot screenshots/sprites_daughter_smash.png).
+#[test]
+fn sprites_draw_daughter_frame_pieces() {
+    use happywheels_core::vehicle::Vehicle;
+    let assets = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../assets-99tnk64n1mubaoc8w");
+    let Some(mut sprites) = happywheels_core::sprites::Sprites::open(&assets, 10) else { return };
+    let level = level::parse(
+        "<levelXML><info v='1.99' x='1000' y='250'/><shapes>\
+         <sh t='0' p0='1000' p1='425' p2='2000' p3='50' p4='0' p5='t' p6='f' p7='1' p8='0' p9='-1' p10='100' p11='1'/></shapes></levelXML>",
+    )
+    .unwrap();
+    let mut w = World::from_level(&level);
+    assert!(w.spawn_bike(10, [1000.0, 250.0]));
+    sprites.bind_vehicle_rider(&w, [1000.0, 250.0]);
+    for _ in 0..30 {
+        w.step();
+    }
+    let Some(Vehicle::Family(mut f)) = w.bike.take() else { panic!() };
+    f.daughter.frame_smash(&mut w);
+    w.bike = Some(Vehicle::Family(f));
+    for _ in 0..10 {
+        w.step();
+    }
+    let mut img = image::RgbaImage::from_pixel(640, 360, image::Rgba([0xc8, 0xd8, 0xe8, 255]));
+    sprites.draw(&mut img, &w, (320.0 - 1000.0, 180.0 - 330.0));
+    img.save(concat!(env!("CARGO_MANIFEST_DIR"), "/../../screenshots/sprites_daughter_smash.png")).unwrap();
+}
