@@ -2890,6 +2890,23 @@ impl World {
                 let j = self.b.create_prismatic_joint(&jd);
                 self.arrows[ai].pinned.push((other, j, 1));
                 self.arrows[ai].armed = true;
+                if self.arrows[ai].harpoon && self.arrows[ai].blade.is_none() {
+                    // Harpoon.createPrisJoint on a new body: flesh (material bits 6) → shapeImpale + 50-particle blood burst at the tip + HarpoonFlesh1/2;
+                    // anything else (solid or static) → HarpoonSolid1/2; each sound plays once per harpoon (the original keeps a handle until it ends)
+                    let tip = self.b.body(body).world_point(Vec2::new(26.25 / PS, 0.0));
+                    let at = [tip.x * PS, tip.y * PS];
+                    if self.b.shape_material(self.b.body(other).shapes[0]) & 6 != 0 {
+                        self.shape_impale(other, true, Some(tip), 0.01);
+                        self.blood.burst(at, Vec2::default(), 5.0, 15.0, 50);
+                        if self.arrows[ai].flesh_sounds & 1 == 0 {
+                            self.arrows[ai].flesh_sounds |= 1;
+                            self.play("HarpoonFlesh", 2, tip);
+                        }
+                    } else if self.arrows[ai].flesh_sounds & 2 == 0 {
+                        self.arrows[ai].flesh_sounds |= 2;
+                        self.play("HarpoonSolid", 2, tip);
+                    }
+                }
                 if self.arrows[ai].blade.is_some() && self.b.shape_material(self.b.body(other).shapes[0]) & 6 != 0 {
                     let tip = self.b.body(body).sweep.c;
                     self.shape_impale(other, true, Some(tip), 0.01);
@@ -4438,12 +4455,18 @@ mod tests {
         let sh = w.b.create_shape(b, &sd);
         w.b.shape_mut(sh).material = 2;
         w.b.set_mass_from_shapes(b);
+        let mut max_blood = 0;
+        let mut sounds = Vec::new();
         for _ in 0..120 {
             w.b.body_mut(b).linear_velocity = Vec2::default();
             w.step();
+            max_blood = max_blood.max(w.blood.live());
+            sounds.extend(w.take_sounds());
         }
         assert_eq!(w.arrows.len(), 1, "exactly one harpoon expected");
         assert!(w.arrows[0].armed && !w.arrows[0].done, "harpoon should be pinned and intact");
+        assert_eq!(max_blood, 50, "impaling flesh bursts 50 blood particles");
+        assert!(sounds.iter().any(|s| s.0.starts_with("HarpoonFlesh")), "{sounds:?}");
     }
 
     #[test]

@@ -3241,3 +3241,36 @@ fn no_spike_blood_stamps_without_blood() {
     assert_eq!(run(false), 1, "control: one impale, one stamp");
     assert_eq!(run(true), 0, "no blood setting: no stamp");
 }
+
+/// HW_SHOT_HARPOON=<png>: a harpoon impales a flesh-material ball; the 50-drop blood burst at the tip is captured right after the hit.
+#[test]
+fn harpoon_blood_shot() {
+    use box2d::{math::Vec2, shape::{Filter, Geometry, ShapeDef}, world::BodyDef};
+    let Some(path) = std::env::var_os("HW_SHOT_HARPOON") else { return };
+    let Some(assets) = Some(std::path::PathBuf::from("../../../assets-99tnk64n1mubaoc8w")).filter(|p| p.join("animate/game/l").exists()) else { return };
+    let level = level::parse("<levelXML><info v='1.99'/><shapes/><specials><sp t='15' p0='1000' p1='500' p2='0' p3='f' p4='f' p5='0' p6='f' p7='f'/></specials></levelXML>").unwrap();
+    let mut w = World::from_level(&level);
+    let b = w.b2_mut().create_body(&BodyDef { position: Vec2::new(1000.0 / 62.5, 200.0 / 62.5), ..Default::default() });
+    let mut sd = ShapeDef::new(Geometry::Circle { local_position: Vec2::default(), radius: 20.0 / 62.5 });
+    sd.density = 50.0;
+    sd.filter = Filter { category_bits: 8, mask_bits: 0xFFFF, group_index: 0 };
+    let sh = w.b2_mut().create_shape(b, &sd);
+    w.b2_mut().shape_mut(sh).material = 2;
+    w.b2_mut().set_mass_from_shapes(b);
+    let mut hit = false;
+    for _ in 0..120 {
+        w.b2_mut().body_mut(b).linear_velocity = Vec2::default();
+        w.step();
+        if w.blood.live() > 0 {
+            hit = true;
+            for _ in 0..4 {
+                w.b2_mut().body_mut(b).linear_velocity = Vec2::default();
+                w.step();
+            }
+            break;
+        }
+    }
+    assert!(hit, "the harpoon never hit");
+    let sp = happywheels_core::sprites::Sprites::open(&assets, 1).unwrap();
+    happywheels_core::render::render_level_scene(&level, &w, 500, 400, [1000.0, 300.0], Some(&sp), None).save(path).unwrap();
+}
