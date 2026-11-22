@@ -13,7 +13,7 @@ cargo run -p happywheels -- --help
 
 The experimental WebGPU preview runs a sample level or a local level XML file.
 It uses placeholder geometry until you select a local copy of the original
-assets folder; it does not yet play sound. The selected files stay in the browser.
+assets folder. Sound uses the original audio sprite from that folder. The selected files stay in the browser.
 Install the `wasm32-unknown-unknown` Rust target and `wasm-bindgen-cli` matching
 the version in Cargo.lock (currently 0.2.130), then run:
 

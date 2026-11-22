@@ -20,6 +20,11 @@ mod browser {
     const SAMPLE: &str = include_str!("../../../tests/levels/sample.xml");
 
     #[wasm_bindgen]
+    pub fn audio_table() -> String {
+        include_str!("../../happywheels-core/data/audiosprite.json").to_string()
+    }
+
+    #[wasm_bindgen]
     pub struct AssetPack {
         files: HashMap<PathBuf, Vec<u8>>,
     }
@@ -164,13 +169,14 @@ mod browser {
             self.keys = [false; 8];
         }
 
-        pub fn frame(&mut self, now_ms: f64) -> Result<(), JsValue> {
+        pub fn frame(&mut self, now_ms: f64) -> Result<String, JsValue> {
             // A hidden tab must not accumulate minutes of simulation to catch up on return.
             let elapsed = self
                 .last_time
                 .map_or(0.0, |last| (now_ms - last).clamp(0.0, 250.0));
             self.last_time = Some(now_ms);
             self.accumulator += elapsed;
+            let mut sounds = Vec::new();
             while self.accumulator >= 1000.0 / 30.0 {
                 let k = self.keys;
                 self.world
@@ -186,7 +192,7 @@ mod browser {
                     ctrl: k[7],
                 });
                 self.world.step();
-                self.world.take_sounds();
+                sounds.extend(self.world.take_sounds());
                 self.accumulator -= 1000.0 / 30.0;
             }
             let (w, h) = (self.canvas.width().max(1), self.canvas.height().max(1));
@@ -209,7 +215,7 @@ mod browser {
             self.renderer.resize(w, h);
             self.renderer.upload(&frame).map_err(js_error)?;
             self.renderer.render();
-            Ok(())
+            serde_json::to_string(&(sounds, &self.world.loops, camera)).map_err(js_error)
         }
     }
 }

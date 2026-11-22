@@ -1058,6 +1058,7 @@ dependencies = [
  "anyhow",
  "happywheels-core",
  "image",
+ "serde_json",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",

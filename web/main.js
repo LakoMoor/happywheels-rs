@@ -1,4 +1,5 @@
-import init, { AssetPack, Game } from './pkg/happywheels_web.js';
+import init, { AssetPack, Game, audio_table } from './pkg/happywheels_web.js';
+import { SpriteAudio } from './audio.mjs';
 
 const canvas = document.querySelector('#game');
 const status = document.querySelector('#status');
@@ -16,6 +17,11 @@ const bindings = new Map([
 try {
   await init();
   const game = await Game.create(canvas);
+  const audioContext = new AudioContext();
+  const audio = new SpriteAudio(audioContext, JSON.parse(audio_table()));
+  const resumeAudio = () => { if (audioContext.state === 'suspended') audioContext.resume().catch(console.error); };
+  window.addEventListener('pointerdown', resumeAudio);
+  window.addEventListener('keydown', resumeAudio);
   status.textContent = 'Running sample level.';
   const held = new Set();
   const updateKey = (event, down) => {
@@ -30,6 +36,8 @@ try {
   window.addEventListener('keyup', event => updateKey(event, false));
   window.addEventListener('blur', () => { held.clear(); game.clear_keys(); });
   document.querySelector('#assets').addEventListener('change', async event => {
+    const audioFile = [...event.target.files].find(file => file.name === 'audiosprite.big.mp3')
+      || [...event.target.files].find(file => file.name === 'audiosprite.big.ogg');
     const files = [...event.target.files].map(file => {
       const parts = file.webkitRelativePath.split('/');
       const start = parts.indexOf('animate');
@@ -44,7 +52,18 @@ try {
     try {
       for (const {file, path} of files) pack.add(path, new Uint8Array(await file.arrayBuffer()));
       game.set_assets(pack);
-      status.textContent = `Loaded ${files.length} local atlas files.`;
+      if (audioFile) {
+        try {
+          await audio.load(await audioFile.arrayBuffer());
+          status.textContent = `Loaded ${files.length} local atlas files and sound.`;
+        } catch (error) {
+          status.textContent = `Artwork loaded; sound could not be decoded: ${error}`;
+        }
+      } else {
+        audio.clear();
+        audio.buffer = null;
+        status.textContent = `Loaded ${files.length} local atlas files; audio sprite not found.`;
+      }
     } catch (error) {
       status.textContent = `Could not load artwork: ${error}`;
     }
@@ -54,6 +73,7 @@ try {
     if (!file) return;
     try {
       game.load_level(await file.text(), Number(character.value));
+      audio.clear();
       held.clear();
       status.textContent = `Loaded ${file.name}.`;
     } catch (error) {
@@ -62,7 +82,7 @@ try {
   });
   const draw = time => {
     try {
-      game.frame(time);
+      audio.update(JSON.parse(game.frame(time)));
       requestAnimationFrame(draw);
     } catch (error) {
       status.textContent = `Game stopped: ${error}`;
