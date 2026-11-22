@@ -1306,6 +1306,12 @@ impl World {
                             if let Some(shape) = self.static_shape_fixtures[index].take() { self.b.destroy_shape(shape); }
                             if a[0] == "6" { self.shape_visible[index] = false; }
                         }
+                        Some(7) => {
+                            if let Some(shape) = self.static_shape_fixtures[index] {
+                                let mode = a.get(1).and_then(|s| s.parse::<i32>().ok()).unwrap_or(0);
+                                self.change_shape_collision(shape, mode, true);
+                            }
+                        }
                         _ => {}
                     }
                 } else {
@@ -1424,24 +1430,28 @@ impl World {
             Some(7) => {
                 let mode = param(0) as i32;
                 let fixed = self.b.body(body).mass == 0.0;
-                let modern = self.level_version > 1.84;
                 for shape in self.b.body(body).shapes.clone() {
-                    let mut filter = self.b.c.shapes[shape].shape.filter;
-                    match mode {
-                        2 => { filter.category_bits = if modern && fixed { 24 } else { 8 }; filter.mask_bits = if modern && fixed { 56 } else { 8 }; filter.group_index = 0; }
-                        3 => { filter.category_bits = u16::from(self.level_version < 1.82); filter.mask_bits = filter.category_bits; filter.group_index = if self.level_version < 1.82 { -10 } else { 0 }; }
-                        4 => { filter.category_bits = if modern && fixed { 24 } else { 8 }; filter.mask_bits = u16::MAX; filter.group_index = -321; }
-                        5 => { filter.category_bits = 16; filter.mask_bits = if modern && fixed { 48 } else { 16 }; filter.group_index = if modern && fixed { 0 } else { -322 }; }
-                        6 => { filter.category_bits = if modern { if fixed { 48 } else { 32 } } else { 16 }; filter.mask_bits = if modern { 48 } else { 16 }; filter.group_index = 0; }
-                        7 => { filter.category_bits = 15; filter.mask_bits = 3840; filter.group_index = 0; }
-                        _ => { filter.category_bits = if fixed { 24 } else { 8 }; filter.mask_bits = u16::MAX; if fixed { filter.group_index = -10; } }
-                    }
-                    self.b.shape_mut(shape).is_sensor = mode == 3 && self.level_version < 1.82;
-                    self.b.set_shape_filter(shape, filter);
+                    self.change_shape_collision(shape, mode, fixed);
                 }
             }
             _ => {}
         }
+    }
+
+    fn change_shape_collision(&mut self, shape: ShapeId, mode: i32, fixed: bool) {
+        let modern = self.level_version > 1.84;
+        let mut filter = self.b.c.shapes[shape].shape.filter;
+        match mode {
+            2 => { filter.category_bits = if modern && fixed { 24 } else { 8 }; filter.mask_bits = if modern && fixed { 56 } else { 8 }; filter.group_index = 0; }
+            3 => { filter.category_bits = u16::from(self.level_version < 1.82); filter.mask_bits = filter.category_bits; filter.group_index = if self.level_version < 1.82 { -10 } else { 0 }; }
+            4 => { filter.category_bits = if modern && fixed { 24 } else { 8 }; filter.mask_bits = u16::MAX; filter.group_index = -321; }
+            5 => { filter.category_bits = 16; filter.mask_bits = if modern && fixed { 48 } else { 16 }; filter.group_index = if modern && fixed { 0 } else { -322 }; }
+            6 => { filter.category_bits = if modern { if fixed { 48 } else { 32 } } else { 16 }; filter.mask_bits = if modern { 48 } else { 16 }; filter.group_index = 0; }
+            7 => { filter.category_bits = 15; filter.mask_bits = 3840; filter.group_index = 0; }
+            _ => { filter.category_bits = if fixed { 24 } else { 8 }; filter.mask_bits = u16::MAX; if fixed { filter.group_index = -10; } }
+        }
+        self.b.shape_mut(shape).is_sensor = mode == 3 && self.level_version < 1.82;
+        self.b.set_shape_filter(shape, filter);
     }
 
     /// `activateByTrigger` (triggeredBy 5: another trigger's action starts this one).
@@ -4856,6 +4866,17 @@ mod tests {
         w.click_trigger(1);
         assert!(!w.shape_visible[0]);
         assert!(w.shape_visible[1]);
+    }
+
+    #[test]
+    fn static_collision_change_does_not_affect_neighbor() {
+        let xml = "<levelXML><info v='1.99'/><shapes><sh t='0' p0='500' p1='300' p2='100' p3='20' p4='0' p5='t' p6='f' p7='1' p8='0' p9='-1' p10='100' p11='1'/><sh t='0' p0='700' p1='300' p2='100' p3='20' p4='0' p5='t' p6='f' p7='1' p8='0' p9='-1' p10='100' p11='1'/><sh t='1' p0='500' p1='200' p2='30' p3='30' p4='0' p5='f' p6='f' p7='1' p8='0' p9='-1' p10='100' p11='1' p12='0'/><sh t='1' p0='700' p1='200' p2='30' p3='30' p4='0' p5='f' p6='f' p7='1' p8='0' p9='-1' p10='100' p11='1' p12='0'/></shapes><triggers><t x='0' y='0' w='50' h='50' b='6' t='1' r='1'><sh i='0'><a i='7' p0='3'/></sh></t></triggers></levelXML>";
+        let mut w = World::from_level(&crate::level::parse(xml).unwrap());
+        for _ in 0..60 { w.step(); }
+        w.click_trigger(0);
+        for _ in 0..40 { w.step(); }
+        assert!(w.position_px(2).unwrap()[1] > 320.0);
+        assert!(w.position_px(3).unwrap()[1] < 300.0);
     }
 
     #[test]
