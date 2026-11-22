@@ -159,6 +159,8 @@ struct TriggerState {
     targets: Vec<BodyId>,
     /// Shape targets with their actions `[action index, params…]` (action-trigger type only).
     shape_actions: Vec<(BodyId, Vec<Vec<String>>)>,
+    /// Group actions use a different index ordering from individual shapes.
+    group_actions: Vec<(BodyId, Vec<Vec<String>>)>,
     /// Triggers activated when this one fires (`TargetKind::Trigger` targets).
     trigger_targets: Vec<usize>,
     disabled: bool,
@@ -1251,6 +1253,11 @@ impl World {
                 } else {
                     Vec::new()
                 },
+                group_actions: if t.type_index == 1 {
+                    t.targets.iter().filter(|tg| tg.kind == crate::level::TargetKind::Group)
+                        .filter_map(|tg| Some((*self.group_bodies.get(tg.index)?, tg.actions.clone())))
+                        .collect()
+                } else { Vec::new() },
                 trigger_targets: t.targets.iter().filter(|tg| tg.kind == crate::level::TargetKind::Trigger).map(|tg| tg.index).collect(),
                 disabled: t.start_disabled,
                 done: false,
@@ -1282,6 +1289,17 @@ impl World {
                 self.shape_action(body, a);
             }
         }
+        for (body, actions) in self.triggers[trigger].group_actions.clone() {
+            for mut action in actions {
+                let mapped = action.first().and_then(|s| s.parse::<usize>().ok()).and_then(|index| match index {
+                    0 => Some(0), 2 => Some(4), 3 => Some(1), 4 => Some(2), 5 => Some(5), 6 => Some(6), 7 => Some(7), _ => None,
+                });
+                if let Some(mapped) = mapped {
+                    action[0] = mapped.to_string();
+                    self.shape_action(body, &action);
+                }
+            }
+        }
         if kind == 1 {
             for target in self.triggers[trigger].trigger_targets.clone() {
                 if target != trigger {
@@ -1295,7 +1313,7 @@ impl World {
     /// opacity, apply impulse, delete shape, delete self, change collision). Supports 0, 1, 2, 4, 5, 6, 7;
     /// shapes born on the shared level body cannot yet be made dynamic individually.
     fn shape_action(&mut self, body: BodyId, a: &[String]) {
-        if body == self.level_body {
+        if body == self.level_body || !self.b.c.bodies[body].alive {
             return;
         }
         let param = |k: usize| a.get(1 + k).and_then(|v| v.parse::<f64>().ok()).unwrap_or(0.0);
@@ -4671,6 +4689,19 @@ mod tests {
         w.click_trigger(0);
         let vx = w.b2().body(w.shape_bodies[0].unwrap()).linear_velocity.x;
         assert!((vx - 3.0).abs() < 1e-9, "vx {vx}");
+    }
+
+    #[test]
+    fn group_trigger_uses_group_action_indices() {
+        let xml = "<levelXML><info v='1.99'/><groups><g x='500' y='100' r='0' ox='0' oy='0' s='f' f='f' o='100' im='f' fr='f'><sh t='0' p0='0' p1='0' p2='40' p3='40' p4='0' p5='f' p6='f' p7='1' p8='0' p9='-1' p10='100' p11='1'/></g></groups><triggers><t x='0' y='0' w='50' h='50' b='6' t='1' r='1'><g i='0'><a i='2' p0='3' p1='0' p2='0'/></g></t><t x='100' y='0' w='50' h='50' b='6' t='1' r='1'><g i='0'><a i='3'/></g></t><t x='200' y='0' w='50' h='50' b='6' t='1' r='1'><g i='0'><a i='4'/></g></t></triggers></levelXML>";
+        let mut w = World::from_level(&crate::level::parse(xml).unwrap());
+        let body = w.group_bodies[0];
+        w.click_trigger(0);
+        assert!((w.b.body(body).linear_velocity.x - 3.0).abs() < 1e-9);
+        w.click_trigger(1);
+        assert_eq!(w.b.body(body).mass, 0.0);
+        w.click_trigger(2);
+        assert!(w.b.body(body).mass > 0.0);
     }
 
     #[test]
