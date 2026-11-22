@@ -536,6 +536,9 @@ pub struct World {
     frame: u32,
     /// Body per level shape (None for art / unsupported shapes; the level body for immovable ones).
     pub shape_bodies: Vec<Option<BodyId>>,
+    /// Visibility and last sprite pose after a trigger removes a shape body.
+    pub shape_visible: Vec<bool>,
+    pub shape_frozen_pose: Vec<Option<([f32; 2], f32)>>,
     pub group_bodies: Vec<BodyId>,
     /// Body per level special (None for specials not modelled yet / non-interactive artwork).
     pub special_bodies: Vec<Option<BodyId>>,
@@ -612,6 +615,8 @@ impl World {
             events: Vec::new(),
             frame: 0,
             shape_bodies: Vec::new(),
+            shape_visible: vec![true; level.shapes.len()],
+            shape_frozen_pose: vec![None; level.shapes.len()],
             group_bodies: Vec::new(),
             special_bodies: Vec::new(),
             special_parts: Vec::new(),
@@ -1357,7 +1362,18 @@ impl World {
                     }
                 }
             }
-            Some(5 | 6) => self.b.destroy_body(body),
+            Some(5 | 6) => {
+                let remove_sprite = a.first().is_some_and(|s| s == "6");
+                let position = self.body_position_px(body);
+                let angle = self.body_angle(body);
+                for (i, handle) in self.shape_bodies.iter().enumerate() {
+                    if *handle == Some(body) {
+                        self.shape_visible[i] = !remove_sprite;
+                        self.shape_frozen_pose[i] = position.map(|p| (p, angle));
+                    }
+                }
+                self.b.destroy_body(body);
+            }
             Some(4) => {
                 let bd = self.b.body_mut(body);
                 if bd.mass > 0.0 {
@@ -4746,6 +4762,23 @@ mod tests {
         w.click_trigger(0);
         assert!(w.position_px(0).is_none());
         w.step();
+    }
+
+    #[test]
+    fn deleting_shape_body_preserves_art_but_delete_self_hides_it() {
+        let xml = "<levelXML><info v='1.99'/><shapes><sh t='0' p0='500' p1='100' p2='40' p3='40' p4='0' p5='f' p6='f' p7='1' p8='16711680' p9='-1' p10='100' p11='1'/></shapes><triggers><t x='0' y='0' w='50' h='50' b='6' t='1' r='1'><sh i='0'><a i='ACTION'/></sh></t></triggers></levelXML>";
+        for action in [5, 6] {
+            let level = crate::level::parse(&xml.replace("ACTION", &action.to_string())).unwrap();
+            let mut w = World::from_level(&level);
+            for _ in 0..15 { w.step(); }
+            let pose = w.position_px(0).unwrap();
+            w.click_trigger(0);
+            assert_eq!(w.shape_visible[0], action == 5);
+            assert_eq!(w.shape_frozen_pose[0].unwrap().0, pose);
+            let image = crate::render::render_level_at(&level, &w, 300, 300, pose);
+            let pixel = image.get_pixel(150, 150);
+            assert_eq!(pixel[0] > pixel[1], action == 5);
+        }
     }
 
     #[test]

@@ -38,14 +38,19 @@ pub fn render_level_scene(level: &Level, world: &World, width: u32, height: u32,
     let (cx, cy) = (camera[0], camera[1]);
     let to_screen = |x: f32, y: f32| ((x - cx) + width as f32 / 2.0, (y - cy) + height as f32 / 2.0);
     for (i, s) in level.shapes.iter().enumerate() {
+        if !world.shape_visible.get(i).copied().unwrap_or(true) { continue; }
         let col = colour(s);
-        let (px, py) = match world.position_px(i) {
+        let frozen = world.shape_frozen_pose.get(i).copied().flatten();
+        let (px, py) = match frozen.map(|p| p.0).or_else(|| world.position_px(i)) {
             Some([x, y]) => (x, y),
             None => (s.num("x").unwrap_or(0.0), s.num("y").unwrap_or(0.0)),
         };
-        let angle = match world.shape_bodies.get(i).copied().flatten().filter(|&h| h != world.level_body()) {
+        let angle = match frozen.map(|p| p.1) {
+            Some(angle) => angle,
+            None => match world.shape_bodies.get(i).copied().flatten().filter(|&h| h != world.level_body()) {
             Some(h) => world.body_angle(h),
             None => s.num("angle").unwrap_or(0.0).to_radians(),
+            },
         };
         draw_shape(&mut img, s, (px, py), angle, col, &to_screen);
     }
