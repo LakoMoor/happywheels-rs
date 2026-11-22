@@ -490,6 +490,7 @@ pub struct World {
     magnet_hits: Vec<(box2d::world::ShapeId, box2d::math::Vec2, f64)>,
     b: B2,
     level_body: BodyId,
+    level_version: f32,
     triggers: Vec<TriggerState>,
     fans: Vec<Fan>,
     boosts: Vec<Boost>,
@@ -572,6 +573,7 @@ impl World {
         let mut w = Self {
             b,
             level_body,
+            level_version: version,
             triggers: Vec::new(),
             fans: Vec::new(),
             boosts: Vec::new(),
@@ -1290,8 +1292,8 @@ impl World {
     }
 
     /// Instant shape actions of the original (list: wake from sleep, set to fixed, set to non fixed, change
-    /// opacity, apply impulse, delete shape, delete self, change collision). Only the physics-only ones that
-    /// need no sprites/filters are done: 0, 1, 4, 5, 6 (5/6 destroy the body; the sprite does not exist yet).
+    /// opacity, apply impulse, delete shape, delete self, change collision). Supports 0, 1, 2, 4, 5, 6;
+    /// shapes born on the shared level body cannot yet be made dynamic individually.
     fn shape_action(&mut self, body: BodyId, a: &[String]) {
         if body == self.level_body {
             return;
@@ -1305,6 +1307,36 @@ impl World {
                     let bd = self.b.body_mut(body);
                     bd.linear_velocity = Vec2::default();
                     bd.angular_velocity = 0.0;
+                    if self.level_version > 1.84 {
+                        for shape in self.b.body(body).shapes.clone() {
+                            let mut filter = self.b.c.shapes[shape].shape.filter;
+                            match filter.category_bits {
+                                8 => { filter.category_bits = 24; if filter.mask_bits == 8 { filter.mask_bits = 56; } else if filter.group_index == 0 { filter.group_index = -10; } }
+                                16 => { filter.mask_bits = 48; filter.group_index = 0; }
+                                32 => filter.category_bits = 48,
+                                _ => {}
+                            }
+                            self.b.set_shape_filter(shape, filter);
+                        }
+                    }
+                }
+            }
+            Some(2) => {
+                if self.b.body(body).mass == 0.0 {
+                    self.b.set_mass_from_shapes(body);
+                    self.b.body_mut(body).wake_up();
+                    if self.level_version > 1.84 {
+                        for shape in self.b.body(body).shapes.clone() {
+                            let mut filter = self.b.c.shapes[shape].shape.filter;
+                            match filter.category_bits {
+                                24 => { filter.category_bits = 8; if filter.mask_bits == 56 { filter.mask_bits = 8; } else if filter.group_index == -10 { filter.group_index = 0; } }
+                                16 => { filter.mask_bits = 16; filter.group_index = -322; }
+                                48 => filter.category_bits = 32,
+                                _ => {}
+                            }
+                            self.b.set_shape_filter(shape, filter);
+                        }
+                    }
                 }
             }
             Some(5 | 6) => self.b.destroy_body(body),
@@ -4620,6 +4652,24 @@ mod tests {
         w.click_trigger(0);
         let vx = w.b2().body(w.shape_bodies[0].unwrap()).linear_velocity.x;
         assert!((vx - 3.0).abs() < 1e-9, "vx {vx}");
+    }
+
+    #[test]
+    fn trigger_unfreezes_previously_fixed_dynamic_shape() {
+        let level = crate::level::parse("<levelXML><info v='1.99'/><shapes><sh t='1' p0='500' p1='100' p2='50' p3='50' p4='0' p5='f' p6='f' p7='1' p8='0' p9='-1' p10='100' p11='2' p12='0'/></shapes><triggers><t x='0' y='0' w='50' h='50' b='6' t='1' r='1'><sh i='0'><a i='1'/></sh></t><t x='100' y='0' w='50' h='50' b='6' t='1' r='1'><sh i='0'><a i='2'/></sh></t></triggers></levelXML>").unwrap();
+        let mut w = World::from_level(&level);
+        let body = w.shape_bodies[0].unwrap();
+        let shape = w.b.body(body).shapes[0];
+        let original_filter = w.b.c.shapes[shape].shape.filter;
+        w.click_trigger(0);
+        assert_eq!(w.b.body(body).mass, 0.0);
+        assert_eq!(w.b.c.shapes[shape].shape.filter.category_bits, 24);
+        w.click_trigger(1);
+        assert!(w.b.body(body).mass > 0.0);
+        assert_eq!(w.b.c.shapes[shape].shape.filter, original_filter);
+        let initial_y = w.position_px(0).unwrap()[1];
+        for _ in 0..10 { w.step(); }
+        assert!(w.position_px(0).unwrap()[1] > initial_y);
     }
 
     #[test]
