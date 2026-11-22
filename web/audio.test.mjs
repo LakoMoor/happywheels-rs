@@ -25,7 +25,7 @@ class Context {
 test('plays and bounds one-shot voices at sprite offsets with distance attenuation', async () => {
   const audio = new SpriteAudio(new Context(), { Hit: [1000, 500] });
   await audio.load(new ArrayBuffer(0));
-  audio.update([[['Hit', [1250, 0]]], [], [0, 0]]);
+  audio.update([[['Hit', [500, 125]]], [], [0, 0]]);
   assert.deepEqual(audio.voices[0].source.started, [0, 1, 0.5]);
   assert.equal(audio.voices[0].volume.gain.value, 0.5);
   audio.play('Hit', [2500, 0], [0, 0]);
@@ -42,11 +42,18 @@ test('starts, adjusts and fades loop sounds, and clears on reload', async () => 
   assert.deepEqual(loop.source.started, [0, 2]);
   assert.equal(loop.source.loopEnd, 3);
   assert.equal(loop.volume.gain.value, 0.5);
-  audio.syncLoops([['Motor', [1250, 0], 0.5]], [0, 0]);
+  audio.syncLoops([['Motor', [500, 0], 0.5]], [0, 0]);
   assert.equal(loop.volume.gain.value, 0.25);
   audio.syncLoops([], [0, 0]);
   assert.deepEqual(loop.source.stopped, [2.2]);
   assert.equal(audio.loops.size, 0);
+});
+
+test('area gain uses separate horizontal and vertical cutoffs', () => {
+  const audio = new SpriteAudio(new Context(), {});
+  assert.equal(audio.gainAt([0, 250], [0, 0]), 0.5);
+  assert.equal(audio.gainAt([0, 500], [0, 0]), 0);
+  assert.equal(audio.gainAt([1000, 0], [0, 0]), 0);
 });
 
 test('victory is audible independent of its position', async () => {

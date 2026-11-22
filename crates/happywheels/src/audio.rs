@@ -12,8 +12,15 @@ use cpal::{FromSample, SampleFormat, SizedSample};
 
 const SPRITES: &str = include_str!("../../happywheels-core/data/audiosprite.json");
 const WAV_RATE: f64 = 24_000.0;
-/// Pixels at which a sound has faded out completely.
-const HEARING_RANGE: f32 = 2500.0;
+/// Original cutoffs are 16 × 8 physics metres (62.5 pixels per metre).
+const SOUND_X_CUTOFF: f32 = 1000.0;
+const SOUND_Y_CUTOFF: f32 = 500.0;
+
+fn area_gain(at: [f32; 2], listener: [f32; 2]) -> f32 {
+    let x = (at[0] - listener[0]).abs() / SOUND_X_CUTOFF;
+    let y = (at[1] - listener[1]).abs() / SOUND_Y_CUTOFF;
+    (1.0 - x.max(y)).clamp(0.0, 1.0)
+}
 const MAX_VOICES: usize = 24;
 
 /// `Victory` is requested with playSoundItem in the original, independently of position.
@@ -21,8 +28,7 @@ fn sound_gain(name: &str, at: [f32; 2], listener: [f32; 2]) -> f32 {
     if name == "Victory" {
         return 1.0;
     }
-    let d = ((at[0] - listener[0]).powi(2) + (at[1] - listener[1]).powi(2)).sqrt();
-    (1.0 - d / HEARING_RANGE).clamp(0.0, 1.0)
+    area_gain(at, listener)
 }
 
 struct Voice {
@@ -153,8 +159,7 @@ impl Audio {
             }
         }
         for (name, at, volume) in wanted {
-            let d = ((at[0] - listener[0]).powi(2) + (at[1] - listener[1]).powi(2)).sqrt();
-            let target = (1.0 - d / HEARING_RANGE).clamp(0.0, 1.0) * volume;
+            let target = area_gain(*at, listener) * volume;
             if let Some(l) = m.loops.iter_mut().find(|l| &l.name == name) {
                 l.target = target;
             } else if let Some(&[start_ms, dur_ms]) = self.table.get(name.as_str()) {
@@ -184,11 +189,19 @@ impl Audio {
 
 #[cfg(test)]
 mod tests {
-    use super::sound_gain;
+    use super::{area_gain, sound_gain};
 
     #[test]
     fn victory_is_global_but_effects_are_positional() {
         assert_eq!(sound_gain("Victory", [5000.0, 0.0], [0.0, 0.0]), 1.0);
         assert_eq!(sound_gain("Bleep3", [5000.0, 0.0], [0.0, 0.0]), 0.0);
+    }
+
+    #[test]
+    fn area_gain_uses_original_rectangular_cutoffs() {
+        assert_eq!(area_gain([500.0, 125.0], [0.0, 0.0]), 0.5);
+        assert_eq!(area_gain([0.0, 250.0], [0.0, 0.0]), 0.5);
+        assert_eq!(area_gain([0.0, 500.0], [0.0, 0.0]), 0.0);
+        assert_eq!(area_gain([1000.0, 0.0], [0.0, 0.0]), 0.0);
     }
 }

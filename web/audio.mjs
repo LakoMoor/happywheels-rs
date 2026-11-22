@@ -22,7 +22,9 @@ export class SpriteAudio {
   }
 
   gainAt(at, listener, volume = 1) {
-    return Math.max(0, Math.min(1, 1 - Math.hypot(at[0] - listener[0], at[1] - listener[1]) / 2500)) * volume;
+    const x = Math.abs(at[0] - listener[0]) / 1000;
+    const y = Math.abs(at[1] - listener[1]) / 500;
+    return Math.max(0, 1 - Math.max(x, y)) * volume;
   }
 
   create(name, gain) {
