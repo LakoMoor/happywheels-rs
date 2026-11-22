@@ -3981,12 +3981,28 @@ impl World {
         &self.food_chunks
     }
 
-    /// Token `checkContact`/`singleAction`: a material-2 shape entering the sensor counts the token and removes its body.
+    /// The original requires both flesh material and a living character owning the contacting shape.
+    fn living_token_owner(&self, body: BodyId) -> bool {
+        let has = |d: &crate::character::Ragdoll| !d.dead && d.bodies.values().any(|&b| b == body);
+        if self.character.as_ref().is_some_and(has) {
+            return true;
+        }
+        let passenger = match self.bike.as_ref() {
+            Some(crate::vehicle::Vehicle::Bike(b)) => b.kid.as_ref().is_some_and(|k| has(&k.doll)),
+            Some(crate::vehicle::Vehicle::Dirt(d)) => d.girl.as_ref().is_some_and(|g| has(&g.doll)),
+            Some(crate::vehicle::Vehicle::Family(f)) => has(&f.daughter.doll) || has(&f.son.doll) || f.dad.kid.as_ref().is_some_and(|k| has(&k.doll)),
+            Some(crate::vehicle::Vehicle::Santa(s)) => has(&s.elf1.doll) || has(&s.elf2.doll),
+            _ => false,
+        };
+        passenger || self.npcs.iter().any(|npc| !npc.smashed[0] && npc.bodies.contains(&body))
+    }
+
+    /// Token `checkContact`/`singleAction`: a living character's flesh entering the sensor collects it.
     fn token_events(&mut self, events: &[box2d::world::ContactEvent]) {
         for ev in events.iter().filter(|e| e.kind == ContactEventKind::Add) {
             let Some(k) = self.tokens.iter().position(|t| t.1 == ev.shape1 || t.1 == ev.shape2) else { continue };
             let other = if self.tokens[k].1 == ev.shape1 { ev.shape2 } else { ev.shape1 };
-            if self.b.shape_material(other) & 2 != 0 {
+            if self.b.shape_material(other) & 2 != 0 && self.living_token_owner(self.b.shape_body(other)) {
                 let (body, _) = self.tokens.remove(k);
                 self.b.destroy_body(body);
                 self.tokens_found += 1;
@@ -4675,6 +4691,23 @@ mod tests {
         assert_eq!(w.tokens_found, 2);
         assert!(w.level_complete);
         assert_eq!(sounds.iter().filter(|s| s.0 == "Victory").count(), 1);
+    }
+
+    #[test]
+    fn token_requires_a_living_character_owner() {
+        let xml = "<levelXML><info v='1.99' x='1000' y='200'/><specials><sp t='31' p0='1000' p1='200' p2='1'/></specials></levelXML>";
+        let level = crate::level::parse(xml).unwrap();
+        let mut w = World::from_level(&level);
+        assert!(w.spawn_character(1, [1000.0, 200.0]));
+        let chest = w.character.as_ref().unwrap().bodies[&crate::character::Part::Chest];
+        assert!(w.living_token_owner(chest));
+        w.character.as_mut().unwrap().dead = true;
+        assert!(!w.living_token_owner(chest));
+        for _ in 0..10 { w.step(); }
+        assert_eq!(w.tokens_found, 0, "dead rider must not collect token");
+        assert!(!w.level_complete);
+        let body = w.b.create_body(&BodyDef::default());
+        assert!(!w.living_token_owner(body), "unrelated bodies are not characters");
     }
 
     #[test]
