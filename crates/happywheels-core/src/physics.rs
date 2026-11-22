@@ -1292,7 +1292,7 @@ impl World {
     }
 
     /// Instant shape actions of the original (list: wake from sleep, set to fixed, set to non fixed, change
-    /// opacity, apply impulse, delete shape, delete self, change collision). Supports 0, 1, 2, 4, 5, 6;
+    /// opacity, apply impulse, delete shape, delete self, change collision). Supports 0, 1, 2, 4, 5, 6, 7;
     /// shapes born on the shared level body cannot yet be made dynamic individually.
     fn shape_action(&mut self, body: BodyId, a: &[String]) {
         if body == self.level_body {
@@ -1349,6 +1349,25 @@ impl World {
                     if param(2) != 0.0 {
                         bd.angular_velocity += param(2);
                     }
+                }
+            }
+            Some(7) => {
+                let mode = param(0) as i32;
+                let fixed = self.b.body(body).mass == 0.0;
+                let modern = self.level_version > 1.84;
+                for shape in self.b.body(body).shapes.clone() {
+                    let mut filter = self.b.c.shapes[shape].shape.filter;
+                    match mode {
+                        2 => { filter.category_bits = if modern && fixed { 24 } else { 8 }; filter.mask_bits = if modern && fixed { 56 } else { 8 }; filter.group_index = 0; }
+                        3 => { filter.category_bits = u16::from(self.level_version < 1.82); filter.mask_bits = filter.category_bits; filter.group_index = if self.level_version < 1.82 { -10 } else { 0 }; }
+                        4 => { filter.category_bits = if modern && fixed { 24 } else { 8 }; filter.mask_bits = u16::MAX; filter.group_index = -321; }
+                        5 => { filter.category_bits = 16; filter.mask_bits = if modern && fixed { 48 } else { 16 }; filter.group_index = if modern && fixed { 0 } else { -322 }; }
+                        6 => { filter.category_bits = if modern { if fixed { 48 } else { 32 } } else { 16 }; filter.mask_bits = if modern { 48 } else { 16 }; filter.group_index = 0; }
+                        7 => { filter.category_bits = 15; filter.mask_bits = 3840; filter.group_index = 0; }
+                        _ => { filter.category_bits = if fixed { 24 } else { 8 }; filter.mask_bits = u16::MAX; if fixed { filter.group_index = -10; } }
+                    }
+                    self.b.shape_mut(shape).is_sensor = mode == 3 && self.level_version < 1.82;
+                    self.b.set_shape_filter(shape, filter);
                 }
             }
             _ => {}
@@ -4670,6 +4689,18 @@ mod tests {
         let initial_y = w.position_px(0).unwrap()[1];
         for _ in 0..10 { w.step(); }
         assert!(w.position_px(0).unwrap()[1] > initial_y);
+    }
+
+    #[test]
+    fn trigger_changes_collision_and_refilters_existing_contacts() {
+        let xml = "<levelXML><info v='1.99'/><shapes><sh t='0' p0='500' p1='300' p2='500' p3='20' p4='0' p5='t' p6='f' p7='1' p8='0' p9='-1' p10='100' p11='1'/><sh t='1' p0='500' p1='200' p2='40' p3='40' p4='0' p5='f' p6='f' p7='1' p8='0' p9='-1' p10='100' p11='1' p12='0'/></shapes><triggers><t x='0' y='0' w='50' h='50' b='6' t='1' r='1'><sh i='1'><a i='7' p0='3'/></sh></t></triggers></levelXML>";
+        let level = crate::level::parse(xml).unwrap();
+        let mut w = World::from_level(&level);
+        for _ in 0..60 { w.step(); }
+        assert!(w.position_px(1).unwrap()[1] < 300.0, "ball should rest on the floor");
+        w.click_trigger(0);
+        for _ in 0..30 { w.step(); }
+        assert!(w.position_px(1).unwrap()[1] > 320.0, "ball should fall through after refiltering");
     }
 
     #[test]
