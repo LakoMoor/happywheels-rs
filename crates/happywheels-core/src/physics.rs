@@ -148,6 +148,8 @@ pub struct TriggerEvent {
 /// another trigger (not modelled).
 struct TriggerState {
     sensor: ShapeId,
+    kind: i32,
+    position: [f32; 2],
     by: i32,
     repeat: i32,
     repeat_frames: Option<u32>,
@@ -1229,6 +1231,8 @@ impl World {
                 .collect();
             self.triggers.push(TriggerState {
                 sensor,
+                kind: t.type_index,
+                position: t.pos,
                 by: t.triggered_by,
                 repeat: t.repeat_type,
                 repeat_frames: t.repeat_interval.map(|v| (v * 30.0).floor() as u32),
@@ -1259,20 +1263,28 @@ impl World {
 
     fn fire(&mut self, trigger: usize) {
         self.events.push(TriggerEvent { trigger, frame: self.frame });
+        let kind = self.triggers[trigger].kind;
+        let position = self.triggers[trigger].position;
         let t = &mut self.triggers[trigger];
         if t.repeat == 1 {
             t.listening = false;
             let sensor = t.sensor;
             self.b.destroy_shape(sensor); // singleAction: levelBody.DestroyShape(sensor)
         }
+        if kind == 3 {
+            self.level_complete = true;
+            self.play("Victory", 1, Vec2::new(f64::from(position[0]) / PS, f64::from(position[1]) / PS));
+        }
         for (body, actions) in self.triggers[trigger].shape_actions.clone() {
             for a in &actions {
                 self.shape_action(body, a);
             }
         }
-        for target in self.triggers[trigger].trigger_targets.clone() {
-            if target != trigger {
-                self.activate_by_trigger(target);
+        if kind == 1 {
+            for target in self.triggers[trigger].trigger_targets.clone() {
+                if target != trigger {
+                    self.activate_by_trigger(target);
+                }
             }
         }
     }
@@ -3980,6 +3992,10 @@ impl World {
                 self.tokens_found += 1;
                 let at = self.b.body(body).sweep.c;
                 self.play("Bleep3", 1, at);
+                if self.tokens.is_empty() {
+                    self.level_complete = true;
+                    self.play("Victory", 1, at);
+                }
             }
         }
     }
@@ -4540,7 +4556,7 @@ mod tests {
         // Trigger 0 (mouse click, once) targets trigger 1 (triggered by other triggers, once).
         let level = crate::level::parse(
             "<levelXML><info v='1.99'/><triggers>\
-             <t x='0' y='0' w='50' h='50' a='0' b='6' t='0' r='1' sd='f'><t i='1'/></t>\
+             <t x='0' y='0' w='50' h='50' a='0' b='6' t='1' r='1' sd='f'><t i='1'/></t>\
              <t x='0' y='0' w='50' h='50' a='0' b='5' t='0' r='1' sd='f'/></triggers></levelXML>",
         ).unwrap();
         let mut w = World::from_level(&level);
@@ -4632,6 +4648,33 @@ mod tests {
         let w0 = World::from_level(&level);
         assert_eq!(w0.tokens_found, 0);
         assert_eq!(w0.tokens.len(), 1);
+    }
+
+    #[test]
+    fn victory_trigger_completes_on_activation() {
+        let xml = "<levelXML><info v='1.99'/><triggers><t x='300' y='100' w='100' h='100' a='0' b='6' t='3' r='1' sd='f'/></triggers></levelXML>";
+        let mut w = World::from_level(&crate::level::parse(xml).unwrap());
+        assert!(!w.level_complete);
+        w.click_trigger(0);
+        assert!(w.level_complete);
+        assert_eq!(w.take_sounds().iter().filter(|s| s.0 == "Victory").count(), 1);
+        w.click_trigger(0);
+        assert!(w.take_sounds().is_empty());
+    }
+
+    #[test]
+    fn collecting_last_token_completes_level() {
+        let xml = "<levelXML><info v='1.99' x='1000' y='200'/><specials><sp t='31' p0='1000' p1='200' p2='1'/><sp t='31' p0='1000' p1='260' p2='1'/></specials></levelXML>";
+        let mut w = World::from_level(&crate::level::parse(xml).unwrap());
+        assert!(w.spawn_character(1, [1000.0, 200.0]));
+        let mut sounds = Vec::new();
+        for _ in 0..60 {
+            w.step();
+            sounds.extend(w.take_sounds());
+        }
+        assert_eq!(w.tokens_found, 2);
+        assert!(w.level_complete);
+        assert_eq!(sounds.iter().filter(|s| s.0 == "Victory").count(), 1);
     }
 
     #[test]

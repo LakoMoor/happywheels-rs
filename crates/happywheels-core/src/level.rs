@@ -241,7 +241,7 @@ pub struct Trigger {
     pub size: [f32; 2],
     pub angle: f32,
     pub triggered_by: i32,
-    /// 0 = ?, 1 = action trigger, 2 = sound trigger (per `createXML`).
+    /// 1 = action trigger, 2 = sound trigger, 3 = level victory.
     pub type_index: i32,
     pub repeat_type: i32,
     pub start_disabled: bool,
