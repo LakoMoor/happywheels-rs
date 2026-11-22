@@ -157,6 +157,7 @@ struct TriggerState {
     delay_frames: u32,
     delay: Vec<u32>,
     targets: Vec<BodyId>,
+    target_shapes: Vec<usize>,
     /// Shape targets with their actions `[action index, params…]` (action-trigger type only).
     shape_actions: Vec<(usize, Vec<Vec<String>>)>,
     /// Group actions use a different index ordering from individual shapes.
@@ -1258,6 +1259,7 @@ impl World {
                 delay_frames: (t.delay.unwrap_or(0.0) * 30.0).floor() as u32,
                 delay: Vec::new(),
                 targets,
+                target_shapes: t.targets.iter().filter(|tg| tg.kind == crate::level::TargetKind::Shape).map(|tg| tg.index).collect(),
                 shape_actions: if t.type_index == 1 {
                     t.targets
                         .iter()
@@ -1368,15 +1370,25 @@ impl World {
         self.static_shape_fixtures[index] = None;
         self.shape_bodies[index] = Some(body);
         self.b.set_mass_from_shapes(body);
-        if self.level_version > 1.84 {
+        {
             let mut filter = self.b.c.shapes[fixture].shape.filter;
+            if self.level_version > 1.84 {
             match filter.category_bits {
                 24 => { filter.category_bits = 8; if filter.mask_bits == 56 { filter.mask_bits = 8; } else if filter.group_index == -10 { filter.group_index = 0; } }
                 16 => { filter.mask_bits = 16; filter.group_index = -322; }
                 48 => filter.category_bits = 32,
                 _ => {}
             }
+            } else if filter.group_index == -10 && filter.mask_bits == u16::MAX {
+                filter.group_index = 0;
+                filter.category_bits = 8;
+            }
             self.b.set_shape_filter(fixture, filter);
+        }
+        for trigger in &mut self.triggers {
+            if trigger.target_shapes.contains(&index) {
+                trigger.targets.push(body);
+            }
         }
     }
 
@@ -4925,6 +4937,19 @@ mod tests {
         for _ in 0..10 { w.step(); }
         assert!(w.position_px(0).unwrap()[1] > 200.0);
         assert!(w.position_px(1).unwrap()[1] > 200.0);
+    }
+
+    #[test]
+    fn unfixed_static_shape_updates_target_trigger_and_legacy_filter() {
+        let xml = "<levelXML><info v='1.80'/><shapes><sh t='1' p0='500' p1='100' p2='40' p3='40' p4='0' p5='t' p6='f' p7='1' p8='0' p9='-1' p10='100' p11='1' p12='0'/></shapes><triggers><t x='0' y='0' w='50' h='50' b='6' t='1' r='1'><sh i='0'><a i='2'/></sh></t><t x='500' y='200' w='100' h='50' b='4' t='0' r='1'><sh i='0'/></t></triggers></levelXML>";
+        let mut w = World::from_level(&crate::level::parse(xml).unwrap());
+        w.click_trigger(0);
+        let body = w.shape_bodies[0].unwrap();
+        let shape = w.b.body(body).shapes[0];
+        let filter = w.b.c.shapes[shape].shape.filter;
+        assert_eq!((filter.category_bits, filter.group_index), (8, 0));
+        for _ in 0..90 { w.step(); }
+        assert!(w.events.iter().any(|e| e.trigger == 1), "new body must activate target-only trigger");
     }
 
     #[test]
