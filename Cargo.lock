@@ -1052,6 +1052,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "happywheels-web"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "happywheels-core",
+ "image",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
+ "wgpu",
+]
+
+[[package]]
 name = "hashbrown"
 version = "0.16.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

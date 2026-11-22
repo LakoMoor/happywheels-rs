@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Happy Wheels Rust — browser preview</title>
+  <style>
+    body { margin: 0; background: #242424; color: white; font: 16px system-ui, sans-serif; }
+    main { max-width: 1000px; margin: auto; padding: 1rem; }
+    canvas { display: block; width: 100%; aspect-ratio: 16 / 9; background: #111; }
+    .controls { display: flex; flex-wrap: wrap; align-items: center; gap: 1rem; margin: 1rem 0; }
+    #status { min-height: 1.5em; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Happy Wheels Rust — browser preview</h1>
+    <canvas id="game" width="960" height="540"></canvas>
+    <div class="controls">
+      <label>Load level XML <input id="level" type="file" accept=".xml,.txt,text/xml"></label>
+      <label>Character <select id="character"></select></label>
+    </div>
+    <p>Arrow keys move; Space, Z, Shift and Control perform actions. The sample level is included. This preview does not yet load artwork or play sound.</p>
+    <p id="status" role="status">Starting WebGPU…</p>
+  </main>
+  <script type="module" src="./main.js"></script>
+</body>
+</html>

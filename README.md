@@ -9,6 +9,23 @@ cargo test
 cargo run -p happywheels -- --help
 ```
 
+## Browser preview
+
+The experimental WebGPU preview runs a sample level or a local level XML file.
+It currently uses placeholder geometry and has no sound or original artwork.
+Install the `wasm32-unknown-unknown` Rust target and `wasm-bindgen-cli` matching
+the version in Cargo.lock (currently 0.2.130), then run:
+
+```sh
+sh web/build.sh
+python3 -m http.server --directory web 8000
+```
+
+Open `http://localhost:8000` in a browser with WebGPU enabled. Arrow keys,
+Space, Z, Shift and Control control the rider. Select a character before opening
+a level XML file. This preview does not yet provide the original menu or asset
+loading.
+
 Original game assets are **not** included; point the app at your own copy of the assets. See [docs/PORT.md](docs/PORT.md) for status.
 
 ![bike](docs/screenshots/sprites_bike.png)

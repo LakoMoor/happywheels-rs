@@ -999,6 +999,7 @@ impl World {
             24 => Some(("ToiletHit", 2, 4.0, 11)),
             26 => Some(("TrashCanHit", 2, 4.0, 20)),
             11 => Some(("MeteorImpact", 1, 2.0, 0)),
+            18 => Some(("GlassImpact", 2, 4.0, 0)),
             _ => None,
         };
         if let Some((name, variants, threshold, lock_frames)) = hit {
@@ -3711,6 +3712,7 @@ impl World {
             let src = self.b.body(body).clone();
             let mut impact = src.local_point(hit.position);
             self.glasses[k].done = true;
+            self.hit_sounds.retain(|h| h.body != body);
             let (hx, hy) = self.glasses[k].half;
             let (l, r, tp, bt) = (-hx, hx, -hy, hy);
             let mut sides: [Option<[(f64, f64); 3]>; 4] = [Some([(l, tp), (0.0, tp), (r, tp)]), Some([(r, tp), (r, 0.0), (r, bt)]), Some([(r, bt), (0.0, bt), (l, bt)]), Some([(l, bt), (l, 0.0), (l, tp)])];
@@ -4803,6 +4805,25 @@ mod tests {
         assert!((4..=8).contains(&n), "2 triangles per intact side (6 when the impact is on an edge, 8 mid-pane), got {n}");
         assert!(w.glass_pieces().all(|(b, _)| w.b.c.bodies[b].alive));
         assert!(w.blood.sprites.iter().any(|p| matches!(p.kind, crate::blood::ShardKind::Food(5))));
+    }
+
+    #[test]
+    fn glass_impact_sound_and_listener_lifetime() {
+        let xml = "<levelXML><info v='1.99'/><shapes><sh t='0' p0='1000' p1='450' p2='3000' p3='50' p4='0' p5='t' p6='f' p7='1' p8='0' p9='-1' p10='100' p11='1'/></shapes><specials><sp t='18' p0='900' p1='380' p2='100' p3='20' p4='0' p5='f' p6='10000' p7='t'/><sp t='18' p0='1200' p1='380' p2='100' p3='20' p4='0' p5='f' p6='10' p7='t'/></specials></levelXML>";
+        let mut w = World::from_level(&crate::level::parse(xml).unwrap());
+        let (intact, broken) = (w.special_bodies[0].unwrap(), w.special_bodies[1].unwrap());
+        w.b.body_mut(intact).linear_velocity = Vec2::new(0.0, 10.0);
+        w.b.body_mut(broken).linear_velocity = Vec2::new(0.0, 60.0);
+        let mut sounds = Vec::new();
+        for _ in 0..30 {
+            w.step();
+            sounds.extend(w.take_sounds());
+        }
+        assert!(w.b.body(intact).alive);
+        assert!(!w.b.body(broken).alive);
+        assert!(sounds.iter().any(|s| s.0.starts_with("GlassImpact")));
+        assert!(w.hit_sounds.iter().any(|h| h.body == intact && h.name == "GlassImpact"));
+        assert!(w.hit_sounds.iter().all(|h| h.body != broken));
     }
 
     /// Static check: every literal sound name handed to `play("Name", n, …)` (n variants → Name1..Name_n) exists in the audiosprite table.
