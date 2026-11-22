@@ -1,5 +1,6 @@
 import init, { AssetPack, Game, audio_table } from './pkg/happywheels_web.js';
 import { SpriteAudio } from './audio.mjs';
+import { GameInput } from './input.mjs';
 
 const canvas = document.querySelector('#game');
 const status = document.querySelector('#status');
@@ -7,12 +8,6 @@ const character = document.querySelector('#character');
 for (let n = 1; n <= 11; n++) {
   character.add(new Option(`Character ${n}`, String(n), n === 3, n === 3));
 }
-
-const bindings = new Map([
-  ['ArrowLeft', 0], ['ArrowRight', 1], ['ArrowUp', 2], ['ArrowDown', 3],
-  ['Space', 4], ['KeyZ', 5], ['ShiftLeft', 6], ['ShiftRight', 6],
-  ['ControlLeft', 7], ['ControlRight', 7],
-]);
 
 try {
   await init();
@@ -23,19 +18,20 @@ try {
   window.addEventListener('pointerdown', resumeAudio);
   window.addEventListener('keydown', resumeAudio);
   status.textContent = 'Running sample level.';
-  const held = new Set();
+  const input = new GameInput(game);
   let victoryShown = false;
   const updateKey = (event, down) => {
-    const index = bindings.get(event.code);
-    if (index === undefined) return;
-    if (event.target instanceof HTMLInputElement || event.target instanceof HTMLSelectElement) return;
-    event.preventDefault();
-    if (down) held.add(event.code); else held.delete(event.code);
-    game.key(index, [...held].some(code => bindings.get(code) === index));
+    const target = event.target;
+    const editing = target instanceof HTMLElement && (target.isContentEditable || target.closest('input, select, textarea, button'));
+    if (input.key(event.code, down, Boolean(editing))) event.preventDefault();
   };
   window.addEventListener('keydown', event => updateKey(event, true));
   window.addEventListener('keyup', event => updateKey(event, false));
-  window.addEventListener('blur', () => { held.clear(); game.clear_keys(); });
+  window.addEventListener('blur', () => input.clear());
+  document.addEventListener('visibilitychange', () => { if (document.hidden) input.clear(); });
+  document.addEventListener('focusin', event => {
+    if (event.target instanceof HTMLElement && (event.target.isContentEditable || event.target.closest('input, select, textarea, button'))) input.clear();
+  });
   document.querySelector('#assets').addEventListener('change', async event => {
     const audioFile = [...event.target.files].find(file => file.name === 'audiosprite.big.mp3')
       || [...event.target.files].find(file => file.name === 'audiosprite.big.ogg');
@@ -76,7 +72,7 @@ try {
       game.load_level(await file.text(), Number(character.value));
       audio.clear();
       victoryShown = false;
-      held.clear();
+      input.clear();
       status.textContent = `Loaded ${file.name}.`;
     } catch (error) {
       status.textContent = `Could not load level: ${error}`;
