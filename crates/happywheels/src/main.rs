@@ -515,10 +515,11 @@ impl ApplicationHandler for App {
             }
             let sounds = sim.world.take_sounds();
             if let Some(audio) = &self.audio {
+                let listener = sim.camera();
                 for (name, at) in sounds {
-                    audio.play(&name, at, sim.level.info.start);
+                    audio.play(&name, at, listener);
                 }
-                audio.set_loops(&sim.world.loops, sim.level.info.start);
+                audio.set_loops(&sim.world.loops, listener);
             }
             sim.next_step += std::time::Duration::from_secs_f64(happywheels_core::physics::TIME_STEP);
             if sim.next_step < now {

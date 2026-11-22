@@ -42,7 +42,8 @@ export class SpriteAudio {
   }
 
   play(name, at, listener) {
-    const gain = this.gainAt(at, listener);
+    // Victory uses playSoundItem in the original, not a positional sound instance.
+    const gain = name === 'Victory' ? 1 : this.gainAt(at, listener);
     if (gain <= 0) return;
     const voice = this.create(name, gain);
     if (!voice) return;

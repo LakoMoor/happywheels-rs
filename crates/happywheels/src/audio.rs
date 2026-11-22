@@ -16,6 +16,15 @@ const WAV_RATE: f64 = 24_000.0;
 const HEARING_RANGE: f32 = 2500.0;
 const MAX_VOICES: usize = 24;
 
+/// `Victory` is requested with playSoundItem in the original, independently of position.
+fn sound_gain(name: &str, at: [f32; 2], listener: [f32; 2]) -> f32 {
+    if name == "Victory" {
+        return 1.0;
+    }
+    let d = ((at[0] - listener[0]).powi(2) + (at[1] - listener[1]).powi(2)).sqrt();
+    (1.0 - d / HEARING_RANGE).clamp(0.0, 1.0)
+}
+
 struct Voice {
     end: usize,
     /// Fractional read position in source samples.
@@ -159,8 +168,7 @@ impl Audio {
     /// Plays sprite `name` heard from `listener` (px) while the sound sits at `at` (px).
     pub fn play(&self, name: &str, at: [f32; 2], listener: [f32; 2]) {
         let Some(&[start_ms, dur_ms]) = self.table.get(name) else { return };
-        let d = ((at[0] - listener[0]).powi(2) + (at[1] - listener[1]).powi(2)).sqrt();
-        let gain = (1.0 - d / HEARING_RANGE).clamp(0.0, 1.0);
+        let gain = sound_gain(name, at, listener);
         if gain <= 0.0 {
             return;
         }
@@ -171,5 +179,16 @@ impl Audio {
         let start = (start_ms * WAV_RATE / 1000.0) as usize;
         let end = (((start_ms + dur_ms) * WAV_RATE / 1000.0) as usize).min(m.samples.len());
         m.voices.push(Voice { end, at: start as f64, gain });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::sound_gain;
+
+    #[test]
+    fn victory_is_global_but_effects_are_positional() {
+        assert_eq!(sound_gain("Victory", [5000.0, 0.0], [0.0, 0.0]), 1.0);
+        assert_eq!(sound_gain("Bleep3", [5000.0, 0.0], [0.0, 0.0]), 0.0);
     }
 }

@@ -48,3 +48,12 @@ test('starts, adjusts and fades loop sounds, and clears on reload', async () => 
   assert.deepEqual(loop.source.stopped, [2.2]);
   assert.equal(audio.loops.size, 0);
 });
+
+test('victory is audible independent of its position', async () => {
+  const audio = new SpriteAudio(new Context(), { Victory: [1000, 500], Hit: [2000, 500] });
+  await audio.load(new ArrayBuffer(0));
+  audio.play('Victory', [5000, 0], [0, 0]);
+  audio.play('Hit', [5000, 0], [0, 0]);
+  assert.equal(audio.voices.length, 1);
+  assert.equal(audio.voices[0].volume.gain.value, 1);
+});
