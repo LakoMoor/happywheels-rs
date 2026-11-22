@@ -3,13 +3,50 @@ mod renderer;
 
 #[cfg(target_arch = "wasm32")]
 mod browser {
-    use happywheels_core::{character::Part, level::Level, physics::World, render, vehicle::Keys};
+    use happywheels_core::{
+        character::Part,
+        level::Level,
+        physics::World,
+        render,
+        sprites::{SpriteAssets, Sprites},
+        vehicle::Keys,
+    };
+    use std::{collections::HashMap, path::PathBuf};
     use wasm_bindgen::prelude::*;
     use web_sys::HtmlCanvasElement;
 
     use crate::renderer::Renderer;
 
     const SAMPLE: &str = include_str!("../../../tests/levels/sample.xml");
+
+    #[wasm_bindgen]
+    pub struct AssetPack {
+        files: HashMap<PathBuf, Vec<u8>>,
+    }
+
+    #[wasm_bindgen]
+    impl AssetPack {
+        #[wasm_bindgen(constructor)]
+        pub fn new() -> Self {
+            Self {
+                files: HashMap::new(),
+            }
+        }
+
+        pub fn add(&mut self, path: &str, bytes: &[u8]) -> Result<(), JsValue> {
+            // Only normalized relative atlas paths are accepted.
+            let path = std::path::Path::new(path);
+            if !path.starts_with("animate")
+                || path
+                    .components()
+                    .any(|part| !matches!(part, std::path::Component::Normal(_)))
+            {
+                return Err(JsValue::from_str("Invalid asset path"));
+            }
+            self.files.insert(path.to_path_buf(), bytes.to_vec());
+            Ok(())
+        }
+    }
 
     #[wasm_bindgen]
     pub struct Game {
@@ -20,6 +57,10 @@ mod browser {
         keys: [bool; 8],
         last_time: Option<f64>,
         accumulator: f64,
+        character: usize,
+        assets: Option<SpriteAssets>,
+        sprites: Option<Sprites>,
+        backdrop: Option<Sprites>,
     }
 
     fn world_for(level: &Level, character: usize) -> World {
@@ -56,7 +97,32 @@ mod browser {
                 keys: [false; 8],
                 last_time: None,
                 accumulator: 0.0,
+                character: 3,
+                assets: None,
+                sprites: None,
+                backdrop: None,
             })
+        }
+
+        /// Load locally selected original atlas files without uploading them anywhere.
+        pub fn set_assets(&mut self, pack: AssetPack) -> Result<(), JsValue> {
+            let assets = SpriteAssets::memory(pack.files);
+            let mut sprites =
+                Sprites::open_from(&assets, self.character as u32).ok_or_else(|| {
+                    JsValue::from_str(
+                        "The selected folder does not contain the current character's atlas",
+                    )
+                })?;
+            sprites.bind_vehicle_rider(&self.world, self.level.info.start);
+            let backdrop = match self.level.info.background {
+                1 => Sprites::open_backdrop_from(&assets),
+                2 => Sprites::open_city_backdrop_from(&assets),
+                _ => None,
+            };
+            self.assets = Some(assets);
+            self.sprites = Some(sprites);
+            self.backdrop = backdrop;
+            Ok(())
         }
 
         /// Replace the current level only after it parses successfully.
@@ -68,6 +134,20 @@ mod browser {
             let world = world_for(&level, character);
             self.level = level;
             self.world = world;
+            self.character = character;
+            self.sprites = self.assets.as_ref().and_then(|assets| {
+                let mut sprites = Sprites::open_from(assets, character as u32)?;
+                sprites.bind_vehicle_rider(&self.world, self.level.info.start);
+                Some(sprites)
+            });
+            self.backdrop =
+                self.assets
+                    .as_ref()
+                    .and_then(|assets| match self.level.info.background {
+                        1 => Sprites::open_backdrop_from(assets),
+                        2 => Sprites::open_city_backdrop_from(assets),
+                        _ => None,
+                    });
             self.keys = [false; 8];
             self.accumulator = 0.0;
             self.last_time = None;
@@ -117,7 +197,15 @@ mod browser {
                 .and_then(|d| d.bodies.get(&Part::Chest))
                 .and_then(|&b| self.world.body_position_px(b))
                 .unwrap_or(self.level.info.start);
-            let frame = render::render_level_at(&self.level, &self.world, w, h, camera);
+            let frame = render::render_level_scene(
+                &self.level,
+                &self.world,
+                w,
+                h,
+                camera,
+                self.sprites.as_ref(),
+                self.backdrop.as_ref(),
+            );
             self.renderer.resize(w, h);
             self.renderer.upload(&frame).map_err(js_error)?;
             self.renderer.render();

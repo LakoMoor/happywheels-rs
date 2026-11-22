@@ -19,8 +19,9 @@
     <div class="controls">
       <label>Load level XML <input id="level" type="file" accept=".xml,.txt,text/xml"></label>
       <label>Character <select id="character"></select></label>
+      <label>Original assets folder <input id="assets" type="file" webkitdirectory multiple></label>
     </div>
-    <p>Arrow keys move; Space, Z, Shift and Control perform actions. The sample level is included. This preview does not yet load artwork or play sound.</p>
+    <p>Arrow keys move; Space, Z, Shift and Control perform actions. Choose your original assets folder to display artwork; files stay in your browser. Sound is not yet supported.</p>
     <p id="status" role="status">Starting WebGPU…</p>
   </main>
   <script type="module" src="./main.js"></script>

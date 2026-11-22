@@ -93,6 +93,35 @@ fn body_matrix(world: &World, h: BodyId) -> M {
     local(f64::from(x), f64::from(y), f64::from(world.body_angle(h)), 1.0, 1.0)
 }
 
+/// Asset files shared by desktop filesystem loading and browser-provided files.
+#[derive(Clone)]
+pub enum SpriteAssets {
+    Directory(PathBuf),
+    Memory(std::rc::Rc<HashMap<PathBuf, Vec<u8>>>),
+}
+
+impl SpriteAssets {
+    pub fn memory(files: HashMap<PathBuf, Vec<u8>>) -> Self {
+        Self::Memory(std::rc::Rc::new(files))
+    }
+
+    fn root(&self) -> &Path {
+        match self { Self::Directory(path) => path, Self::Memory(_) => Path::new("") }
+    }
+
+    fn read(&self, path: &Path) -> Option<Vec<u8>> {
+        match self { Self::Directory(_) => std::fs::read(path).ok(), Self::Memory(files) => files.get(path).cloned() }
+    }
+
+    fn string(&self, path: &Path) -> Option<String> {
+        String::from_utf8(self.read(path)?).ok()
+    }
+
+    fn image(&self, path: &Path) -> Option<image::DynamicImage> {
+        image::load_from_memory(&self.read(path)?).ok()
+    }
+}
+
 struct Binding {
     /// Index path to the part clip (one entry for top-level parts, more inside nested clips such as `kid`/`girl`).
     path: Vec<usize>,
@@ -115,7 +144,7 @@ pub struct Sprites {
     /// `wound` overlays of the chest / pelvis are drawn only while this is set (see `Ragdoll::part_wound`).
     show_wound: std::cell::Cell<bool>,
     /// Asset root (kept for the lazily opened NPC clips) and those clips (`NPCSprite1..12` as top-level nodes `npc1..12`).
-    assets: std::path::PathBuf,
+    assets: SpriteAssets,
     npc: std::cell::OnceCell<Option<Box<Sprites>>>,
 }
 
@@ -143,6 +172,11 @@ impl Node {
 impl Sprites {
     /// Loads the clip dump and atlas of character `index`. `assets` is the original asset root.
     pub fn open(assets: &Path, index: u32) -> Option<Self> {
+        Self::open_from(&SpriteAssets::Directory(assets.to_path_buf()), index)
+    }
+
+    pub fn open_from(source: &SpriteAssets, index: u32) -> Option<Self> {
+        let assets = source.root();
         let clip: Vec<Node> = serde_json::from_str(match index {
             1 => include_str!("../data/clip-c1.json"),
             2 => include_str!("../data/clip-c2.json"),
@@ -165,7 +199,7 @@ impl Sprites {
         }
         let mut pages = Vec::new();
         for (folder, stem) in folders {
-            let (Ok(json), Ok(img)) = (std::fs::read_to_string(folder.join(format!("{stem}@0.3x.json"))), image::open(folder.join(format!("{stem}@0.3x.png")))) else { continue };
+            let (Some(json), Some(img)) = (source.string(&folder.join(format!("{stem}@0.3x.json"))), source.image(&folder.join(format!("{stem}@0.3x.png")))) else { continue };
             let Ok(atlas) = serde_json::from_str::<AtlasFile>(&json) else { continue };
             pages.push((atlas.frames, img.to_rgba8()));
         }
@@ -175,7 +209,7 @@ impl Sprites {
         // Atlas `game/l` holds the runtime special-element art (spikes, ...).
         for g in ["l", "d", "r", "o", "c", "a", "n", "p", "q"] {
             let game = assets.join(format!("animate/game/{g}"));
-            if let (Ok(json), Ok(img)) = (std::fs::read_to_string(game.join(format!("{g}@0.3x.json"))), image::open(game.join(format!("{g}@0.3x.png")))) {
+            if let (Some(json), Some(img)) = (source.string(&game.join(format!("{g}@0.3x.json"))), source.image(&game.join(format!("{g}@0.3x.png")))) {
                 if let Ok(atlas) = serde_json::from_str::<AtlasFile>(&json) {
                     pages.push((atlas.frames, img.to_rgba8()));
                 }
@@ -193,22 +227,23 @@ impl Sprites {
             let mut tries = vec![(dir.clone(), format!("character{other}"))];
             tries.extend(["a", "b", "c"].map(|sub| (dir.join(sub), sub.to_string())));
             for (folder, stem) in tries {
-                let Ok(json) = std::fs::read_to_string(folder.join(format!("{stem}@0.3x.json"))) else { continue };
+                let Some(json) = source.string(&folder.join(format!("{stem}@0.3x.json"))) else { continue };
                 let Ok(atlas) = serde_json::from_str::<AtlasFile>(&json) else { continue };
                 if !missing.iter().any(|t| atlas.frames.contains_key(t)) {
                     continue;
                 }
-                let Ok(img) = image::open(folder.join(format!("{stem}@0.3x.png"))) else { continue };
+                let Some(img) = source.image(&folder.join(format!("{stem}@0.3x.png"))) else { continue };
                 missing.retain(|t| !atlas.frames.contains_key(t));
                 pages.push((atlas.frames, img.to_rgba8()));
             }
         }
-        Some(Self { clip, pages, bindings: Vec::new(), shift: [0.0, 0.0], city: Vec::new(), hidden: Default::default(), show_wound: Default::default(), assets: assets.to_path_buf(), npc: Default::default() })
+        Some(Self { clip, pages, bindings: Vec::new(), shift: [0.0, 0.0], city: Vec::new(), hidden: Default::default(), show_wound: Default::default(), assets: source.clone(), npc: Default::default() })
     }
 
     /// Clip set of the NPC ragdolls: `NPCSprite1..12` (dumped from the oracle) with the atlas pages that hold their textures (game atlases and the
     /// character atlases).
-    fn open_npc(assets: &Path) -> Option<Self> {
+    fn open_npc(source: &SpriteAssets) -> Option<Self> {
+        let assets = source.root();
         #[derive(Deserialize)]
         struct File {
             k: Vec<Node>,
@@ -250,16 +285,16 @@ impl Sprites {
             if missing.is_empty() {
                 break;
             }
-            let Ok(json) = std::fs::read_to_string(folder.join(format!("{stem}@0.3x.json"))) else { continue };
+            let Some(json) = source.string(&folder.join(format!("{stem}@0.3x.json"))) else { continue };
             let Ok(atlas) = serde_json::from_str::<AtlasFile>(&json) else { continue };
             if !missing.iter().any(|t| atlas.frames.contains_key(t)) {
                 continue;
             }
-            let Ok(img) = image::open(folder.join(format!("{stem}@0.3x.png"))) else { continue };
+            let Some(img) = source.image(&folder.join(format!("{stem}@0.3x.png"))) else { continue };
             missing.retain(|t| !atlas.frames.contains_key(t));
             pages.push((atlas.frames, img.to_rgba8()));
         }
-        Some(Self { clip, pages, bindings: Vec::new(), shift: [0.0, 0.0], city: Vec::new(), hidden: Default::default(), show_wound: Default::default(), assets: assets.to_path_buf(), npc: Default::default() })
+        Some(Self { clip, pages, bindings: Vec::new(), shift: [0.0, 0.0], city: Vec::new(), hidden: Default::default(), show_wound: Default::default(), assets: source.clone(), npc: Default::default() })
     }
 
     /// Draws the NPC of special `sp` (frame 1 of every part, `shape` guides hidden): each part clip sits at its body's centre of mass with the body's
@@ -330,6 +365,11 @@ impl Sprites {
     /// Parallax backdrop of the "green hills" level backdrop (`bg='1'`; clips `green_sky_backdrop`, `green_backdrop3/2/1`, bottom to top). The layers
     /// are plain clip trees drawn with [`draw_backdrop`](Self::draw_backdrop); `assets` is the original asset root.
     pub fn open_backdrop(assets: &Path) -> Option<Self> {
+        Self::open_backdrop_from(&SpriteAssets::Directory(assets.to_path_buf()))
+    }
+
+    pub fn open_backdrop_from(source: &SpriteAssets) -> Option<Self> {
+        let assets = source.root();
         #[derive(Deserialize)]
         struct File {
             k: Vec<Node>,
@@ -348,26 +388,30 @@ impl Sprites {
         for i in 1..=3 {
             let stem = format!("backgrounds_atlas_{i}");
             let folder = assets.join("animate/backgrounds").join(&stem);
-            let (Ok(json), Ok(img)) = (std::fs::read_to_string(folder.join(format!("{stem}@0.3x.json"))), image::open(folder.join(format!("{stem}@0.3x.png")))) else { continue };
+            let (Some(json), Some(img)) = (source.string(&folder.join(format!("{stem}@0.3x.json"))), source.image(&folder.join(format!("{stem}@0.3x.png")))) else { continue };
             let Ok(atlas) = serde_json::from_str::<AtlasFile>(&json) else { continue };
             pages.push((atlas.frames, img.to_rgba8()));
         }
         if pages.is_empty() {
             return None;
         }
-        Some(Self { clip, pages, bindings: Vec::new(), shift: [0.0, 0.0], city: Vec::new(), hidden: Default::default(), show_wound: Default::default(), assets: assets.to_path_buf(), npc: Default::default() })
+        Some(Self { clip, pages, bindings: Vec::new(), shift: [0.0, 0.0], city: Vec::new(), hidden: Default::default(), show_wound: Default::default(), assets: source.clone(), npc: Default::default() })
     }
 
     /// City backdrop (`bg='2'`): `city_bd1` (fixed sky/clouds) below two layers of baked buildings (`backdrop2`: multiplier .25, blur 5;
     /// `backdrop1`: .5, blur 2), as in `createBackDrops` / `MZ` / `Mg` (deobfuscated.js 48633–48690, 49604).
     pub fn open_city_backdrop(assets: &Path) -> Option<Self> {
+        Self::open_city_backdrop_from(&SpriteAssets::Directory(assets.to_path_buf()))
+    }
+
+    pub fn open_city_backdrop_from(source: &SpriteAssets) -> Option<Self> {
         #[derive(Deserialize)]
         struct File {
             k: Vec<Node>,
         }
         let load = |s: &str| serde_json::from_str::<File>(s).ok();
         let (l1, l2, sky) = (load(include_str!("../data/backdrop-city-backdrop1.json"))?, load(include_str!("../data/backdrop-city-backdrop2.json"))?, load(include_str!("../data/backdrop-city-city_bd1.json"))?);
-        let mut s = Self::open_backdrop(assets)?;
+        let mut s = Self::open_backdrop_from(source)?;
         s.clip = vec![Node { n: "layer".into(), x: 0.0, y: 0.0, r: 0.0, sx: 1.0, sy: 1.0, t: None, k: sky.k, alt: HashMap::new() }];
         // (W, k, duplicate offset) per building b1..b4
         let near = [(90.0, 88.0, Some(5000.0)), (140.0, 90.0, Some(5000.0)), (60.0, 102.0, Some(5000.0)), (160.0, 101.0, Some(5000.0))];
