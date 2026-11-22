@@ -540,6 +540,9 @@ pub struct World {
     /// Individual fixtures for shapes attached to the shared static body.
     static_shape_fixtures: Vec<Option<ShapeId>>,
     shape_initial_angle: Vec<f64>,
+    shape_initial_position: Vec<[f64; 2]>,
+    /// Sprite-origin offset in the body's local pixel coordinates.
+    pub shape_render_offset: Vec<[f32; 2]>,
     /// Visibility and last sprite pose after a trigger removes a shape body.
     pub shape_visible: Vec<bool>,
     pub shape_frozen_pose: Vec<Option<([f32; 2], f32)>>,
@@ -623,6 +626,8 @@ impl World {
             shape_bodies: Vec::new(),
             static_shape_fixtures: vec![None; level.shapes.len()],
             shape_initial_angle: level.shapes.iter().map(|s| num(s, "angle").unwrap_or(0.0).to_radians()).collect(),
+            shape_initial_position: level.shapes.iter().map(|s| [num(s, "x").unwrap_or(0.0), num(s, "y").unwrap_or(0.0)]).collect(),
+            shape_render_offset: vec![[0.0, 0.0]; level.shapes.len()],
             shape_visible: vec![true; level.shapes.len()],
             shape_frozen_pose: vec![None; level.shapes.len()],
             group_bodies: Vec::new(),
@@ -1362,6 +1367,11 @@ impl World {
             }
         };
         let mut def = ShapeDef::new(geometry);
+        let original = self.shape_initial_position[index];
+        let dx = original[0] - origin.x * PS;
+        let dy = original[1] - origin.y * PS;
+        let (sin, cos) = angle.sin_cos();
+        self.shape_render_offset[index] = [(cos * dx + sin * dy) as f32, (-sin * dx + cos * dy) as f32];
         def.density = if shape.density > 0.0 { shape.density } else { 1.0 };
         def.filter = shape.filter;
         let body = self.b.create_body(&BodyDef { position: origin, angle, ..Default::default() });
@@ -4937,6 +4947,18 @@ mod tests {
         for _ in 0..10 { w.step(); }
         assert!(w.position_px(0).unwrap()[1] > 200.0);
         assert!(w.position_px(1).unwrap()[1] > 200.0);
+    }
+
+    #[test]
+    fn unfix_asymmetric_polygon_preserves_rendered_pose() {
+        let xml = "<levelXML><info v='1.99'/><shapes><sh t='3' p0='500' p1='200' p2='100' p3='100' p4='30' p5='t' p6='f' p7='1' p8='16711680' p9='-1' p10='100' p11='1'><v f='t' id='1' n='3' v0='0_0' v1='90_0' v2='0_60'/></sh></shapes><triggers><t x='0' y='0' w='50' h='50' b='6' t='1' r='1'><sh i='0'><a i='2'/></sh></t></triggers></levelXML>";
+        let level = crate::level::parse(xml).unwrap();
+        let mut w = World::from_level(&level);
+        let before = crate::render::render_level_at(&level, &w, 300, 300, [500.0, 200.0]);
+        w.click_trigger(0);
+        assert_ne!(w.shape_render_offset[0], [0.0, 0.0]);
+        let after = crate::render::render_level_at(&level, &w, 300, 300, [500.0, 200.0]);
+        assert_eq!(before, after, "sprite must not jump when the physics origin changes");
     }
 
     #[test]

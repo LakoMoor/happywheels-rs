@@ -52,7 +52,9 @@ pub fn render_level_scene(level: &Level, world: &World, width: u32, height: u32,
             None => s.num("angle").unwrap_or(0.0).to_radians(),
             },
         };
-        draw_shape(&mut img, s, (px, py), angle, col, &to_screen);
+        let [ox, oy] = world.shape_render_offset.get(i).copied().unwrap_or([0.0, 0.0]);
+        let (sin, cos) = angle.sin_cos();
+        draw_shape(&mut img, s, (px + ox * cos - oy * sin, py + ox * sin + oy * cos), angle, col, &to_screen);
     }
     // Specials modelled as rigid bodies: draw each shape in grey.
     for (si, h) in world.special_parts.iter().enumerate().flat_map(|(si, v)| v.iter().map(move |h| (si, h))) {
