@@ -158,7 +158,7 @@ struct TriggerState {
     delay: Vec<u32>,
     targets: Vec<BodyId>,
     /// Shape targets with their actions `[action index, params…]` (action-trigger type only).
-    shape_actions: Vec<(BodyId, Vec<Vec<String>>)>,
+    shape_actions: Vec<(usize, Vec<Vec<String>>)>,
     /// Group actions use a different index ordering from individual shapes.
     group_actions: Vec<(BodyId, Vec<Vec<String>>)>,
     /// Triggers activated when this one fires (`TargetKind::Trigger` targets).
@@ -536,6 +536,8 @@ pub struct World {
     frame: u32,
     /// Body per level shape (None for art / unsupported shapes; the level body for immovable ones).
     pub shape_bodies: Vec<Option<BodyId>>,
+    /// Individual fixtures for shapes attached to the shared static body.
+    static_shape_fixtures: Vec<Option<ShapeId>>,
     /// Visibility and last sprite pose after a trigger removes a shape body.
     pub shape_visible: Vec<bool>,
     pub shape_frozen_pose: Vec<Option<([f32; 2], f32)>>,
@@ -617,6 +619,7 @@ impl World {
             events: Vec::new(),
             frame: 0,
             shape_bodies: Vec::new(),
+            static_shape_fixtures: vec![None; level.shapes.len()],
             shape_visible: vec![true; level.shapes.len()],
             shape_frozen_pose: vec![None; level.shapes.len()],
             group_bodies: Vec::new(),
@@ -643,7 +646,7 @@ impl World {
             let Some(g) = geometry_of(s, [x, y], angle) else { continue };
             let mut d = ShapeDef::new(g);
             set_shape_filter(&mut d, s.num("collision").unwrap_or(1.0) as i32, true, version);
-            w.b.create_shape(level_body, &d);
+            w.static_shape_fixtures[i] = Some(w.b.create_shape(level_body, &d));
             handles[i] = Some(level_body);
         }
         // createDynamicShapes
@@ -1257,7 +1260,8 @@ impl World {
                     t.targets
                         .iter()
                         .filter(|tg| tg.kind == crate::level::TargetKind::Shape)
-                        .filter_map(|tg| Some((self.shape_bodies.get(tg.index).copied().flatten()?, tg.actions.clone())))
+                        .filter(|tg| self.shape_bodies.get(tg.index).copied().flatten().is_some())
+                        .map(|tg| (tg.index, tg.actions.clone()))
                         .collect()
                 } else {
                     Vec::new()
@@ -1293,9 +1297,20 @@ impl World {
             self.level_complete = true;
             self.play("Victory", 1, Vec2::new(f64::from(position[0]) / PS, f64::from(position[1]) / PS));
         }
-        for (body, actions) in self.triggers[trigger].shape_actions.clone() {
+        for (index, actions) in self.triggers[trigger].shape_actions.clone() {
             for a in &actions {
-                self.shape_action(body, a);
+                let Some(body) = self.shape_bodies[index] else { continue };
+                if body == self.level_body {
+                    match a.first().and_then(|s| s.parse::<usize>().ok()) {
+                        Some(5 | 6) => {
+                            if let Some(shape) = self.static_shape_fixtures[index].take() { self.b.destroy_shape(shape); }
+                            if a[0] == "6" { self.shape_visible[index] = false; }
+                        }
+                        _ => {}
+                    }
+                } else {
+                    self.shape_action(body, a);
+                }
             }
         }
         for (body, actions) in self.triggers[trigger].group_actions.clone() {
@@ -4827,6 +4842,20 @@ mod tests {
         assert!(w.shape_visible[0]);
         w.click_trigger(1);
         assert!(!w.shape_visible[0]);
+    }
+
+    #[test]
+    fn deleting_static_shape_leaves_neighbor_intact() {
+        let xml = "<levelXML><info v='1.99'/><shapes><sh t='0' p0='500' p1='300' p2='100' p3='20' p4='0' p5='t' p6='f' p7='1' p8='0' p9='-1' p10='100' p11='1'/><sh t='0' p0='700' p1='300' p2='100' p3='20' p4='0' p5='t' p6='f' p7='1' p8='0' p9='-1' p10='100' p11='1'/></shapes><triggers><t x='0' y='0' w='50' h='50' b='6' t='1' r='1'><sh i='0'><a i='5'/></sh></t><t x='100' y='0' w='50' h='50' b='6' t='1' r='1'><sh i='0'><a i='6'/></sh></t></triggers></levelXML>";
+        let mut w = World::from_level(&crate::level::parse(xml).unwrap());
+        let neighbor = w.static_shape_fixtures[1].unwrap();
+        w.click_trigger(0);
+        assert!(w.static_shape_fixtures[0].is_none());
+        assert!(w.b.body(w.level_body).shapes.contains(&neighbor));
+        assert!(w.shape_visible[0]);
+        w.click_trigger(1);
+        assert!(!w.shape_visible[0]);
+        assert!(w.shape_visible[1]);
     }
 
     #[test]
