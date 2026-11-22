@@ -1318,7 +1318,15 @@ impl World {
     /// opacity, apply impulse, delete shape, delete self, change collision). Supports 0, 1, 2, 4, 5, 6, 7;
     /// shapes born on the shared level body cannot yet be made dynamic individually.
     fn shape_action(&mut self, body: BodyId, a: &[String]) {
-        if body == self.level_body || !self.b.c.bodies[body].alive {
+        if body == self.level_body {
+            return;
+        }
+        if !self.b.c.bodies[body].alive {
+            if a.first().is_some_and(|action| action == "6") {
+                for (i, handle) in self.shape_bodies.iter().enumerate() {
+                    if *handle == Some(body) { self.shape_visible[i] = false; }
+                }
+            }
             return;
         }
         let param = |k: usize| a.get(1 + k).and_then(|v| v.parse::<f64>().ok()).unwrap_or(0.0);
@@ -4779,6 +4787,17 @@ mod tests {
             let pixel = image.get_pixel(150, 150);
             assert_eq!(pixel[0] > pixel[1], action == 5);
         }
+    }
+
+    #[test]
+    fn delete_self_after_deleting_physics_hides_remaining_art() {
+        let xml = "<levelXML><info v='1.99'/><shapes><sh t='0' p0='500' p1='100' p2='40' p3='40' p4='0' p5='f' p6='f' p7='1' p8='16711680' p9='-1' p10='100' p11='1'/></shapes><triggers><t x='0' y='0' w='50' h='50' b='6' t='1' r='1'><sh i='0'><a i='5'/></sh></t><t x='100' y='0' w='50' h='50' b='6' t='1' r='1'><sh i='0'><a i='6'/></sh></t></triggers></levelXML>";
+        let level = crate::level::parse(xml).unwrap();
+        let mut w = World::from_level(&level);
+        w.click_trigger(0);
+        assert!(w.shape_visible[0]);
+        w.click_trigger(1);
+        assert!(!w.shape_visible[0]);
     }
 
     #[test]
