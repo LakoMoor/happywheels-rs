@@ -540,6 +540,8 @@ pub struct World {
     pub shape_visible: Vec<bool>,
     pub shape_frozen_pose: Vec<Option<([f32; 2], f32)>>,
     pub group_bodies: Vec<BodyId>,
+    pub group_visible: Vec<bool>,
+    pub group_frozen_pose: Vec<Option<([f32; 2], f32)>>,
     /// Body per level special (None for specials not modelled yet / non-interactive artwork).
     pub special_bodies: Vec<Option<BodyId>>,
     /// All bodies of each special (main body first), for drawing.
@@ -618,6 +620,8 @@ impl World {
             shape_visible: vec![true; level.shapes.len()],
             shape_frozen_pose: vec![None; level.shapes.len()],
             group_bodies: Vec::new(),
+            group_visible: vec![true; level.groups.len()],
+            group_frozen_pose: vec![None; level.groups.len()],
             special_bodies: Vec::new(),
             special_parts: Vec::new(),
             vehicle: None,
@@ -1326,6 +1330,9 @@ impl World {
                 for (i, handle) in self.shape_bodies.iter().enumerate() {
                     if *handle == Some(body) { self.shape_visible[i] = false; }
                 }
+                for (i, &handle) in self.group_bodies.iter().enumerate() {
+                    if handle == body { self.group_visible[i] = false; }
+                }
             }
             return;
         }
@@ -1378,6 +1385,12 @@ impl World {
                     if *handle == Some(body) {
                         self.shape_visible[i] = !remove_sprite;
                         self.shape_frozen_pose[i] = position.map(|p| (p, angle));
+                    }
+                }
+                for (i, &handle) in self.group_bodies.iter().enumerate() {
+                    if handle == body {
+                        self.group_visible[i] = !remove_sprite;
+                        self.group_frozen_pose[i] = position.map(|p| (p, angle));
                     }
                 }
                 self.b.destroy_body(body);
@@ -4726,6 +4739,22 @@ mod tests {
         assert_eq!(w.b.body(body).mass, 0.0);
         w.click_trigger(2);
         assert!(w.b.body(body).mass > 0.0);
+    }
+
+    #[test]
+    fn group_delete_shapes_keeps_art_until_delete_self() {
+        let xml = "<levelXML><info v='1.99'/><groups><g x='500' y='100' r='0' ox='0' oy='0' s='f' f='f' o='100' im='f' fr='f'><sh t='0' p0='0' p1='0' p2='40' p3='40' p4='0' p5='f' p6='f' p7='1' p8='16711680' p9='-1' p10='100' p11='1'/></g></groups><triggers><t x='0' y='0' w='50' h='50' b='6' t='1' r='1'><g i='0'><a i='5'/></g></t><t x='100' y='0' w='50' h='50' b='6' t='1' r='1'><g i='0'><a i='6'/></g></t></triggers></levelXML>";
+        let level = crate::level::parse(xml).unwrap();
+        let mut w = World::from_level(&level);
+        for _ in 0..15 { w.step(); }
+        let pose = w.body_position_px(w.group_bodies[0]).unwrap();
+        w.click_trigger(0);
+        assert_eq!(w.group_frozen_pose[0].unwrap().0, pose);
+        let image = crate::render::render_level_at(&level, &w, 300, 300, pose);
+        assert!(image.get_pixel(150, 150)[0] > image.get_pixel(150, 150)[1]);
+        w.click_trigger(1);
+        let image = crate::render::render_level_at(&level, &w, 300, 300, pose);
+        assert_eq!(image.get_pixel(150, 150)[0], image.get_pixel(150, 150)[1]);
     }
 
     #[test]

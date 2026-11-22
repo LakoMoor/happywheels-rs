@@ -137,9 +137,11 @@ pub fn render_level_scene(level: &Level, world: &World, width: u32, height: u32,
     }
     // Groups: children follow the group body (child coords assumed world-space at start).
     for (gi, g) in level.groups.iter().enumerate() {
+        if !world.group_visible.get(gi).copied().unwrap_or(true) { continue; }
         let Some(&h) = world.group_bodies.get(gi) else { continue };
-        let Some([bx, by]) = world.body_position_px(h) else { continue };
-        let ba = world.body_angle(h);
+        let frozen = world.group_frozen_pose.get(gi).copied().flatten();
+        let Some([bx, by]) = frozen.map(|p| p.0).or_else(|| world.body_position_px(h)) else { continue };
+        let ba = frozen.map_or_else(|| world.body_angle(h), |p| p.1);
         for s in &g.shapes {
             // verified frame: local = (child.x + offset.x, child.y + offset.y), child angle as-is
             let lx = s.props.first().and_then(|v| v.parse::<f32>().ok()).unwrap_or(0.0) + g.offset[0];
