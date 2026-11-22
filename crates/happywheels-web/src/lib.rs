@@ -1,6 +1,22 @@
 #[cfg(target_arch = "wasm32")]
 mod renderer;
 
+#[cfg(any(target_arch = "wasm32", test))]
+fn in_mouse_trigger(point: [f32; 2], position: [f32; 2], size: [f32; 2]) -> bool {
+    (point[0] - position[0]).abs() < size[0].abs() * 0.5
+        && (point[1] - position[1]).abs() < size[1].abs() * 0.5
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn mouse_trigger_hit_area_is_screen_aligned() {
+        assert!(super::in_mouse_trigger([110.0, 110.0], [100.0, 100.0], [40.0, 30.0]));
+        assert!(!super::in_mouse_trigger([121.0, 100.0], [100.0, 100.0], [40.0, 30.0]));
+        assert!(!super::in_mouse_trigger([100.0, 116.0], [100.0, 100.0], [40.0, 30.0]));
+    }
+}
+
 #[cfg(target_arch = "wasm32")]
 mod browser {
     use happywheels_core::{
@@ -170,6 +186,19 @@ mod browser {
 
         pub fn level_complete(&self) -> bool {
             self.world.level_complete
+        }
+
+        /// Mouse triggers are transparent, unrotated rectangles in the original session's 900×500 screen space.
+        pub fn pointer(&mut self, x: f32, y: f32, clicked: bool) {
+            for (i, trigger) in self.level.triggers.iter().enumerate() {
+                if trigger.triggered_by != 6 { continue; }
+                let inside = crate::in_mouse_trigger([x, y], trigger.pos, trigger.size);
+                if clicked && inside {
+                    self.world.click_trigger(i);
+                } else if !inside {
+                    self.world.release_trigger(i);
+                }
+            }
         }
 
         pub fn frame(&mut self, now_ms: f64) -> Result<String, JsValue> {

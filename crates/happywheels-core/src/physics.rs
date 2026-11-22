@@ -1412,7 +1412,7 @@ impl World {
     /// Mouse leaves a repeat-type-3 button: stops the repeating.
     pub fn release_trigger(&mut self, i: usize) {
         if let Some(t) = self.triggers.get_mut(i) {
-            if t.by == 6 {
+            if t.by == 6 && t.repeat == 3 {
                 t.triggering_body = None;
             }
         }

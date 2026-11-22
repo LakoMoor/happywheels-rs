@@ -19,6 +19,13 @@ try {
   window.addEventListener('keydown', resumeAudio);
   status.textContent = 'Running sample level.';
   const input = new GameInput(game);
+  const pointer = (event, clicked) => {
+    const rect = canvas.getBoundingClientRect();
+    if (rect.width && rect.height) game.pointer((event.clientX - rect.left) * 900 / rect.width, (event.clientY - rect.top) * 500 / rect.height, clicked);
+  };
+  canvas.addEventListener('pointerup', event => { if (event.button === 0) pointer(event, true); });
+  canvas.addEventListener('pointermove', event => pointer(event, false));
+  canvas.addEventListener('pointerleave', () => game.pointer(-1e9, -1e9, false));
   let victoryShown = false;
   const updateKey = (event, down) => {
     const target = event.target;
