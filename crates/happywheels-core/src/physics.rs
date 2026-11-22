@@ -538,6 +538,7 @@ pub struct World {
     pub shape_bodies: Vec<Option<BodyId>>,
     /// Individual fixtures for shapes attached to the shared static body.
     static_shape_fixtures: Vec<Option<ShapeId>>,
+    shape_initial_angle: Vec<f64>,
     /// Visibility and last sprite pose after a trigger removes a shape body.
     pub shape_visible: Vec<bool>,
     pub shape_frozen_pose: Vec<Option<([f32; 2], f32)>>,
@@ -620,6 +621,7 @@ impl World {
             frame: 0,
             shape_bodies: Vec::new(),
             static_shape_fixtures: vec![None; level.shapes.len()],
+            shape_initial_angle: level.shapes.iter().map(|s| num(s, "angle").unwrap_or(0.0).to_radians()).collect(),
             shape_visible: vec![true; level.shapes.len()],
             shape_frozen_pose: vec![None; level.shapes.len()],
             group_bodies: Vec::new(),
@@ -1302,6 +1304,7 @@ impl World {
                 let Some(body) = self.shape_bodies[index] else { continue };
                 if body == self.level_body {
                     match a.first().and_then(|s| s.parse::<usize>().ok()) {
+                        Some(2) => self.unfix_static_shape(index),
                         Some(5 | 6) => {
                             if let Some(shape) = self.static_shape_fixtures[index].take() { self.b.destroy_shape(shape); }
                             if a[0] == "6" { self.shape_visible[index] = false; }
@@ -1336,6 +1339,44 @@ impl World {
                     self.activate_by_trigger(target);
                 }
             }
+        }
+    }
+
+    fn unfix_static_shape(&mut self, index: usize) {
+        let Some(old) = self.static_shape_fixtures[index] else { return };
+        let shape = self.b.c.shapes[old].shape.clone();
+        let angle = self.shape_initial_angle[index];
+        let (origin, geometry) = match &shape.kind {
+            B2Kind::Circle(circle) => (circle.local_position, Geometry::Circle { local_position: Vec2::default(), radius: circle.radius }),
+            B2Kind::Polygon { poly, .. } => {
+                let origin = poly.centroid;
+                let (sin, cos) = angle.sin_cos();
+                let verts = poly.vertices.iter().map(|v| {
+                    let x = v.x - origin.x;
+                    let y = v.y - origin.y;
+                    Vec2::new(cos * x + sin * y, -sin * x + cos * y)
+                }).collect();
+                (origin, Geometry::Polygon(verts))
+            }
+        };
+        let mut def = ShapeDef::new(geometry);
+        def.density = if shape.density > 0.0 { shape.density } else { 1.0 };
+        def.filter = shape.filter;
+        let body = self.b.create_body(&BodyDef { position: origin, angle, ..Default::default() });
+        let fixture = self.b.create_shape(body, &def);
+        self.b.destroy_shape(old);
+        self.static_shape_fixtures[index] = None;
+        self.shape_bodies[index] = Some(body);
+        self.b.set_mass_from_shapes(body);
+        if self.level_version > 1.84 {
+            let mut filter = self.b.c.shapes[fixture].shape.filter;
+            match filter.category_bits {
+                24 => { filter.category_bits = 8; if filter.mask_bits == 56 { filter.mask_bits = 8; } else if filter.group_index == -10 { filter.group_index = 0; } }
+                16 => { filter.mask_bits = 16; filter.group_index = -322; }
+                48 => filter.category_bits = 32,
+                _ => {}
+            }
+            self.b.set_shape_filter(fixture, filter);
         }
     }
 
@@ -4866,6 +4907,24 @@ mod tests {
         w.click_trigger(1);
         assert!(!w.shape_visible[0]);
         assert!(w.shape_visible[1]);
+    }
+
+    #[test]
+    fn static_shapes_can_become_dynamic_without_moving_neighbors() {
+        let xml = "<levelXML><info v='1.99'/><shapes><sh t='0' p0='500' p1='200' p2='80' p3='20' p4='30' p5='t' p6='f' p7='1' p8='0' p9='-1' p10='100' p11='1'/><sh t='1' p0='700' p1='200' p2='40' p3='40' p4='0' p5='t' p6='f' p7='1' p8='0' p9='-1' p10='100' p11='1' p12='0'/><sh t='0' p0='900' p1='300' p2='100' p3='20' p4='0' p5='t' p6='f' p7='1' p8='0' p9='-1' p10='100' p11='1'/></shapes><triggers><t x='0' y='0' w='50' h='50' b='6' t='1' r='1'><sh i='0'><a i='2'/></sh><sh i='1'><a i='2'/></sh></t></triggers></levelXML>";
+        let mut w = World::from_level(&crate::level::parse(xml).unwrap());
+        let neighbor = w.static_shape_fixtures[2].unwrap();
+        w.click_trigger(0);
+        for i in 0..2 {
+            let body = w.shape_bodies[i].unwrap();
+            assert_ne!(body, w.level_body);
+            assert!(w.b.body(body).mass > 0.0);
+            assert!((w.position_px(i).unwrap()[1] - 200.0).abs() < 0.01);
+        }
+        assert!(w.b.body(w.level_body).shapes.contains(&neighbor));
+        for _ in 0..10 { w.step(); }
+        assert!(w.position_px(0).unwrap()[1] > 200.0);
+        assert!(w.position_px(1).unwrap()[1] > 200.0);
     }
 
     #[test]
