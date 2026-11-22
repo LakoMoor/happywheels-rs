@@ -1325,7 +1325,11 @@ impl World {
                         _ => {}
                     }
                 } else {
-                    self.shape_action(body, a);
+                    if a.first().is_some_and(|s| s == "1") && self.b.c.bodies[body].alive && self.b.body(body).mass > 0.0 {
+                        self.fix_dynamic_shape(index, body);
+                    } else {
+                        self.shape_action(body, a);
+                    }
                 }
             }
         }
@@ -1379,6 +1383,7 @@ impl World {
         self.b.destroy_shape(old);
         self.static_shape_fixtures[index] = None;
         self.shape_bodies[index] = Some(body);
+        self.shape_frozen_pose[index] = None;
         self.b.set_mass_from_shapes(body);
         {
             let mut filter = self.b.c.shapes[fixture].shape.filter;
@@ -1400,6 +1405,43 @@ impl World {
                 trigger.targets.push(body);
             }
         }
+    }
+
+    /// Individual shape freeze replaces its body with a fixture on the level body in the original.
+    fn fix_dynamic_shape(&mut self, index: usize, body: BodyId) {
+        let Some(&old) = self.b.body(body).shapes.first() else { return };
+        let src = self.b.c.shapes[old].shape.clone();
+        let bd = self.b.body(body);
+        let position = self.body_position_px(body).unwrap_or([0.0, 0.0]);
+        let angle = bd.sweep.a;
+        let geometry = match &src.kind {
+            B2Kind::Circle(c) => Geometry::Circle { local_position: bd.world_point(c.local_position), radius: c.radius },
+            B2Kind::Polygon { poly, .. } => Geometry::Polygon(poly.vertices.iter().map(|&v| bd.world_point(v)).collect()),
+        };
+        let [ox, oy] = self.shape_render_offset[index];
+        let (sin, cos) = angle.sin_cos();
+        self.shape_initial_position[index] = [f64::from(position[0]) + f64::from(ox) * cos - f64::from(oy) * sin, f64::from(position[1]) + f64::from(ox) * sin + f64::from(oy) * cos];
+        self.shape_initial_angle[index] = angle;
+        self.shape_frozen_pose[index] = Some((position, angle as f32));
+        let mut def = ShapeDef::new(geometry);
+        def.density = src.density;
+        def.filter = src.filter;
+        if self.level_version > 1.84 {
+            match def.filter.category_bits {
+                8 => { def.filter.category_bits = 24; if def.filter.mask_bits == 8 { def.filter.mask_bits = 56; } else if def.filter.group_index == 0 { def.filter.group_index = -10; } }
+                16 => { def.filter.mask_bits = 48; def.filter.group_index = 0; }
+                32 => def.filter.category_bits = 48,
+                _ => {}
+            }
+        } else if def.filter.mask_bits == u16::MAX && def.filter.group_index == 0 {
+            def.filter.category_bits = 24;
+            def.filter.group_index = -10;
+        }
+        let fixture = self.b.create_shape(self.level_body, &def);
+        self.b.destroy_body(body);
+        self.static_shape_fixtures[index] = Some(fixture);
+        self.shape_bodies[index] = Some(self.level_body);
+        for trigger in &mut self.triggers { trigger.targets.retain(|&target| target != body); }
     }
 
     /// Instant shape actions of the original (list: wake from sleep, set to fixed, set to non fixed, change
@@ -4853,14 +4895,34 @@ mod tests {
         let shape = w.b.body(body).shapes[0];
         let original_filter = w.b.c.shapes[shape].shape.filter;
         w.click_trigger(0);
-        assert_eq!(w.b.body(body).mass, 0.0);
-        assert_eq!(w.b.c.shapes[shape].shape.filter.category_bits, 24);
+        assert!(!w.b.c.bodies[body].alive);
+        assert_eq!(w.shape_bodies[0], Some(w.level_body));
+        let static_shape = w.static_shape_fixtures[0].unwrap();
+        assert_eq!(w.b.c.shapes[static_shape].shape.filter.category_bits, 24);
         w.click_trigger(1);
-        assert!(w.b.body(body).mass > 0.0);
-        assert_eq!(w.b.c.shapes[shape].shape.filter, original_filter);
+        let new_body = w.shape_bodies[0].unwrap();
+        assert!(w.b.body(new_body).mass > 0.0);
+        let new_shape = w.b.body(new_body).shapes[0];
+        assert_eq!(w.b.c.shapes[new_shape].shape.filter, original_filter);
         let initial_y = w.position_px(0).unwrap()[1];
         for _ in 0..10 { w.step(); }
         assert!(w.position_px(0).unwrap()[1] > initial_y);
+    }
+
+    #[test]
+    fn freezing_and_unfreezing_polygon_keeps_rendered_pose() {
+        let xml = "<levelXML><info v='1.99'/><shapes><sh t='3' p0='500' p1='200' p2='100' p3='100' p4='30' p5='f' p6='f' p7='1' p8='16711680' p9='-1' p10='100' p11='1'><v f='t' id='1' n='3' v0='0_0' v1='90_0' v2='0_60'/></sh></shapes><triggers><t x='0' y='0' w='50' h='50' b='6' t='1' r='1'><sh i='0'><a i='1'/></sh></t><t x='100' y='0' w='50' h='50' b='6' t='1' r='1'><sh i='0'><a i='2'/></sh></t></triggers></levelXML>";
+        let level = crate::level::parse(xml).unwrap();
+        let mut w = World::from_level(&level);
+        for _ in 0..10 { w.step(); }
+        let camera = [500.0, 220.0];
+        let before = crate::render::render_level_at(&level, &w, 300, 300, camera);
+        w.click_trigger(0);
+        let fixed = crate::render::render_level_at(&level, &w, 300, 300, camera);
+        assert_eq!(before, fixed, "freezing should not move the artwork");
+        w.click_trigger(1);
+        let unfixed = crate::render::render_level_at(&level, &w, 300, 300, camera);
+        assert_eq!(fixed, unfixed, "unfreezing should not move the artwork");
     }
 
     #[test]
