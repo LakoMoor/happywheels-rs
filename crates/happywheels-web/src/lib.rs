@@ -190,14 +190,18 @@ mod browser {
 
         /// Mouse triggers are transparent, unrotated rectangles in the original session's 900×500 screen space.
         pub fn pointer(&mut self, x: f32, y: f32, clicked: bool) {
+            let mut topmost = None;
             for (i, trigger) in self.level.triggers.iter().enumerate() {
                 if trigger.triggered_by != 6 { continue; }
                 let inside = crate::in_mouse_trigger([x, y], trigger.pos, trigger.size);
-                if clicked && inside {
-                    self.world.click_trigger(i);
+                if inside && self.world.mouse_trigger_enabled(i) {
+                    topmost = Some(i);
                 } else if !inside {
                     self.world.release_trigger(i);
                 }
+            }
+            if clicked {
+                if let Some(i) = topmost { self.world.click_trigger(i); }
             }
         }
 

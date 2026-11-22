@@ -1382,6 +1382,10 @@ impl World {
     }
 
     /// Mouse click on a trigger button (triggeredBy 6, `mouseUpHandler`).
+    pub fn mouse_trigger_enabled(&self, i: usize) -> bool {
+        self.triggers.get(i).is_some_and(|t| t.by == 6 && !t.disabled && !t.done)
+    }
+
     pub fn click_trigger(&mut self, i: usize) {
         let Some(t) = self.triggers.get(i) else { return };
         if t.by != 6 || t.disabled || t.done {
@@ -4578,9 +4582,30 @@ mod tests {
         let mut w = World::from_level(&level);
         w.step();
         assert!(w.events.is_empty());
+        assert!(w.mouse_trigger_enabled(0));
         w.click_trigger(0);
+        assert!(!w.mouse_trigger_enabled(0));
         w.click_trigger(0); // once only
         assert_eq!(w.events.iter().map(|e| e.trigger).collect::<Vec<_>>(), vec![0, 1]);
+    }
+
+    #[test]
+    fn mouse_repeat_three_stops_on_exit_but_four_keeps_running() {
+        for repeat in [3, 4] {
+            let xml = format!("<levelXML><info v='1.99'/><triggers><t x='100' y='100' w='50' h='50' b='6' t='3' r='{repeat}' i='0.1'/></triggers></levelXML>");
+            let mut w = World::from_level(&crate::level::parse(&xml).unwrap());
+            w.click_trigger(0);
+            for _ in 0..8 { w.step(); }
+            assert!(!w.events.is_empty(), "repeat {repeat} never fired");
+            w.release_trigger(0);
+            let before = w.events.len();
+            for _ in 0..12 { w.step(); }
+            if repeat == 3 {
+                assert_eq!(w.events.len(), before, "repeat 3 continued after exit");
+            } else {
+                assert!(w.events.len() > before, "repeat 4 stopped on exit");
+            }
+        }
     }
 
     #[test]
