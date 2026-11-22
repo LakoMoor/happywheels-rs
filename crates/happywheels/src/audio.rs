@@ -21,6 +21,14 @@ fn area_gain(at: [f32; 2], listener: [f32; 2]) -> f32 {
     let y = (at[1] - listener[1]).abs() / SOUND_Y_CUTOFF;
     (1.0 - x.max(y)).clamp(0.0, 1.0)
 }
+fn area_pan(at: [f32; 2], listener: [f32; 2]) -> f32 {
+    ((at[0] - listener[0]) / SOUND_X_CUTOFF).clamp(-1.0, 1.0)
+}
+
+fn stereo_gains(pan: f32) -> [f32; 2] {
+    let angle = (pan + 1.0) * std::f32::consts::FRAC_PI_4;
+    [angle.cos(), angle.sin()]
+}
 const MAX_VOICES: usize = 24;
 
 /// `Victory` is requested with playSoundItem in the original, independently of position.
@@ -36,6 +44,7 @@ struct Voice {
     /// Fractional read position in source samples.
     at: f64,
     gain: f32,
+    pan: f32,
 }
 
 /// A looping voice (`playAreaSoundLoop`): fades in/out over 0.2 s towards `target`, dropped once silent with target 0.
@@ -46,6 +55,7 @@ struct LoopVoice {
     at: f64,
     gain: f32,
     target: f32,
+    pan: f32,
 }
 
 struct Mixer {
@@ -90,12 +100,17 @@ fn fill<T: SizedSample + FromSample<f32>>(mixer: &Mutex<Mixer>, out: &mut [T], c
     let Ok(mut m) = mixer.lock() else { return };
     let Mixer { samples, voices, loops, step, fade } = &mut *m;
     for frame in out.chunks_mut(channels) {
-        let mut v = 0.0f32;
+        let mut stereo = [0.0f32; 2];
+        let mut mono = 0.0f32;
         for voice in voices.iter_mut() {
             let i = voice.at as usize;
             if i + 1 < voice.end {
                 let f = (voice.at - i as f64) as f32;
-                v += (samples[i] * (1.0 - f) + samples[i + 1] * f) * voice.gain;
+                let v = (samples[i] * (1.0 - f) + samples[i + 1] * f) * voice.gain;
+                let gains = stereo_gains(voice.pan);
+                stereo[0] += v * gains[0];
+                stereo[1] += v * gains[1];
+                mono += v;
                 voice.at += *step;
             } else {
                 voice.at = f64::MAX;
@@ -106,7 +121,11 @@ fn fill<T: SizedSample + FromSample<f32>>(mixer: &Mutex<Mixer>, out: &mut [T], c
                 let i = l.at as usize;
                 let f = (l.at - i as f64) as f32;
                 let j = if i + 1 < l.end { i + 1 } else { l.start };
-                v += (samples[i] * (1.0 - f) + samples[j] * f) * l.gain;
+                let v = (samples[i] * (1.0 - f) + samples[j] * f) * l.gain;
+                let gains = stereo_gains(l.pan);
+                stereo[0] += v * gains[0];
+                stereo[1] += v * gains[1];
+                mono += v;
                 l.at += *step;
                 if l.at >= l.end as f64 {
                     l.at = l.start as f64 + (l.at - l.end as f64);
@@ -118,9 +137,10 @@ fn fill<T: SizedSample + FromSample<f32>>(mixer: &Mutex<Mixer>, out: &mut [T], c
                 l.gain = (l.gain - *fade).max(l.target);
             }
         }
-        let s = T::from_sample(v.clamp(-1.0, 1.0));
-        for c in frame.iter_mut() {
-            *c = s;
+        let count = frame.len();
+        for (i, c) in frame.iter_mut().enumerate() {
+            let v = if count == 1 || i >= 2 { mono } else { stereo[i] };
+            *c = T::from_sample(v.clamp(-1.0, 1.0));
         }
     }
     voices.retain(|v| v.at < v.end as f64);
@@ -160,12 +180,14 @@ impl Audio {
         }
         for (name, at, volume) in wanted {
             let target = area_gain(*at, listener) * volume;
+            let pan = area_pan(*at, listener);
             if let Some(l) = m.loops.iter_mut().find(|l| &l.name == name) {
                 l.target = target;
+                l.pan = pan;
             } else if let Some(&[start_ms, dur_ms]) = self.table.get(name.as_str()) {
                 let start = (start_ms * WAV_RATE / 1000.0) as usize;
                 let end = (((start_ms + dur_ms) * WAV_RATE / 1000.0) as usize).min(m.samples.len());
-                m.loops.push(LoopVoice { name: name.clone(), start, end, at: start as f64, gain: 0.0, target });
+                m.loops.push(LoopVoice { name: name.clone(), start, end, at: start as f64, gain: 0.0, target, pan });
             }
         }
     }
@@ -183,13 +205,15 @@ impl Audio {
         }
         let start = (start_ms * WAV_RATE / 1000.0) as usize;
         let end = (((start_ms + dur_ms) * WAV_RATE / 1000.0) as usize).min(m.samples.len());
-        m.voices.push(Voice { end, at: start as f64, gain });
+        let pan = if name == "Victory" { 0.0 } else { area_pan(at, listener) };
+        m.voices.push(Voice { end, at: start as f64, gain, pan });
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{area_gain, sound_gain};
+    use super::{area_gain, area_pan, fill, sound_gain, Mixer, Voice};
+    use std::sync::Mutex;
 
     #[test]
     fn victory_is_global_but_effects_are_positional() {
@@ -203,5 +227,19 @@ mod tests {
         assert_eq!(area_gain([0.0, 250.0], [0.0, 0.0]), 0.5);
         assert_eq!(area_gain([0.0, 500.0], [0.0, 0.0]), 0.0);
         assert_eq!(area_gain([1000.0, 0.0], [0.0, 0.0]), 0.0);
+    }
+
+    #[test]
+    fn mixer_pans_stereo_and_preserves_mono() {
+        let mixer = |pan| Mutex::new(Mixer { samples: vec![0.5; 3], voices: vec![Voice { end: 3, at: 0.0, gain: 1.0, pan }], loops: vec![], step: 1.0, fade: 0.0 });
+        let mut stereo = [0.0f32; 2];
+        fill(&mixer(-1.0), &mut stereo, 2);
+        assert!((stereo[0] - 0.5).abs() < 1e-6 && stereo[1].abs() < 1e-6);
+        fill(&mixer(1.0), &mut stereo, 2);
+        assert!(stereo[0].abs() < 1e-6 && (stereo[1] - 0.5).abs() < 1e-6);
+        let mut mono = [0.0f32; 1];
+        fill(&mixer(1.0), &mut mono, 1);
+        assert_eq!(mono[0], 0.5);
+        assert_eq!(area_pan([500.0, 0.0], [0.0, 0.0]), 0.5);
     }
 }
