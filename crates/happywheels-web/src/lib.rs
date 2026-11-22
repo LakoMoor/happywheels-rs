@@ -169,6 +169,10 @@ mod browser {
             self.keys = [false; 8];
         }
 
+        pub fn level_complete(&self) -> bool {
+            self.world.level_complete
+        }
+
         pub fn frame(&mut self, now_ms: f64) -> Result<String, JsValue> {
             // A hidden tab must not accumulate minutes of simulation to catch up on return.
             let elapsed = self

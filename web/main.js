@@ -24,6 +24,7 @@ try {
   window.addEventListener('keydown', resumeAudio);
   status.textContent = 'Running sample level.';
   const held = new Set();
+  let victoryShown = false;
   const updateKey = (event, down) => {
     const index = bindings.get(event.code);
     if (index === undefined) return;
@@ -74,6 +75,7 @@ try {
     try {
       game.load_level(await file.text(), Number(character.value));
       audio.clear();
+      victoryShown = false;
       held.clear();
       status.textContent = `Loaded ${file.name}.`;
     } catch (error) {
@@ -83,6 +85,10 @@ try {
   const draw = time => {
     try {
       audio.update(JSON.parse(game.frame(time)));
+      if (!victoryShown && game.level_complete()) {
+        victoryShown = true;
+        status.textContent = 'Level complete!';
+      }
       requestAnimationFrame(draw);
     } catch (error) {
       status.textContent = `Game stopped: ${error}`;

@@ -496,6 +496,9 @@ pub struct World {
     spikes: Vec<Spike>,
     /// Token specials: (body, sensor shape); collected ones are removed.
     tokens: Vec<(BodyId, ShapeId)>,
+    /// Finish platform shape, centre in pixels, and whether its listener was removed.
+    finishes: Vec<(ShapeId, [f64; 2], bool)>,
+    pub level_complete: bool,
     /// FoodItem specials: (body, shape, smash impulse).
     /// (body, shape, smash impulse, food type 0..2)
     foods: Vec<(BodyId, ShapeId, f64, u8)>,
@@ -574,6 +577,8 @@ impl World {
             cannons: Vec::new(),
             spikes: Vec::new(),
             tokens: Vec::new(),
+            finishes: Vec::new(),
+            level_complete: false,
             foods: Vec::new(),
             food_chunks: Vec::new(),
             boomboxes: Vec::new(),
@@ -991,6 +996,10 @@ impl World {
             }
         };
         add(self, body, &sb.shape, sb.density, sb.friction, sb.restitution);
+        if sp.kind == 9 {
+            self.b.c.report_results = true;
+            self.finishes.push((self.b.body(body).shapes[0], [x, y], false));
+        }
         let hit = match sp.kind {
             3 => Some(("IBeamHit", 2, 4.0, 0)),
             4 => Some(("LumberHit", 2, 4.0, 0)),
@@ -1978,6 +1987,7 @@ impl World {
             }
         }
         self.collect_rails(&events);
+        self.finish_events(&events);
         self.handle_events(events.clone());
         self.run_actions();
         self.run_fans();
@@ -2334,6 +2344,27 @@ impl World {
     /// Sounds queued since the last call.
     pub fn take_sounds(&mut self) -> Vec<(String, [f32; 2])> {
         std::mem::take(&mut self.sounds)
+    }
+
+    /// FinishLine.checkResult: any result on the platform checks the living rider's camera focus against its axis-aligned zone.
+    fn finish_events(&mut self, events: &[box2d::world::ContactEvent]) {
+        let Some(character) = self.character.as_ref() else { return };
+        let dead = character.dead;
+        // The chest is the port's current camera focus; some original vehicles use another body.
+        let focus = character.bodies.get(&crate::character::Part::Chest).and_then(|&b| self.body_center_px(b));
+        for i in 0..self.finishes.len() {
+            let (shape, [x, y], done) = self.finishes[i];
+            if done || !events.iter().any(|e| e.kind == ContactEventKind::Result && (e.shape1 == shape || e.shape2 == shape)) {
+                continue;
+            }
+            if dead {
+                self.finishes[i].2 = true;
+            } else if focus.is_some_and(|[fx, fy]| f64::from(fx) > x - 200.0 && f64::from(fx) < x + 200.0 && f64::from(fy) > y - 200.0 && f64::from(fy) < y) {
+                self.finishes[i].2 = true;
+                self.level_complete = true;
+                self.play("Victory", 1, Vec2::new(x / PS, y / PS));
+            }
+        }
     }
 
     fn check_npc_joints(&mut self) {
@@ -5180,6 +5211,29 @@ mod tests {
         assert!((rail_ball - (300.0 - 9.0 - 25.0)).abs() < 4.0, "ball on rail y = {rail_ball}");
         assert!((finish_ball - (300.0 - 20.0 - 25.0)).abs() < 4.0, "ball on finish line y = {finish_ball}");
         assert!(w.body_is_fixed(w.special_bodies[0].unwrap()));
+    }
+
+    #[test]
+    fn finish_line_completes_only_for_living_rider_in_zone() {
+        let level = crate::level::parse("<levelXML><info v='1.99' x='1000' y='200'/><specials><sp t='9' p0='1000' p1='300'/></specials></levelXML>").unwrap();
+        for (start, dead, expected) in [(1000.0, false, true), (1500.0, false, false), (1000.0, true, false)] {
+            let mut w = World::from_level(&level);
+            assert!(w.spawn_character(1, [start, 200.0]));
+            w.character.as_mut().unwrap().dead = dead;
+            // An independent object can contact the finish in the original; the focus position decides victory.
+            let body = w.b.create_body(&BodyDef { position: Vec2::new(1000.0 / PS, 250.0 / PS), ..Default::default() });
+            let mut shape = ShapeDef::new(Geometry::Circle { local_position: Vec2::default(), radius: 10.0 / PS });
+            shape.density = 1.0;
+            w.b.create_shape(body, &shape);
+            w.b.set_mass_from_shapes(body);
+            let mut victories = 0;
+            for _ in 0..30 {
+                w.step();
+                victories += w.take_sounds().iter().filter(|s| s.0 == "Victory").count();
+            }
+            assert_eq!(w.level_complete, expected, "start={start}, dead={dead}");
+            assert_eq!(victories, usize::from(expected));
+        }
     }
 
     #[test]
