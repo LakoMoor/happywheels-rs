@@ -147,10 +147,19 @@ mod browser {
 
         /// Replace the current level only after it parses successfully.
         pub fn load_level(&mut self, xml: &str, character: usize) -> Result<(), JsValue> {
+            let level = happywheels_core::level::parse(xml).map_err(js_error)?;
+            self.replace_level(level, character)
+        }
+
+        /// Recreate the current level and rider, retaining the loaded asset pack.
+        pub fn restart(&mut self, character: usize) -> Result<(), JsValue> {
+            self.replace_level(self.level.clone(), character)
+        }
+
+        fn replace_level(&mut self, level: Level, character: usize) -> Result<(), JsValue> {
             if !(1..=11).contains(&character) {
                 return Err(JsValue::from_str("Character must be between 1 and 11"));
             }
-            let level = happywheels_core::level::parse(xml).map_err(js_error)?;
             let world = world_for(&level, character);
             self.level = level;
             self.world = world;

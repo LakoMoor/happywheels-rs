@@ -85,6 +85,18 @@ try {
       status.textContent = `Could not load level: ${error}`;
     }
   });
+  document.querySelector('#restart').addEventListener('click', () => {
+    try {
+      game.restart(Number(character.value));
+      audio.clear();
+      victoryShown = false;
+      input.clear();
+      status.textContent = 'Level restarted.';
+      canvas.focus();
+    } catch (error) {
+      status.textContent = `Could not restart level: ${error}`;
+    }
+  });
   const draw = time => {
     try {
       audio.update(JSON.parse(game.frame(time)));

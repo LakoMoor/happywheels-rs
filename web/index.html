@@ -15,10 +15,11 @@
 <body>
   <main>
     <h1>Happy Wheels Rust — browser preview</h1>
-    <canvas id="game" width="960" height="540"></canvas>
+    <canvas id="game" width="960" height="540" tabindex="0" aria-label="Game screen"></canvas>
     <div class="controls">
       <label>Load level XML <input id="level" type="file" accept=".xml,.txt,text/xml"></label>
       <label>Character <select id="character"></select></label>
+      <button id="restart" type="button">Restart level</button>
       <label>Original assets folder <input id="assets" type="file" webkitdirectory multiple></label>
     </div>
     <p>Arrow keys move; Space, Z, Shift and Control perform actions. Choose your original assets folder for artwork and sound; files stay in your browser.</p>
