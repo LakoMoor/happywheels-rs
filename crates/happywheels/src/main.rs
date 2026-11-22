@@ -279,8 +279,7 @@ impl Player {
     }
 
     fn camera(&self, level: &happywheels_core::level::Level) -> [f32; 2] {
-        use happywheels_core::character::Part;
-        self.world.character.as_ref().and_then(|d| d.bodies.get(&Part::Chest)).and_then(|&b| self.world.body_position_px(b)).unwrap_or(level.info.start)
+        self.world.camera_focus_px().unwrap_or(level.info.start)
     }
 
     fn step(&mut self) {
@@ -295,13 +294,7 @@ impl Player {
 impl Sim {
     /// Camera centre (px): the rider's chest, or the level start when there is no character.
     fn camera(&self) -> [f32; 2] {
-        use happywheels_core::character::Part;
-        self.world
-            .character
-            .as_ref()
-            .and_then(|d| d.bodies.get(&Part::Chest))
-            .and_then(|&b| self.world.body_position_px(b))
-            .unwrap_or(self.level.info.start)
+        self.world.camera_focus_px().unwrap_or(self.level.info.start)
     }
 }
 
@@ -322,9 +315,8 @@ fn make_sprites(assets: &std::path::Path, character: usize, world: &happywheels_
 
 /// Split screen: the left half shows player 1, the right half player 2 (each at `w/2` wide, own camera).
 fn render_split(level: &happywheels_core::level::Level, world: &happywheels_core::physics::World, sprites: Option<&happywheels_core::sprites::Sprites>, p2: &Player, backdrop: Option<&happywheels_core::sprites::Sprites>, w: u32, h: u32) -> RgbaImage {
-    use happywheels_core::character::Part;
     let (half, h) = ((w / 2).max(1), h.max(1));
-    let cam = world.character.as_ref().and_then(|d| d.bodies.get(&Part::Chest)).and_then(|&b| world.body_position_px(b)).unwrap_or(level.info.start);
+    let cam = world.camera_focus_px().unwrap_or(level.info.start);
     let left = happywheels_core::render::render_level_scene(level, world, half, h, cam, sprites, backdrop);
     let right = happywheels_core::render::render_level_scene(level, &p2.world, half, h, p2.camera(level), p2.sprites.as_ref(), backdrop);
     let mut out = RgbaImage::new(half * 2, h);

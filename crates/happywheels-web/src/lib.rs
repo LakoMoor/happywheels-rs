@@ -4,7 +4,6 @@ mod renderer;
 #[cfg(target_arch = "wasm32")]
 mod browser {
     use happywheels_core::{
-        character::Part,
         level::Level,
         physics::World,
         render,
@@ -200,13 +199,7 @@ mod browser {
                 self.accumulator -= 1000.0 / 30.0;
             }
             let (w, h) = (self.canvas.width().max(1), self.canvas.height().max(1));
-            let camera = self
-                .world
-                .character
-                .as_ref()
-                .and_then(|d| d.bodies.get(&Part::Chest))
-                .and_then(|&b| self.world.body_position_px(b))
-                .unwrap_or(self.level.info.start);
+            let camera = self.world.camera_focus_px().unwrap_or(self.level.info.start);
             let frame = render::render_level_scene(
                 &self.level,
                 &self.world,

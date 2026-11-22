@@ -2346,12 +2346,18 @@ impl World {
         std::mem::take(&mut self.sounds)
     }
 
+    /// Original character cameraFocus follows the chest, then the heart after a chest smash.
+    pub fn camera_focus_px(&self) -> Option<[f32; 2]> {
+        let character = self.character.as_ref()?;
+        let body = character.heart.or_else(|| character.bodies.get(&crate::character::Part::Chest).copied())?;
+        self.body_center_px(body)
+    }
+
     /// FinishLine.checkResult: any result on the platform checks the living rider's camera focus against its axis-aligned zone.
     fn finish_events(&mut self, events: &[box2d::world::ContactEvent]) {
         let Some(character) = self.character.as_ref() else { return };
         let dead = character.dead;
-        // The chest is the port's current camera focus; some original vehicles use another body.
-        let focus = character.bodies.get(&crate::character::Part::Chest).and_then(|&b| self.body_center_px(b));
+        let focus = self.camera_focus_px();
         for i in 0..self.finishes.len() {
             let (shape, [x, y], done) = self.finishes[i];
             if done || !events.iter().any(|e| e.kind == ContactEventKind::Result && (e.shape1 == shape || e.shape2 == shape)) {
@@ -5234,6 +5240,24 @@ mod tests {
             assert_eq!(w.level_complete, expected, "start={start}, dead={dead}");
             assert_eq!(victories, usize::from(expected));
         }
+    }
+
+    #[test]
+    fn camera_follows_heart_after_chest_smash() {
+        let level = crate::level::parse("<levelXML><info v='1.99' x='1000' y='200'/></levelXML>").unwrap();
+        let mut w = World::from_level(&level);
+        assert!(w.spawn_character(1, level.info.start));
+        let mut rider = w.character.take().unwrap();
+        let chest = rider.bodies[&crate::character::Part::Chest];
+        let before = w.body_center_px(chest).unwrap();
+        w.character = Some(rider);
+        assert_eq!(w.camera_focus_px(), Some(before));
+        rider = w.character.take().unwrap();
+        rider.smash_chest(&mut w);
+        let heart = rider.heart.unwrap();
+        w.character = Some(rider);
+        assert_eq!(w.camera_focus_px(), w.body_center_px(heart));
+        assert!(w.camera_focus_px().is_some());
     }
 
     #[test]
