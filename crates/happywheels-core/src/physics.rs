@@ -5821,6 +5821,36 @@ mod tests {
         }
     }
 
+    /// Log against the original `Log` class (oracle `analysis/golden-log-break.js`): floor at y 500, logs at (1000,380) dropped at 40 m/s. The 200×72 log
+    /// splits on the first contact (halves inherit its velocity); the lighter 150×50 one stays whole.
+    #[test]
+    fn log_break_matches_the_original() {
+        let run = |w: f64, h: f64| {
+            let xml = format!("<levelXML><info v='1.99'/><shapes>{FLOOR}</shapes><specials><sp t='4' p0='1000' p1='380' p2='{w}' p3='{h}' p4='0' p5='f' p6='f'/></specials></levelXML>");
+            let mut world = World::from_level(&crate::level::parse(&xml).unwrap());
+            let log = world.special_bodies[0].unwrap();
+            world.b.body_mut(log).linear_velocity = Vec2::new(0.0, 40.0);
+            let mut frames = Vec::new();
+            for _ in 0..40 {
+                world.step();
+                let list: Vec<BodyId> = if world.log_halves().count() > 0 { world.log_halves().map(|p| p.0).collect() } else { vec![log] };
+                frames.push(list.into_iter().map(|b| { let [x, y] = world.body_position_px(b).unwrap(); [f64::from(x), f64::from(y), world.body_angle(b) as f64] }).collect::<Vec<_>>());
+            }
+            frames
+        };
+        let broke = run(200.0, 72.0);
+        assert_eq!(broke[0].len(), 2);
+        for (frame, want) in [(0, [1000.0, 453.494, 0.0]), (39, [1000.018, 339.688, -0.001])] {
+            for g in &broke[frame] {
+                assert!((g[0] - want[0]).abs() < 0.1 && (g[2] - want[2]).abs() < 0.002, "frame {frame}: {g:?}");
+            }
+        }
+        assert!((broke[0][0][1] - 453.494).abs() < 0.01 && (broke[39][0][1] - 339.688).abs() < 0.01 && (broke[39][1][1] - 339.688).abs() < 0.01, "{:?} {:?}", broke[0], broke[39]);
+        let whole = run(150.0, 50.0);
+        assert_eq!(whole[0].len(), 1, "a lighter log does not split");
+        assert!((whole[39][0][1] - 320.399).abs() < 0.01 && (whole[39][0][0] - 1000.023).abs() < 0.1, "{:?}", whole[39]);
+    }
+
     /// An immovable log (a shape of the level body in the original) breaks like a free one: the heavy hitter above 2250 splits it, the halves start at rest.
     #[test]
     fn immovable_log_splits_too() {
