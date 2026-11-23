@@ -20,6 +20,16 @@ try {
   status.textContent = 'Running sample level.';
   const input = new GameInput(game);
   let menuOpen = false;
+  let paused = false;
+  const pauseButton = document.querySelector('#pause');
+  const setPaused = value => {
+    paused = value;
+    game.set_paused(value);
+    input.clear();
+    if (value) audio.clear();
+    pauseButton.textContent = value ? 'Resume' : 'Pause';
+    pauseButton.setAttribute('aria-pressed', String(value));
+  };
   const pointer = (event, clicked) => {
     const rect = canvas.getBoundingClientRect();
     if (!rect.width || !rect.height) return;
@@ -29,6 +39,7 @@ try {
       if (action > 0) {
         character.value = String(action);
         game.restart(action);
+        setPaused(false);
         menuOpen = false;
         audio.clear();
         status.textContent = `Started character ${action}.`;
@@ -48,7 +59,12 @@ try {
   const updateKey = (event, down) => {
     const target = event.target;
     const editing = target instanceof HTMLElement && (target.isContentEditable || target.closest('input, select, textarea, button'));
-    if (input.key(event.code, down, Boolean(editing))) event.preventDefault();
+    if (event.code === 'Escape' && !editing && !menuOpen) {
+      if (down && !event.repeat) { setPaused(!paused); status.textContent = paused ? 'Paused.' : 'Resumed.'; }
+      event.preventDefault();
+      return;
+    }
+    if (input.key(event.code, down, Boolean(editing) || paused || menuOpen)) event.preventDefault();
   };
   window.addEventListener('keydown', event => updateKey(event, true));
   window.addEventListener('keyup', event => updateKey(event, false));
@@ -98,6 +114,7 @@ try {
     if (!file) return;
     try {
       game.load_level(await file.text(), Number(character.value));
+      setPaused(false);
       menuOpen = false;
       audio.clear();
       victoryShown = false;
@@ -110,6 +127,7 @@ try {
   document.querySelector('#restart').addEventListener('click', () => {
     try {
       game.restart(Number(character.value));
+      setPaused(false);
       menuOpen = false;
       audio.clear();
       victoryShown = false;
@@ -119,6 +137,12 @@ try {
     } catch (error) {
       status.textContent = `Could not restart level: ${error}`;
     }
+  });
+  pauseButton.addEventListener('click', () => {
+    if (menuOpen) return;
+    setPaused(!paused);
+    status.textContent = paused ? 'Paused.' : 'Resumed.';
+    canvas.focus();
   });
   document.querySelector('#menu').addEventListener('click', () => {
     input.clear();

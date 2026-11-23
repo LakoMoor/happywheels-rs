@@ -7,6 +7,11 @@ fn in_mouse_trigger(point: [f32; 2], position: [f32; 2], size: [f32; 2]) -> bool
         && (point[1] - position[1]).abs() < size[1].abs() * 0.5
 }
 
+#[cfg(any(target_arch = "wasm32", test))]
+fn elapsed_ms(last: Option<f64>, now: f64, paused: bool) -> f64 {
+    last.map_or(0.0, |previous| if paused { 0.0 } else { (now - previous).clamp(0.0, 250.0) })
+}
+
 #[cfg(test)]
 mod tests {
     #[test]
@@ -14,6 +19,14 @@ mod tests {
         assert!(super::in_mouse_trigger([110.0, 110.0], [100.0, 100.0], [40.0, 30.0]));
         assert!(!super::in_mouse_trigger([121.0, 100.0], [100.0, 100.0], [40.0, 30.0]));
         assert!(!super::in_mouse_trigger([100.0, 116.0], [100.0, 100.0], [40.0, 30.0]));
+    }
+
+    #[test]
+    fn paused_clock_does_not_accumulate_elapsed_time() {
+        assert_eq!(super::elapsed_ms(Some(10.0), 1000.0, true), 0.0);
+        assert_eq!(super::elapsed_ms(None, 1000.0, false), 0.0);
+        assert_eq!(super::elapsed_ms(Some(1000.0), 1016.0, false), 16.0);
+        assert_eq!(super::elapsed_ms(Some(10.0), 1000.0, false), 250.0);
     }
 }
 
@@ -84,6 +97,7 @@ mod browser {
         backdrop: Option<Sprites>,
         menu: Option<Menu>,
         menu_open: bool,
+        paused: bool,
     }
 
     fn world_for(level: &Level, character: usize) -> World {
@@ -126,6 +140,7 @@ mod browser {
                 backdrop: None,
                 menu: None,
                 menu_open: false,
+                paused: false,
             })
         }
 
@@ -207,6 +222,7 @@ mod browser {
             self.accumulator = 0.0;
             self.last_time = None;
             self.menu_open = false;
+            self.paused = false;
             Ok(())
         }
 
@@ -224,8 +240,15 @@ mod browser {
             self.world.level_complete
         }
 
+        pub fn set_paused(&mut self, paused: bool) {
+            self.paused = paused;
+            self.last_time = None;
+            self.keys = [false; 8];
+        }
+
         /// Mouse triggers are transparent, unrotated rectangles in the original session's 900×500 screen space.
         pub fn pointer(&mut self, x: f32, y: f32, clicked: bool) {
+            if self.paused || self.menu_open { return; }
             let mut topmost = None;
             for (i, trigger) in self.level.triggers.iter().enumerate() {
                 if trigger.triggered_by != 6 { continue; }
@@ -252,13 +275,11 @@ mod browser {
                 return Ok("[[],[],[0,0]]".into());
             }
             // A hidden tab must not accumulate minutes of simulation to catch up on return.
-            let elapsed = self
-                .last_time
-                .map_or(0.0, |last| (now_ms - last).clamp(0.0, 250.0));
+            let elapsed = crate::elapsed_ms(self.last_time, now_ms, self.paused);
             self.last_time = Some(now_ms);
             self.accumulator += elapsed;
             let mut sounds = Vec::new();
-            while self.accumulator >= 1000.0 / 30.0 {
+            while !self.paused && self.accumulator >= 1000.0 / 30.0 {
                 let k = self.keys;
                 self.world
                     .drive(f32::from(u8::from(k[1])) - f32::from(u8::from(k[0])));
@@ -290,7 +311,8 @@ mod browser {
             self.renderer.resize(w, h);
             self.renderer.upload(&frame).map_err(js_error)?;
             self.renderer.render();
-            serde_json::to_string(&(sounds, &self.world.loops, camera)).map_err(js_error)
+            let loops = if self.paused { &[][..] } else { &self.world.loops[..] };
+            serde_json::to_string(&(sounds, loops, camera)).map_err(js_error)
         }
     }
 }
