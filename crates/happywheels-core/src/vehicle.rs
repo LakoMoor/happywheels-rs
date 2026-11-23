@@ -3816,6 +3816,7 @@ impl Heli {
                 b.body_mut(body).linear_velocity = v;
                 self.debris.push(body);
                 self.debris_names.push(String::new());
+                world.add_blade_shard(body);
             }
         }
         let b = world.b2_mut();

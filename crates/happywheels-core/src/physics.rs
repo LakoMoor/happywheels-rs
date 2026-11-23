@@ -339,6 +339,20 @@ struct Glass {
 /// Which `b2*Contact` class evaluated a contact: (shape1 is a circle, shape2 is a circle).
 type ContactClass = (bool, bool);
 
+/// Helicopter blade shard (`MN`): a Result above 3·mass from flesh turns it into a pin (solid shape mask 8 + a sensor with mask 4), flesh entering the sensor is
+/// joined with a prismatic joint (`bladeActions`); with no joints left it goes back to colliding normally.
+struct BladeShard {
+    body: BodyId,
+    shape: ShapeId,
+    sensor: Option<ShapeId>,
+    stab_impulse: f64,
+    pinned: Vec<(BodyId, usize, u32)>,
+    queue_add: Vec<(BodyId, Vec2, Option<ContactClass>)>,
+    queue_remove: Vec<BodyId>,
+    previous: Option<BodyId>,
+    sounds: u32,
+}
+
 struct Shard {
     body: BodyId,
     shape: ShapeId,
@@ -597,6 +611,7 @@ pub struct World {
     logs: Vec<Log>,
     toilets: Vec<Toilet>,
     glasses: Vec<Glass>,
+    blade_shards: Vec<BladeShard>,
     cans: Vec<TrashCan>,
     hit_sounds: Vec<HitSound>,
     /// Bodies born from specials (trash, hollow cans…) that only the renderer cares about.
@@ -690,6 +705,7 @@ impl World {
             logs: Vec::new(),
             toilets: Vec::new(),
             glasses: Vec::new(),
+            blade_shards: Vec::new(),
             cans: Vec::new(),
             hit_sounds: Vec::new(),
             loose: Vec::new(),
@@ -2422,6 +2438,7 @@ impl World {
         self.boombox_events(&events);
         self.spring_box_events(&events);
         self.paddle_events(&events);
+        self.blade_shard_events(&events);
         self.plain_mine_events(&events);
         self.chair_events(&events);
         self.glass_events(&events);
@@ -4392,6 +4409,108 @@ impl World {
 
     /// `Glass.checkContact` / `shatter`: the contact point (in the pane's frame) is clamped to an edge when within 5 cm of it (that side then has no
     /// triangles); every remaining side contributes two triangles (impact point, side point k, side point k+1) as bodies at the pane's centre.
+    /// Registers a helicopter blade shard body (`new MN(body, rightSide, heli)` in `bladeSmash`).
+    pub fn add_blade_shard(&mut self, body: BodyId) {
+        let shape = self.b.body(body).shapes[0];
+        let stab_impulse = self.b.body(body).mass * 3.0;
+        self.b.c.report_results = true;
+        self.blade_shards.push(BladeShard { body, shape, sensor: None, stab_impulse, pinned: Vec::new(), queue_add: Vec::new(), queue_remove: Vec::new(), previous: None, sounds: 0 });
+    }
+
+    fn blade_shard_events(&mut self, events: &[box2d::world::ContactEvent]) {
+        let class = |w: &Self, e: &box2d::world::ContactEvent| (matches!(w.b.c.shapes[e.shape1].shape.kind, box2d::shape::ShapeKind::Circle(_)), matches!(w.b.c.shapes[e.shape2].shape.kind, box2d::shape::ShapeKind::Circle(_)));
+        let last_eval_normal = |w: &Self, c: ContactClass| events.iter().rev().find(|e| e.kind != ContactEventKind::Result && class(w, e) == c).map(|e| e.normal);
+        for k in 0..self.blade_shards.len() {
+            let (b, shape) = (self.blade_shards[k].body, self.blade_shards[k].shape);
+            if !self.b.c.bodies[b].alive {
+                continue;
+            }
+            if self.blade_shards[k].sensor.is_none() {
+                // `checkContact`: only while the plain solid shape is listening
+                let stab = events.iter().any(|e| {
+                    e.kind == ContactEventKind::Result && (e.shape1 == shape || e.shape2 == shape) && e.normal_impulse > self.blade_shards[k].stab_impulse && {
+                        let other = if e.shape1 == shape { e.shape2 } else { e.shape1 };
+                        self.b.shape_material(other) & 2 != 0 && !self.b.c.shapes[other].shape.is_sensor
+                    }
+                });
+                if stab {
+                    let verts = match &self.b.c.shapes[shape].shape.kind {
+                        box2d::shape::ShapeKind::Polygon { poly, .. } => poly.vertices.clone(),
+                        _ => continue,
+                    };
+                    self.b.shape_mut(shape).filter.mask_bits = 8;
+                    self.b.refilter(shape);
+                    let mut sd = ShapeDef::new(Geometry::Polygon(verts));
+                    sd.is_sensor = true;
+                    sd.filter = Filter { category_bits: 8, mask_bits: 4, group_index: 0 };
+                    let sensor = self.b.create_shape(b, &sd);
+                    self.blade_shards[k].sensor = Some(sensor);
+                }
+                continue;
+            }
+            let Some(sensor) = self.blade_shards[k].sensor else { continue };
+            for e in events.iter().filter(|e| e.shape1 == sensor || e.shape2 == sensor) {
+                let (other, flip) = if e.shape1 == sensor { (e.shape2, 1.0) } else { (e.shape1, -1.0) };
+                if self.b.shape_material(other) & 2 == 0 {
+                    continue;
+                }
+                let ob = self.b.c.shapes[other].body;
+                let aliased_class = (flip > 0.0).then(|| class(self, e));
+                match e.kind {
+                    ContactEventKind::Add => self.blade_shards[k].queue_add.push((ob, Vec2::new(e.normal.x * flip, e.normal.y * flip), aliased_class)),
+                    ContactEventKind::Remove if self.blade_shards[k].pinned.iter().any(|p| p.0 == ob) || self.blade_shards[k].queue_add.iter().any(|p| p.0 == ob) => self.blade_shards[k].queue_remove.push(ob),
+                    _ => {}
+                }
+            }
+            for (other, normal, aliased) in std::mem::take(&mut self.blade_shards[k].queue_add) {
+                if !self.b.c.bodies[other].alive {
+                    continue;
+                }
+                let normal = aliased.and_then(|c| last_eval_normal(self, c)).unwrap_or(normal);
+                if let Some(p) = self.blade_shards[k].pinned.iter_mut().find(|p| p.0 == other) {
+                    p.2 += 1;
+                    continue;
+                }
+                let at = self.b.body(other).sweep.c;
+                self.shape_impale(other, true, None, 0.0);
+                let mut jd = PrismaticJointDef::initialize(self.b.body(b), b, self.b.body(other), other, at, normal);
+                jd.collide_connected = true;
+                jd.enable_motor = true;
+                jd.max_motor_force = 30.0;
+                jd.motor_speed = 0.0;
+                let j = self.b.create_prismatic_joint(&jd);
+                self.blade_shards[k].pinned.push((other, j, 1));
+                if self.blade_shards[k].previous != Some(other) {
+                    self.blade_shards[k].previous = Some(other);
+                    if !self.blood.off {
+                        self.blood.burst([at.x * PS, at.y * PS], Vec2::default(), 5.0, 15.0, 50);
+                    }
+                    if self.blade_shards[k].sounds < 1 {
+                        self.blade_shards[k].sounds += 1;
+                        self.play("ImpaleSpikes", 3, at);
+                    }
+                }
+            }
+            for other in std::mem::take(&mut self.blade_shards[k].queue_remove) {
+                if let Some(i) = self.blade_shards[k].pinned.iter().position(|p| p.0 == other) {
+                    self.blade_shards[k].pinned[i].2 -= 1;
+                    if self.blade_shards[k].pinned[i].2 == 0 {
+                        let (_, j, _) = self.blade_shards[k].pinned.remove(i);
+                        self.b.destroy_joint(j);
+                    }
+                }
+            }
+            if self.blade_shards[k].pinned.is_empty() && self.blade_shards[k].queue_add.is_empty() {
+                // `checkZeroJoints`: back to a plain solid shard
+                self.b.shape_mut(shape).filter = Filter { category_bits: 8, mask_bits: 0xFFFF, group_index: 0 };
+                self.b.refilter(shape);
+                self.b.destroy_shape(sensor);
+                self.blade_shards[k].sensor = None;
+                self.blade_shards[k].sounds = 0;
+            }
+        }
+    }
+
     fn glass_events(&mut self, events: &[box2d::world::ContactEvent]) {
         // `b2*Contact.Evaluate` fills one static `s_evalCP` per contact class (circle/circle, polygon/circle, polygon/polygon)
         let class = |w: &Self, e: &box2d::world::ContactEvent| (matches!(w.b.c.shapes[e.shape1].shape.kind, box2d::shape::ShapeKind::Circle(_)), matches!(w.b.c.shapes[e.shape2].shape.kind, box2d::shape::ShapeKind::Circle(_)));
@@ -6651,6 +6770,43 @@ mod tests {
         let (pinned, sounds) = run("t");
         assert!(pinned > 0 && sounds, "stabbing glass pins flesh ({pinned}, {sounds})");
         assert_eq!(run("f").0, 0, "non-stabbing glass does not");
+    }
+
+    /// Helicopter blade shards stab like `MN` (behaviour from the source; NOT compared with the oracle): a flesh body (category 4) landing hard on one is pinned with a
+    /// prismatic joint and impale sound; without flesh material nothing is pinned.
+    #[test]
+    fn heli_blade_shards_pin_flesh() {
+        let run = |material: i32| {
+            let xml = format!("<levelXML><info v='1.99'/><shapes>{FLOOR}</shapes></levelXML>");
+            let mut w = World::from_level(&crate::level::parse(&xml).unwrap());
+            let shard = {
+                let b = w.b2_mut();
+                let id = b.create_body(&BodyDef { position: Vec2::new(1000.0 / PS, 483.7 / PS), ..Default::default() });
+                let mut sd = ShapeDef::oriented_box(1.0, 0.1, Vec2::default(), 0.0);
+                sd.density = 3.0;
+                sd.filter = Filter { category_bits: 260, mask_bits: 0xFFFF, group_index: 0 };
+                b.create_shape(id, &sd);
+                b.set_mass_from_shapes(id);
+                id
+            };
+            w.add_blade_shard(shard);
+            let flesh = w.b.create_body(&BodyDef { position: Vec2::new(1000.0 / PS, 430.0 / PS), ..Default::default() });
+            let mut sd = ShapeDef::oriented_box(0.3, 0.15, Vec2::default(), 0.0);
+            sd.density = 7.0;
+            sd.filter = Filter { category_bits: 4, mask_bits: 0xFFFF, group_index: 0 };
+            let s = w.b.create_shape(flesh, &sd);
+            w.b.shape_mut(s).material = material;
+            w.b.set_mass_from_shapes(flesh);
+            w.b.body_mut(flesh).linear_velocity = Vec2::new(0.0, 14.0);
+            let mut pinned = 0;
+            for _ in 0..40 {
+                w.step();
+                pinned = pinned.max(w.blade_shards.iter().map(|s| s.pinned.len()).sum::<usize>());
+            }
+            pinned
+        };
+        assert!(run(2) > 0, "flesh is pinned by a blade shard");
+        assert_eq!(run(1), 0, "non-flesh is not");
     }
 
     /// Glass pieces are shards too: a hard hit on a piece (Result above 10·its mass) destroys it with a burst of glass.
