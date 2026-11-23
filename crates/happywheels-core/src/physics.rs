@@ -2184,9 +2184,11 @@ impl World {
         self.thrust_jets();
         self.run_cannons();
         self.run_mines();
-        if let Some(crate::vehicle::Vehicle::Santa(mut s)) = self.bike.take() {
-            s.elf_steps(self);
-            self.bike = Some(crate::vehicle::Vehicle::Santa(s));
+        if matches!(self.bike, Some(crate::vehicle::Vehicle::Santa(_))) {
+            if let Some(crate::vehicle::Vehicle::Santa(mut s)) = self.bike.take() {
+                s.elf_steps(self);
+                self.bike = Some(crate::vehicle::Vehicle::Santa(s));
+            }
         }
         self.update_loops();
         self.run_arrow_guns();
