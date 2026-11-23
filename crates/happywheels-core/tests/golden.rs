@@ -3489,3 +3489,30 @@ fn pogo_release_sound_has_a_volume() {
     }
     assert!(heard.iter().any(|s| s.0 == "PogoRelease" && s.2 > 0.0 && s.2 <= 1.0), "no PogoRelease with a volume in {heard:?}");
 }
+
+/// The chair's jet loop: `JetBlast` is requested while the jet is firing (space), `MagnetBuzz` / `ExplorerRoll*` have their own owners (behaviour only).
+#[test]
+fn chair_jet_requests_the_jetblast_loop() {
+    use happywheels_core::vehicle::{Keys, Vehicle};
+    let level = level::parse(
+        "<levelXML><info v='1.99' x='1000' y='250'/><shapes>\
+         <sh t='0' p0='1000' p1='425' p2='3000' p3='50' p4='0' p5='t' p6='f' p7='1' p8='0' p9='-1' p10='100' p11='1'/></shapes></levelXML>",
+    )
+    .unwrap();
+    let n = (1..=11).find(|&n| {
+        let mut w = World::from_level(&level);
+        w.spawn_bike(n, [1000.0, 250.0]) && matches!(w.bike, Some(Vehicle::Chair(_)))
+    });
+    let mut w = World::from_level(&level);
+    assert!(w.spawn_bike(n.expect("a chair character"), [1000.0, 250.0]));
+    for _ in 0..20 {
+        w.step();
+    }
+    assert!(!w.loops.iter().any(|l| l.0 == "JetBlast"));
+    w.set_rider_keys(Keys { space: true, ..Default::default() });
+    w.step();
+    assert!(w.loops.iter().any(|l| l.0 == "JetBlast"), "loops: {:?}", w.loops.iter().map(|l| &l.0).collect::<Vec<_>>());
+    w.set_rider_keys(Keys::default());
+    w.step();
+    assert!(!w.loops.iter().any(|l| l.0 == "JetBlast"), "stops with the key");
+}

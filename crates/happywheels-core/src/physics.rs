@@ -2646,13 +2646,13 @@ impl World {
 
     /// `NPCharacter.checkJoints`: reaction force² above the limb's limit, or a stretched anchor, breaks the joint and clears the limb's collision group.
     /// Wheel-spin loop of the car-like vehicles: with a wheel contact, |ω| of `spin` above `t[0]` → BikeLoop3, `t[1]` → BikeLoop2, `t[2]` → BikeLoop1.
-    fn wheel_loop(&mut self, touching: &[BodyId], spin: BodyId, t: [f64; 3]) {
+    fn wheel_loop(&mut self, touching: &[BodyId], spin: BodyId, t: [f64; 3], names: [&str; 3]) {
         if touching.iter().map(|&w| self.b.touching_non_sensor_contacts(w)).sum::<usize>() == 0 {
             return;
         }
         let wheel = self.b.body(spin);
         let w = wheel.angular_velocity.abs();
-        let name = if w > t[0] { "BikeLoop3" } else if w > t[1] { "BikeLoop2" } else if w > t[2] { "BikeLoop1" } else { return };
+        let name = if w > t[0] { names[0] } else if w > t[1] { names[1] } else if w > t[2] { names[2] } else { return };
         let at = [(wheel.sweep.c.x * PS) as f32, (wheel.sweep.c.y * PS) as f32];
         self.loops.push((name.to_string(), at, 1.0, spin));
     }
@@ -2705,7 +2705,24 @@ impl World {
             }
         }
         if let Some((touching, spin, t)) = wheels {
-            self.wheel_loop(&touching, spin, t);
+            self.wheel_loop(&touching, spin, t, ["BikeLoop3", "BikeLoop2", "BikeLoop1"]);
+        }
+        // rail grinder: `ExplorerRoll3/2/1` above |ω| 50 / 25 / 5 while a wheel touches something; chair jet: `JetBlast` while firing; heli magnet: `MagnetBuzz`
+        if let Some(Vehicle::Grinder(g)) = self.bike.as_ref() {
+            let (wheels, back) = (vec![g.back_wheel, g.front_wheel], g.back_wheel);
+            self.wheel_loop(&wheels, back, [50.0, 25.0, 5.0], ["ExplorerRoll3", "ExplorerRoll2", "ExplorerRoll1"]);
+        }
+        if let Some(Vehicle::Chair(c)) = self.bike.as_ref() {
+            if c.firing {
+                let w = self.b.body(c.big_wheel).sweep.c;
+                self.loops.push(("JetBlast".to_string(), [(w.x * PS) as f32, (w.y * PS) as f32], 1.0, c.big_wheel));
+            }
+        }
+        if let Some(Vehicle::Heli(h)) = self.bike.as_ref() {
+            if h.magnetized {
+                let m = self.b.body(h.magnet).sweep.c;
+                self.loops.push(("MagnetBuzz".to_string(), [(m.x * PS) as f32, (m.y * PS) as f32], 1.0, h.magnet));
+            }
         }
         match self.bike.as_ref() {
             Some(crate::vehicle::Vehicle::Heli(h)) if !h.copter_smashed => {
