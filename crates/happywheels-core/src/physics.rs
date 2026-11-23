@@ -1739,7 +1739,18 @@ impl World {
     }
 
     fn handle_events(&mut self, events: Vec<box2d::world::ContactEvent>) {
-        let vehicle = self.vehicle;
+        let central = |d: &crate::character::Ragdoll| d.heart.or_else(|| d.bodies.get(&crate::character::Part::Chest).copied());
+        let main_body = self.character.as_ref().and_then(central);
+        let mut character_bodies = Vec::new();
+        if let Some(body) = main_body { character_bodies.push(body); }
+        match self.bike.as_ref() {
+            Some(crate::vehicle::Vehicle::Bike(b)) => { if let Some(k) = &b.kid { character_bodies.extend(central(&k.doll)); } }
+            Some(crate::vehicle::Vehicle::Dirt(d)) => { if let Some(g) = &d.girl { character_bodies.extend(central(&g.doll)); } }
+            Some(crate::vehicle::Vehicle::Family(f)) => { character_bodies.extend(central(&f.daughter.doll)); character_bodies.extend(central(&f.son.doll)); }
+            Some(crate::vehicle::Vehicle::Santa(s)) => { character_bodies.extend(central(&s.elf1.doll)); character_bodies.extend(central(&s.elf2.doll)); }
+            _ => {}
+        }
+        character_bodies.extend(self.npcs.iter().filter(|npc| !npc.smashed[1]).map(|npc| npc.bodies[0]));
         for ev in events {
             if let (Some(nub), Some(rod)) = (self.nub.shape, self.nub.body) {
                 if matches!(ev.kind, ContactEventKind::Add | ContactEventKind::Remove) && (ev.shape1 == nub || ev.shape2 == nub) {
@@ -1802,7 +1813,8 @@ impl World {
                         continue;
                     }
                     let ok = match t.by {
-                        1 | 2 => Some(body) == vehicle, // no NPCs yet: the vehicle stands in for the main character
+                        1 => Some(body) == main_body,
+                        2 => character_bodies.contains(&body),
                         3 => mass > 0.0 && !other_sensor,
                         4 => mass > 0.0 && !other_sensor && t.targets.contains(&body),
                         _ => false,
@@ -4702,6 +4714,25 @@ mod tests {
     }
 
     #[test]
+    fn character_triggers_use_ragdoll_central_body() {
+        let xml = "<levelXML><info v='1.99'/><triggers><t x='1000' y='200' w='120' h='60' b='1' t='0' r='1'/><t x='1000' y='200' w='120' h='60' b='2' t='0' r='1'/></triggers></levelXML>";
+        let mut w = World::from_level(&crate::level::parse(xml).unwrap());
+        assert!(w.spawn_character(1, [1000.0, 100.0]));
+        for _ in 0..60 { w.step(); }
+        assert!(w.events.iter().any(|e| e.trigger == 0));
+        assert!(w.events.iter().any(|e| e.trigger == 1));
+    }
+
+    #[test]
+    fn any_character_trigger_accepts_npc_but_main_only_does_not() {
+        let xml = "<levelXML><info v='1.99'/><specials><sp t='17' p0='1000' p1='100' p2='0' p3='1' p4='f' p5='f'/></specials><triggers><t x='1000' y='200' w='120' h='60' b='1' t='0' r='1'/><t x='1000' y='200' w='120' h='60' b='2' t='0' r='1'/></triggers></levelXML>";
+        let mut w = World::from_level(&crate::level::parse(xml).unwrap());
+        for _ in 0..60 { w.step(); }
+        assert!(!w.events.iter().any(|e| e.trigger == 0));
+        assert!(w.events.iter().any(|e| e.trigger == 1));
+    }
+
+    #[test]
     fn degenerate_polygons_are_skipped_not_fatal() {
         let level = crate::level::parse("<levelXML><info v='1'/><shapes>\
             <sh t='3' p0='0' p1='0' p2='0' p3='0'><v f='t' id='1' n='3' v0='0_0' v1='10_0' v2='0_10'/></sh>\
@@ -4872,6 +4903,17 @@ mod tests {
         w.click_trigger(2);
         for _ in 0..20 { w.step(); }
         assert!(w.level_complete);
+    }
+
+    #[test]
+    fn enabling_trigger_detects_body_already_in_zone() {
+        let xml = "<levelXML><info v='1.99'/><shapes><sh t='0' p0='500' p1='300' p2='300' p3='20' p4='0' p5='t' p6='f' p7='1' p8='0' p9='-1' p10='100' p11='1'/><sh t='1' p0='500' p1='250' p2='30' p3='30' p4='0' p5='f' p6='f' p7='1' p8='0' p9='-1' p10='100' p11='1' p12='0'/></shapes><triggers><t x='0' y='0' w='50' h='50' b='6' t='1' r='1'><t i='1'><a i='2'/></t></t><t x='500' y='265' w='120' h='80' b='3' t='3' r='1' sd='t'/></triggers></levelXML>";
+        let mut w = World::from_level(&crate::level::parse(xml).unwrap());
+        for _ in 0..60 { w.step(); }
+        assert!(!w.level_complete);
+        w.click_trigger(0);
+        for _ in 0..5 { w.step(); }
+        assert!(w.level_complete, "refilter should create a fresh contact for an overlapping body");
     }
 
     #[test]
