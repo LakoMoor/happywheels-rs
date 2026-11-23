@@ -3384,3 +3384,39 @@ fn glass_stab_shot() {
     let sp = happywheels_core::sprites::Sprites::open(&assets, 1).unwrap();
     happywheels_core::render::render_level_scene(&level, &w, 500, 300, [cx, cy - 20.0], Some(&sp), None).save(path).unwrap();
 }
+
+/// HW_SHOT_MOWER_MASK=<png>: an NPC lies under a mower blade; while the blade grinds one of its bodies that body's sprite is clipped by `targetMaskHolder`'s rect.
+#[test]
+fn mower_mask_shot() {
+    use happywheels_core::vehicle::Vehicle;
+    let Some(path) = std::env::var_os("HW_SHOT_MOWER_MASK") else { return };
+    let Some(assets) = Some(std::path::PathBuf::from("../../../assets-99tnk64n1mubaoc8w")).filter(|p| p.join("animate/game/l").exists()) else { return };
+    let x = std::env::var("HW_NPC_X").ok().and_then(|s| s.parse::<f32>().ok()).unwrap_or(1030.0);
+    let level = level::parse(&format!(
+        "<levelXML><info v='1.99' x='1000' y='250'/><shapes>\
+         <sh t='0' p0='1000' p1='425' p2='3000' p3='50' p4='0' p5='t' p6='f' p7='1' p8='0' p9='-1' p10='100' p11='1'/></shapes>\
+         <specials><sp t='17' p0='{x}' p1='380' p2='0' p3='1' p4='f' p5='f' p6='f' p7='t'/></specials></levelXML>"
+    ))
+    .unwrap();
+    let mut w = World::from_level(&level);
+    assert!(w.spawn_bike(6, [1000.0, 250.0]));
+    let mut sprites = happywheels_core::sprites::Sprites::open(&assets, 6).unwrap();
+    sprites.bind_vehicle_rider(&w, [1000.0, 250.0]);
+    let mut masked = false;
+    for _ in 0..240 {
+        w.step();
+        if let Some(Vehicle::Mower(m)) = w.bike.as_ref() {
+            if !m.targets.is_empty() {
+                masked = (0..11).any(|_| false) || !m.targets.is_empty();
+                break;
+            }
+        }
+    }
+    assert!(masked, "the mower never started grinding the NPC");
+    let c = match w.bike.as_ref() { Some(Vehicle::Mower(m)) => w.b2().body(m.body).sweep.c, _ => unreachable!() };
+    let mut img = image::RgbaImage::from_pixel(640, 360, image::Rgba([0xc8, 0xd8, 0xe8, 255]));
+    let off = (320.0 - c.x as f32 * 62.5, 180.0 - c.y as f32 * 62.5);
+    sprites.draw_specials(&mut img, &level, &w, off);
+    sprites.draw(&mut img, &w, off);
+    img.save(path).unwrap();
+}
