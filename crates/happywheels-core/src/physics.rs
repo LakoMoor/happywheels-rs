@@ -2176,6 +2176,13 @@ impl World {
                 out.extend(first(v.frame, 0).map(|s| (s, "Thud1")));
             }
         }
+        if let Some(crate::vehicle::Vehicle::Heli(v)) = self.bike.as_ref() {
+            if !v.copter_smashed {
+                for (k, n) in [(2, "BikeHit1"), (3, "BikeHit3"), (6, "CarTire1"), (7, "CarTire1")] {
+                    out.extend(first(v.copter, k).map(|s| (s, n)));
+                }
+            }
+        }
         if let Some(crate::vehicle::Vehicle::Cart(v)) = self.bike.as_ref() {
             if !v.main_smashed {
                 for (k, n) in [(2, "BikeHit1"), (3, "BikeHit3")] {
