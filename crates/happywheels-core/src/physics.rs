@@ -6144,6 +6144,45 @@ mod tests {
         }
     }
 
+    /// Stab-mode glass against the original (oracle `analysis/golden-glass-stab.js`): a 100×20 pane (strength 10, stabbing) dropped at 40 m/s shatters into four
+    /// stab shards; a heavy flesh ball (r 10, density 6, material 2) dropped from y 250 then breaks one of them.
+    #[test]
+    fn stab_glass_shards_match_the_original() {
+        let xml = format!("<levelXML><info v='1.99'/><shapes>{FLOOR}\
+            <sh t='1' p0='1000' p1='250' p2='20' p3='20' p4='0' p5='f' p6='f' p7='6' p8='0' p9='-1' p10='100' p11='1' p12='0'/></shapes>\
+            <specials><sp t='18' p0='1000' p1='430' p2='100' p3='20' p4='0' p5='f' p6='10' p7='t'/></specials></levelXML>");
+        let mut w = World::from_level(&crate::level::parse(&xml).unwrap());
+        let pane = w.special_bodies[0].unwrap();
+        w.b.body_mut(pane).linear_velocity = Vec2::new(0.0, 40.0);
+        let ball = w.shape_bodies[1].unwrap();
+        let shape = w.b.body(ball).shapes[0];
+        w.b.shape_mut(shape).material = 2;
+        let mut frames = Vec::new();
+        for _ in 0..100 {
+            w.step();
+            let mut v: Vec<[f64; 3]> = (0..w.b.c.bodies.len()).filter(|&b| w.b.c.bodies[b].alive && !w.b.body(b).is_static).map(|b| { let [x, y] = w.body_position_px(b).unwrap(); [f64::from(x), f64::from(y), w.body_angle(b) as f64] }).collect();
+            v.sort_by(|a, b| a[0].total_cmp(&b[0]).then(a[1].total_cmp(&b[1])));
+            frames.push(v);
+        }
+        for (k, want) in [
+            (1, vec![[1000.000, 470.264, 0.000], [1000.000, 470.264, 0.000], [1000.000, 470.264, 0.000], [1000.000, 470.264, 0.000], [1000.000, 252.083, 0.000]]),
+            (20, vec![[1000.000, 455.750, 0.000], [1000.000, 455.749, 0.000], [1000.000, 455.750, 0.000], [1000.000, 455.750, 0.000], [1000.000, 410.417, 0.000]]),
+            (26, vec![[999.556, 490.363, -0.197], [999.644, 481.907, -0.083], [1002.108, 493.472, -0.264], [1002.911, 473.545, 0.405]]),
+            (40, vec![[998.833, 490.635, -0.197], [999.590, 476.722, 0.043], [1002.889, 487.851, -0.149], [1009.629, 467.162, 1.139]]),
+            (99, vec![[998.479, 490.435, -0.197], [999.446, 476.450, 0.049], [1001.384, 466.957, 0.306], [1003.273, 487.493, -0.141]]),
+        ] {
+            assert_eq!(frames[k].len(), want.len(), "frame {k}: body count");
+            let mut got = frames[k].clone();
+            let mut want = want;
+            let key = |r: &[f64; 3]| ((r[1] * 20.0).round() as i64, (r[0] * 20.0).round() as i64);
+            got.sort_by_key(key);
+            want.sort_by_key(key);
+            for (g, w) in got.iter().zip(&want) {
+                assert!((g[0] - w[0]).abs() < 0.05 && (g[1] - w[1]).abs() < 0.05 && (g[2] - w[2]).abs() < 0.01, "frame {k}: {g:?} vs {w:?}");
+            }
+        }
+    }
+
     /// A TV cracks above 7 (shards, frame 2..5) and shatters above 20 into three triangular pieces and 60 shards.
     #[test]
     fn tv_cracks_then_shatters() {
