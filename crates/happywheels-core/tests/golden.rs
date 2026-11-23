@@ -1069,9 +1069,12 @@ fn c8_break_strap_releases_the_elf_chest() {
     for i in 0..300 {
         if i == 100 {
             if let Some(Vehicle::Santa(mut s)) = w.bike.take() {
+                w.take_sounds();
                 s.break_strap(&mut w, 1);
                 s.break_strap(&mut w, 2);
                 assert!(!s.elf1.strapped_in && !s.elf2.strapped_in);
+                let heard: Vec<String> = w.take_sounds().into_iter().map(|s| s.0).collect();
+                assert_eq!(heard, ["StrapSnap1", "StrapSnap2"], "each strap snaps with its own sound");
                 w.bike = Some(Vehicle::Santa(s));
             }
         }

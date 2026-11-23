@@ -6408,6 +6408,9 @@ impl Santa {
         chain[0] = nj;
         let elf = if n == 1 { &mut self.elf1 } else { &mut self.elf2 };
         elf.strapped_in = false;
+        // `playAreaSoundInstance("StrapSnap1" / "StrapSnap2", ball)`
+        let at = world.b2().body(ball).sweep.c;
+        world.play(if n == 1 { "StrapSnap1" } else { "StrapSnap2" }, 1, at);
     }
 
     /// `checkJoints`: Santa's limb breaks let go of the sleigh; straps snap above 0.4; the elves' limbs break too.
