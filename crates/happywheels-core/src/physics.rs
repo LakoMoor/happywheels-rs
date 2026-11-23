@@ -6109,6 +6109,41 @@ mod tests {
         assert_eq!(b[0].len(), 1, "the spill is processed on the next frame");
     }
 
+    /// Spikes impale against the original `Spikes` class (oracle `analysis/golden-spikes.js`): spikes (6, fixed) at (1000,450); a flesh ball (material 2) dropped from
+    /// (1000,300) is pinned in the sensor by the prismatic joint (motor force 30) at y 434.325, a plain ball (material 0) from (1020,200) only rolls over the base.
+    #[test]
+    fn spikes_impale_like_the_original() {
+        let xml = "<levelXML><info v='1.99'/><shapes>{FLOOR}\
+            <sh t='1' p0='1000' p1='300' p2='30' p3='30' p4='0' p5='f' p6='f' p7='1' p8='0' p9='-1' p10='100' p11='1' p12='0'/>\
+            <sh t='1' p0='1020' p1='200' p2='24' p3='24' p4='0' p5='f' p6='f' p7='1' p8='0' p9='-1' p10='100' p11='1' p12='0'/></shapes>\
+            <specials><sp t='6' p0='1000' p1='450' p2='0' p3='t' p4='6' p5='f'/></specials></levelXML>".replace("{FLOOR}", FLOOR);
+        let mut w = World::from_level(&crate::level::parse(&xml).unwrap());
+        let flesh = w.shape_bodies[1].unwrap();
+        let shape = w.b.body(flesh).shapes[0];
+        w.b.shape_mut(shape).material = 2;
+        let plain = w.shape_bodies[2].unwrap();
+        let mut got = Vec::new();
+        for _ in 0..120 {
+            w.step();
+            let a = w.body_position_px(flesh).unwrap();
+            let b = w.body_position_px(plain).unwrap();
+            got.push([f64::from(a[0]), f64::from(a[1]), f64::from(b[0]), f64::from(b[1])]);
+        }
+        for (k, want) in [
+            (10, [1000.000, 345.833, 1020.000, 245.833]),
+            (18, [1000.000, 431.944, 1020.000, 331.944]),
+            (20, [1000.000, 434.320, 1020.000, 360.417]),
+            (25, [1000.000, 434.325, 1024.258, 433.800]),
+            (40, [1000.000, 434.325, 1117.182, 478.344]),
+            (60, [1000.000, 434.325, 1251.531, 478.344]),
+            (119, [1000.000, 434.325, 1647.861, 478.344]),
+        ] {
+            for i in 0..4 {
+                assert!((got[k][i] - want[i]).abs() < 0.2, "frame {k} col {i}: {:?} vs {want:?}", got[k]);
+            }
+        }
+    }
+
     /// A TV cracks above 7 (shards, frame 2..5) and shatters above 20 into three triangular pieces and 60 shards.
     #[test]
     fn tv_cracks_then_shatters() {
