@@ -2182,6 +2182,26 @@ impl World {
             out.extend(first(v.back_wheel, 0).map(|s| (s, "CarTire1")));
             out.extend(first(v.front_wheel, 0).map(|s| (s, "CarTire1")));
         }
+        if let Some(crate::vehicle::Vehicle::Santa(v)) = self.bike.as_ref() {
+            // the sleigh's shape list only keeps its creation order while nothing has smashed
+            if self.b.body(v.sleigh).shapes.len() == 9 {
+                for (k, n) in [(0, "SleighImpact3"), (4, "SleighImpact1"), (5, "SleighImpact2"), (6, "SleighImpact1"), (7, "SleighImpact1"), (8, "SleighImpact2")] {
+                    out.extend(first(v.sleigh, k).map(|s| (s, n)));
+                }
+            }
+            out.extend(first(v.wheels[0], 0).map(|s| (s, "SkiImpact1")));
+            out.extend(first(v.wheels[3], 0).map(|s| (s, "SkiImpact2")));
+        }
+        if let Some(crate::vehicle::Vehicle::Segway(v)) = self.bike.as_ref() {
+            if !v.frame_smashed {
+                out.extend(first(v.stand, 0).map(|s| (s, "Thud2")));
+            }
+            out.extend(first(v.wheel, 0).map(|s| (s, "TireHit1")));
+        }
+        if let Some(crate::vehicle::Vehicle::Grinder(v)) = self.bike.as_ref() {
+            out.extend(first(v.back_wheel, 0).map(|s| (s, "CarTire1")));
+            out.extend(first(v.front_wheel, 0).map(|s| (s, "CarTire1")));
+        }
         if let Some(crate::vehicle::Vehicle::Chair(v)) = self.bike.as_ref() {
             if !v.chair_smashed {
                 for (k, n) in ["ChairHit1", "ChairHit2", "ChairHit3"].into_iter().enumerate() {
