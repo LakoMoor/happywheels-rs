@@ -352,6 +352,8 @@ struct Shard {
     queue_add: Vec<(BodyId, Vec2)>,
     queue_remove: Vec<BodyId>,
     sounds: u32,
+    /// `GlassBloodMC` stamps in the shard body's local px: (x, y, rotation rad, scaleX ±1), one per impaled body.
+    blood: Vec<(f64, f64, f64, f64)>,
 }
 
 /// Toilet special (`$e`): a Result above 12 on the back breaks off the back (two pieces), on the base or bowl the base (two pieces).
@@ -4467,6 +4469,11 @@ impl World {
                     let j = self.b.create_prismatic_joint(&jd);
                     let bp = self.glasses[k].shards[s].blood_particles;
                     self.glasses[k].shards[s].pinned.push((other, j, 1));
+                    if !self.blood.off {
+                        let l = self.b.body(b).local_point(at);
+                        let (rot, mirror) = (self.blood.rand() * std::f64::consts::TAU, if self.blood.rand() > 0.5 { -1.0 } else { 1.0 });
+                        self.glasses[k].shards[s].blood.push((l.x * PS, l.y * PS, rot, mirror));
+                    }
                     self.blood.burst([at.x * PS, at.y * PS], Vec2::default(), 5.0, 15.0, bp);
                     if self.glasses[k].shards[s].sounds < 1 {
                         self.glasses[k].shards[s].sounds += 1;
@@ -4556,6 +4563,7 @@ impl World {
                         queue_add: Vec::new(),
                         queue_remove: Vec::new(),
                         sounds: 0,
+                        blood: Vec::new(),
                     });
                     let com = self.b.body(piece).sweep.c;
                     self.b.body_mut(piece).angular_velocity = w;
@@ -4694,6 +4702,11 @@ impl World {
     /// Which parts of the toilet on `body` are still attached: (back, base).
     pub fn toilet_parts(&self, body: Option<BodyId>) -> (bool, bool) {
         body.and_then(|b| self.toilets.iter().find(|t| t.body == b)).map_or((true, true), |t| (t.back.is_some(), t.base.is_some()))
+    }
+
+    /// `GlassBloodMC` stamps (clip-local px x, y, rotation, scaleX) of the stab shard whose body is `body`.
+    pub fn glass_blood(&self, body: BodyId) -> &[(f64, f64, f64, f64)] {
+        self.glasses.iter().flat_map(|g| g.shards.iter()).find(|s| s.body == body).map_or(&[], |s| s.blood.as_slice())
     }
 
     /// Triangle pieces of shattered glass panes: (body, vertices in the body frame in px).

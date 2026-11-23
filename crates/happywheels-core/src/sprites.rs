@@ -857,6 +857,10 @@ impl Sprites {
             }
             let bd = world.b2().body(b);
             let m = mul(cam, local(bd.xf.position.x * 62.5, bd.xf.position.y * 62.5, bd.sweep.a, 1.0, 1.0));
+            // blood left by impaled flesh: `GlassBloodMC.inner` (`glass-blood.png`, 0.25, offset (-61,-60)) at the impact point (not clipped to the triangle yet)
+            for &(x, y, rot, mirror) in world.glass_blood(b) {
+                self.blit(img, "glass-blood.png", mul(m, mul(local(x, y, rot, mirror, 1.0), local(-61.0, -60.0, 0.0, 0.25, 0.25))));
+            }
             let pts = tri.map(|(x, y)| (m[0] * x + m[2] * y + m[4], m[1] * x + m[3] * y + m[5]));
             let (x0, x1) = (pts.iter().map(|p| p.0).fold(f64::MAX, f64::min).floor().max(0.0) as i64, pts.iter().map(|p| p.0).fold(f64::MIN, f64::max).ceil().min(f64::from(img.width())) as i64);
             let (y0, y1) = (pts.iter().map(|p| p.1).fold(f64::MAX, f64::min).floor().max(0.0) as i64, pts.iter().map(|p| p.1).fold(f64::MIN, f64::max).ceil().min(f64::from(img.height())) as i64);
