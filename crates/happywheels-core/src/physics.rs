@@ -2150,7 +2150,12 @@ impl World {
     fn vehicle_contact_sounds(&self) -> Vec<(ShapeId, &'static str)> {
         let first = |b: BodyId, k: usize| self.b.body(b).shapes.get(k).copied();
         let mut out = Vec::new();
-        if let Some(crate::vehicle::Vehicle::Bike(v)) = self.bike.as_ref() {
+        let bmx = match self.bike.as_ref() {
+            Some(crate::vehicle::Vehicle::Bike(v)) => Some(v),
+            Some(crate::vehicle::Vehicle::Family(f)) => Some(&f.dad),
+            _ => None,
+        };
+        if let Some(v) = bmx {
             for (k, n) in ["BikeHit3", "BikeHit2", "BikeHit1"].into_iter().enumerate() {
                 out.extend(first(v.frame, k).map(|s| (s, n)));
             }
@@ -2165,6 +2170,11 @@ impl World {
             }
             out.extend(first(v.back_wheel, 0).map(|s| (s, "TireHit1")));
             out.extend(first(v.front_wheel, 0).map(|s| (s, "TireHit2")));
+        }
+        if let Some(crate::vehicle::Vehicle::Pogo(v)) = self.bike.as_ref() {
+            if !v.frame_smashed {
+                out.extend(first(v.frame, 0).map(|s| (s, "Thud1")));
+            }
         }
         if let Some(crate::vehicle::Vehicle::Cart(v)) = self.bike.as_ref() {
             if !v.main_smashed {

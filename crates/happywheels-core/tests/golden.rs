@@ -3629,7 +3629,7 @@ fn bmx_landing_plays_hit_sounds() {
     )
     .unwrap();
     // Bike (3): Bike/TireHit; jet chair (1) and moped (5): ChairHit/TireHit
-    for (index, prefixes) in [(3, ["BikeHit", "TireHit"]), (1, ["ChairHit", "TireHit"]), (5, ["ChairHit", "TireHit"]), (4, ["BikeHit", "CarTire"]), (6, ["ChairHit", "CarTire"]), (8, ["SleighImpact", "SkiImpact"]), (2, ["Thud", "TireHit"]), (7, ["CarTire", "CarTire"])] {
+    for (index, prefixes) in [(3, ["BikeHit", "TireHit"]), (1, ["ChairHit", "TireHit"]), (5, ["ChairHit", "TireHit"]), (4, ["BikeHit", "CarTire"]), (6, ["ChairHit", "CarTire"]), (8, ["SleighImpact", "SkiImpact"]), (2, ["Thud", "TireHit"]), (7, ["CarTire", "CarTire"]), (9, ["Thud", "Thud"]), (10, ["BikeHit", "TireHit"])] {
         let mut w = World::from_level(&level);
         assert!(w.spawn_bike(index, [1000.0, 50.0]));
         w.dad_kid = false;
