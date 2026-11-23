@@ -230,8 +230,33 @@ struct Npc {
     smash_limits: [f64; 3],
     chunk: [f64; 3],
     smashed: [bool; 3],
+    /// Sound-set prefix (`tag` of the character index), queued vocals by priority, frame the current voice ends, its priority, and `dead` (no more vocals).
+    tag: &'static str,
+    voices: [Option<&'static str>; 6],
+    voice_until: u32,
+    voice_prio: i32,
+    dead: bool,
     /// Chunk circles / brain / heart born from smashes.
     pieces: Vec<BodyId>,
+}
+
+/// `tag` getter of the level character: the prefix of its voice sounds.
+fn npc_tag(char_index: i32) -> &'static str {
+    match char_index {
+        1 => "Char1",
+        2 | 9 => "Char2",
+        4 | 15 => "Kid1",
+        5 | 13 => "Char4",
+        6 => "Char8",
+        7 => "Char9",
+        8 => "Char11",
+        10 => "Santa",
+        11 => "Elf1",
+        12 => "Char12",
+        14 => "Kid2",
+        16 => "Heli",
+        _ => "Char3",
+    }
 }
 
 /// Boombox special (`Boombox`): cracks at an impulse above 6.5 (damage frame 2..4, 15 shards), shatters above 17.5 (or on the next hit after a crack)
@@ -2065,6 +2090,7 @@ impl World {
         self.update_loops();
         self.run_arrow_guns();
         self.check_npc_joints();
+        self.check_npc_vocals();
         self.b.step(TIME_STEP, ITERATIONS);
         let events: Vec<_> = self.b.c.events.drain(..).collect();
         self.collect_smashes(&events);
@@ -2511,7 +2537,7 @@ impl World {
         let lim = |k: &str| f(&g["limits"][k]);
         let smash_shapes = [bodies[1], bodies[0], bodies[2]].map(|b| self.b.body(b).shapes[0]);
         let chunk = [f(&g["chunk"][0]), f(&g["chunk"][1]), f(&g["chunk"][2])];
-        self.npcs.push(Npc { bodies, joints, smash_shapes, smash_limits: [lim("head"), lim("chest"), lim("pelvis")], chunk, smashed: [false; 3], pieces: Vec::new() });
+        self.npcs.push(Npc { bodies, joints, smash_shapes, smash_limits: [lim("head"), lim("chest"), lim("pelvis")], chunk, smashed: [false; 3], tag: npc_tag(sp.num("charIndex").unwrap_or(1.0) as i32), voices: [None; 6], voice_until: 0, voice_prio: -1, dead: false, pieces: Vec::new() });
         Some(chest)
     }
 
@@ -2723,6 +2749,30 @@ impl World {
                 self.level_complete = true;
                 self.play("Victory", 1, Vec2::new(x / PS, y / PS));
             }
+        }
+    }
+
+    /// `NPCharacter.checkVocals` (once per step, not for a dead NPC): the highest queued vocal plays from the head as `tag + name`; while one is
+    /// sounding only a higher priority replaces it. The queue is cleared afterwards.
+    fn check_npc_vocals(&mut self) {
+        for ni in 0..self.npcs.len() {
+            let n = &self.npcs[ni];
+            if n.dead {
+                self.npcs[ni].voices = [None; 6];
+                continue;
+            }
+            let top = n.voices.iter().rposition(Option::is_some).map_or(-1, |i| i as i32);
+            let busy = self.frame < n.voice_until;
+            if top >= 0 && (!busy || top > n.voice_prio) {
+                let name = format!("{}{}", n.tag, n.voices[top as usize].unwrap_or(""));
+                let at = self.b.body(n.bodies[1]).sweep.c;
+                self.npcs[ni].voice_until = self.frame + sound_frames(&name);
+                self.npcs[ni].voice_prio = top;
+                self.play(&name, 1, at);
+            } else if !busy {
+                self.npcs[ni].voice_prio = -1;
+            }
+            self.npcs[ni].voices = [None; 6];
         }
     }
 
@@ -3059,6 +3109,25 @@ impl World {
         // bodies: 0 chest 1 head 2 pelvis 3/4 upper arms 5/6 lower arms 7/8 upper legs 9/10 lower legs
         let b = self.npcs[ni].bodies;
         let at = |w: &World, i: usize| w.b.body(b[i]).sweep.c;
+        // `addVocals(name, priority)` of each handler
+        let vocal = match ji {
+            1 => Some(("Torso", 5)),
+            2 => Some(("Shoulder1", 3)),
+            3 => Some(("Shoulder2", 3)),
+            4 => Some(("Elbow1", 1)),
+            5 => Some(("Elbow2", 1)),
+            6 => Some(("Hip1", 4)),
+            7 => Some(("Hip2", 4)),
+            8 => Some(("Knee1", 2)),
+            9 => Some(("Knee2", 2)),
+            _ => None,
+        };
+        if let Some((name, prio)) = vocal {
+            self.npcs[ni].voices[prio] = Some(name);
+        }
+        if ji == 0 {
+            self.npcs[ni].dead = true;
+        }
         match ji {
             0 => {
                 self.blood_flow(2.5, 4.0, b[1], Vec2::default(), 90.0, 150);
@@ -3151,6 +3220,10 @@ impl World {
                     continue;
                 }
                 self.npcs[ni].smashed[part] = true;
+                if part < 2 {
+                    // `headSmash`/`chestSmash` set `dead` (the NPC stops voicing)
+                    self.npcs[ni].dead = true;
+                }
                 let bodies = self.npcs[ni].bodies;
                 let chunk = self.npcs[ni].chunk;
                 // joints: 0 neck 1 waist 2/3 shoulders 4/5 elbows 6/7 hips 8/9 knees
@@ -5762,8 +5835,26 @@ mod tests {
             assert!(names.iter().any(|s| s == n), "{n} missing in {names:?}");
         }
         assert_eq!(w.blood.flows.len(), 2 + 1 + 4, "neck 2, waist 1, two shoulders 2 each");
+        // the neck break made the NPC dead, so it stays silent (original `_dead` skips `checkVocals`)
+        w.step();
+        assert!(!w.take_sounds().iter().any(|s| s.0.starts_with("Char1")));
         let table: serde_json::Value = serde_json::from_str(include_str!("../data/audiosprite.json")).unwrap();
         assert!(names.iter().all(|n| table.get(n.as_str()).is_some()));
+    }
+
+    /// A living NPC whose elbow breaks voices `{tag}Elbow1` from its head; the highest priority queued wins.
+    #[test]
+    fn npc_vocals_play_for_a_living_npc_and_the_highest_priority_wins() {
+        let xml = "<levelXML><info v='1.99'/><specials><sp t='17' p0='1000' p1='100' p2='0' p3='1' p4='f' p5='f'/></specials></levelXML>";
+        let mut w = World::from_level(&crate::level::parse(xml).unwrap());
+        w.npc_break_joint(0, 4, true);
+        w.npc_break_joint(0, 6, true);
+        w.step();
+        let names: Vec<String> = w.take_sounds().into_iter().map(|s| s.0).collect();
+        assert!(names.iter().any(|n| n == "Char1Hip1"), "{names:?}");
+        assert!(!names.iter().any(|n| n == "Char1Elbow1"), "{names:?}");
+        let table: serde_json::Value = serde_json::from_str(include_str!("../data/audiosprite.json")).unwrap();
+        assert!(table.get("Char1Hip1").is_some());
     }
 
     /// A boombox hit hard enough to shatter drops its `BoomboxHit` impact sound listener; a merely cracked one keeps it.
