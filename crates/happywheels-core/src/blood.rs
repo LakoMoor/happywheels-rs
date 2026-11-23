@@ -105,7 +105,7 @@ pub fn set_blood_setting(setting: u8) {
 impl Default for Blood {
     fn default() -> Self {
         let setting = BLOOD_SETTING.load(std::sync::atomic::Ordering::Relaxed);
-        Self { particles: Vec::new(), sparks: Vec::new(), sprites: Vec::new(), flows: Vec::new(), line_blood: setting >= 2, off: setting == 0, rng: 0 }
+        Self { particles: Vec::new(), sparks: Vec::new(), sprites: Vec::new(), flows: Vec::new(), line_blood: setting >= 2, off: setting == 0, setting, rng: 0 }
     }
 }
 
@@ -118,6 +118,8 @@ pub struct Blood {
     pub line_blood: bool,
     /// `bloodSetting` 0: `createBloodBurst/Flow` return empty emitters, nothing is spawned.
     pub off: bool,
+    /// The raw `bloodSetting` (3 and 4 are the metaball looks: line particles blurred and thresholded, see `render`).
+    pub setting: u8,
     rng: u64,
 }
 

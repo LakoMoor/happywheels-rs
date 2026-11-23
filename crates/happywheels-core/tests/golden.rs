@@ -3420,3 +3420,20 @@ fn mower_mask_shot() {
     sprites.draw(&mut img, &w, off);
     img.save(path).unwrap();
 }
+
+/// HW_SHOT_METABLOOD=<png>: the same burst with bloodSetting 3 (blurred and thresholded metaball blood). The process-wide setting is restored afterwards.
+#[test]
+fn metaball_blood_shot() {
+    use box2d::math::Vec2;
+    let Some(path) = std::env::var_os("HW_SHOT_METABLOOD") else { return };
+    happywheels_core::blood::set_blood_setting(3);
+    let level = level::parse("<levelXML><info v='1.99'/><shapes><sh t='0' p0='1000' p1='450' p2='3000' p3='50' p4='0' p5='t' p6='f' p7='1' p8='0' p9='-1' p10='100' p11='1'/></shapes></levelXML>").unwrap();
+    let mut w = World::from_level(&level);
+    happywheels_core::blood::set_blood_setting(1);
+    assert_eq!(w.blood.setting, 3);
+    w.blood.burst([1000.0, 380.0], Vec2::new(0.0, 0.0), 20.0, 30.0, 120);
+    for _ in 0..10 {
+        w.step();
+    }
+    happywheels_core::render::render_level_scene(&level, &w, 500, 300, [1000.0, 330.0], None, None).save(path).unwrap();
+}
