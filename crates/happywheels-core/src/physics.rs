@@ -349,7 +349,9 @@ struct Shard {
     sensor: Option<ShapeId>,
     /// (flesh body, joint, count)
     pinned: Vec<(BodyId, usize, u32)>,
-    queue_add: Vec<(BodyId, Vec2)>,
+    /// (flesh body, contact normal, aliased): the original's listener hands the sensor-as-shape1 case the shared `s_evalCP` itself, whose normal keeps changing
+    /// until the queue runs, so `aliased` entries take the normal of the last Add/Persist/Remove event instead of their own.
+    queue_add: Vec<(BodyId, Vec2, Option<(bool, bool)>)>,
     queue_remove: Vec<BodyId>,
     sounds: u32,
     /// `GlassBloodMC` stamps in the shard body's local px: (x, y, rotation rad, scaleX ±1), one per impaled body.
@@ -4388,6 +4390,9 @@ impl World {
     /// `Glass.checkContact` / `shatter`: the contact point (in the pane's frame) is clamped to an edge when within 5 cm of it (that side then has no
     /// triangles); every remaining side contributes two triangles (impact point, side point k, side point k+1) as bodies at the pane's centre.
     fn glass_events(&mut self, events: &[box2d::world::ContactEvent]) {
+        // `b2*Contact.Evaluate` fills one static `s_evalCP` per contact class (circle/circle, polygon/circle, polygon/polygon)
+        let class = |w: &Self, e: &box2d::world::ContactEvent| (matches!(w.b.c.shapes[e.shape1].shape.kind, box2d::shape::ShapeKind::Circle(_)), matches!(w.b.c.shapes[e.shape2].shape.kind, box2d::shape::ShapeKind::Circle(_)));
+        let last_eval_normal = |w: &Self, c: (bool, bool)| events.iter().rev().find(|e| e.kind != ContactEventKind::Result && class(w, e) == c).map(|e| e.normal);
         // Shards (`nd`/`te`): shatter above 10·mass; in stab mode a flesh hit above `stab_limit` turns the piece into a pin (sensor + prismatic joints).
         for k in 0..self.glasses.len() {
             let stabbing = self.glasses[k].stabbing;
@@ -4444,13 +4449,15 @@ impl World {
                         continue;
                     }
                     let ob = self.b.c.shapes[other].body;
+                    let aliased_class = (flip > 0.0).then(|| class(self, e));
                     match e.kind {
-                        ContactEventKind::Add => self.glasses[k].shards[s].queue_add.push((ob, Vec2::new(e.normal.x * flip, e.normal.y * flip))),
+                        ContactEventKind::Add => self.glasses[k].shards[s].queue_add.push((ob, Vec2::new(e.normal.x * flip, e.normal.y * flip), aliased_class)),
                         ContactEventKind::Remove if self.glasses[k].shards[s].pinned.iter().any(|p| p.0 == ob) || self.glasses[k].shards[s].queue_add.iter().any(|p| p.0 == ob) => self.glasses[k].shards[s].queue_remove.push(ob),
                         _ => {}
                     }
                 }
-                for (other, normal) in std::mem::take(&mut self.glasses[k].shards[s].queue_add) {
+                for (other, normal, aliased) in std::mem::take(&mut self.glasses[k].shards[s].queue_add) {
+                    let normal = aliased.and_then(|c| last_eval_normal(self, c)).unwrap_or(normal);
                     if !self.b.c.bodies[other].alive {
                         continue;
                     }
@@ -6227,6 +6234,45 @@ mod tests {
             want.sort_by_key(key);
             for (g, w) in got.iter().zip(&want) {
                 assert!((g[0] - w[0]).abs() < 0.05 && (g[1] - w[1]).abs() < 0.05 && (g[2] - w[2]).abs() < 0.01, "frame {k}: {g:?} vs {w:?}");
+            }
+        }
+    }
+
+    /// Stab pinning against the original (oracle `analysis/golden-glass-stab-pin.js`: same scene as above, but the flesh ball has `categoryBits` 4 so the stab sensor
+    /// (mask 4) sees it, and the stub registers the shard's add/remove listeners): the ball pins on a shard with one prismatic joint, visible after frames 27..29 in the original.
+    #[test]
+    fn stab_glass_pins_flesh_like_the_original() {
+        let xml = format!("<levelXML><info v='1.99'/><shapes>{FLOOR}\
+            <sh t='1' p0='1000' p1='250' p2='20' p3='20' p4='0' p5='f' p6='f' p7='6' p8='0' p9='-1' p10='100' p11='1' p12='0'/></shapes>\
+            <specials><sp t='18' p0='1000' p1='430' p2='100' p3='20' p4='0' p5='f' p6='10' p7='t'/></specials></levelXML>");
+        let mut w = World::from_level(&crate::level::parse(&xml).unwrap());
+        let pane = w.special_bodies[0].unwrap();
+        w.b.body_mut(pane).linear_velocity = Vec2::new(0.0, 40.0);
+        let ball = w.shape_bodies[1].unwrap();
+        let shape = w.b.body(ball).shapes[0];
+        w.b.shape_mut(shape).material = 2;
+        w.b.shape_mut(shape).filter.category_bits = 4;
+        let mut frames = Vec::new();
+        let mut pinned_frames = Vec::new();
+        for k in 0..100 {
+            w.step();
+            let n: usize = w.glasses.iter().flat_map(|g| g.shards.iter()).map(|s| s.pinned.len()).sum();
+            if n > 0 {
+                pinned_frames.push(k);
+            }
+            let mut v: Vec<[f64; 3]> = (0..w.b.c.bodies.len()).filter(|&b| w.b.c.bodies[b].alive && !w.b.body(b).is_static).map(|b| { let [x, y] = w.body_position_px(b).unwrap(); [f64::from(x), f64::from(y), f64::from(w.body_angle(b))] }).collect();
+            v.sort_by(|a, b| a[0].total_cmp(&b[0]).then(a[1].total_cmp(&b[1])));
+            frames.push(v);
+        }
+        assert_eq!(pinned_frames, vec![26, 27, 28], "pin window (the joint is made right after the contact step, the original makes it at the start of the next frame: same physics)");
+        for (k, want) in [
+            (27, vec![[999.684, 480.906, -0.069], [999.983, 490.382, -0.197], [1002.336, 492.356, -0.249], [1002.609, 472.376, 0.383]]),
+            (28, vec![[999.477, 479.720, -0.035], [1000.233, 490.361, -0.197], [1002.022, 490.973, -0.214], [1002.365, 471.042, 0.381]]),
+            (99, vec![[999.313, 490.406, -0.197], [999.397, 476.258, 0.051], [1002.338, 487.046, -0.135], [1003.697, 467.086, 0.463]]),
+        ] {
+            assert_eq!(frames[k].len(), want.len(), "frame {k}: body count");
+            for (g, w) in frames[k].iter().zip(&want) {
+                assert!((g[0] - w[0]).abs() < 0.1 && (g[1] - w[1]).abs() < 0.1 && (g[2] - w[2]).abs() < 0.02, "frame {k}: {g:?} vs {w:?}");
             }
         }
     }
