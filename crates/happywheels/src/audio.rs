@@ -198,6 +198,11 @@ impl Audio {
         self.play_with_transform(name, sound_gain(name, at, listener), if name == "Victory" { 0.0 } else { area_pan(at, listener) });
     }
 
+    /// A sound with a volume multiplier (`playAreaSoundInstance(name, body, volume)`).
+    pub fn play_scaled(&self, name: &str, at: [f32; 2], listener: [f32; 2], volume: f32) {
+        self.play_with_transform(name, sound_gain(name, at, listener) * volume, area_pan(at, listener));
+    }
+
     pub fn play_trigger(&self, sound: &happywheels_core::physics::TriggerSound, listener: [f32; 2]) {
         let gain = if sound.global { sound.volume } else { area_gain(sound.position, listener) * sound.volume };
         let pan = if sound.global { sound.pan.clamp(-1.0, 1.0) } else { area_pan(sound.position, listener) };

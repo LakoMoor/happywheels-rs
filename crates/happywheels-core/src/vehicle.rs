@@ -2664,6 +2664,7 @@ impl Pogo {
         let translation = world.b2().prismatic_translation(self.pogo).unwrap_or(0.0);
         let contacts = world.nub.contacts;
         let (jump_frames, pivot, target) = (self.jump_frames, self.pivot_angle, self.target_angle);
+        let mut released = false;
         let Some(p) = Self::pogo_mut(world, self.pogo) else { return };
         let speed = p.motor_speed;
         let in_window = if up { pivot > target && pivot < target + std::f64::consts::PI * 0.15 } else { pivot < target && pivot > target - std::f64::consts::PI * 0.15 };
@@ -2674,11 +2675,17 @@ impl Pogo {
             } else if speed == Self::RETRACT && translation <= Self::BOUNCE && in_window {
                 p.motor_speed = 6.0;
                 self.jump_frames = 5;
+                released = true;
             }
         }
         if speed > 0.0 && translation >= 0.0 {
             p.lower_translation = 0.0;
             p.motor_speed = 0.0;
+        }
+        if released {
+            // `playAreaSoundInstance("PogoRelease", frameBody, min(1, max(-translation·scale / 40, 0)))`
+            let at = world.b2().body(self.frame).sweep.c;
+            world.play_scaled("PogoRelease", at, (-translation * 62.5 / 40.0).clamp(0.0, 1.0));
         }
     }
 
@@ -2753,14 +2760,22 @@ impl Pogo {
         } else if self.charging {
             let translation = world.b2().prismatic_translation(self.pogo).unwrap_or(0.0);
             let mut done = false;
+            let mut release_volume = None;
             if let Some(p) = Self::pogo_mut(world, self.pogo) {
                 if translation < 0.0 {
+                    if translation * -70.0 > p.motor_speed {
+                        release_volume = Some((-translation * 62.5 / 20.0).clamp(0.0, 1.0));
+                    }
                     p.motor_speed = translation * -70.0;
                 } else {
                     p.motor_speed = 0.0;
                     p.lower_translation = 0.0;
                     done = true;
                 }
+            }
+            if let Some(volume) = release_volume {
+                let at = world.b2().body(self.frame).sweep.c;
+                world.play_scaled("PogoRelease", at, volume);
             }
             if done {
                 self.charging = false;

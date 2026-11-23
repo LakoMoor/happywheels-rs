@@ -290,6 +290,7 @@ mod browser {
             self.accumulator += elapsed;
             let mut sounds = Vec::new();
             let mut trigger_sounds = Vec::new();
+            let mut scaled_sounds = Vec::new();
             while !self.paused && self.accumulator >= 1000.0 / 30.0 {
                 let k = self.keys;
                 self.world
@@ -307,6 +308,7 @@ mod browser {
                 self.world.step();
                 sounds.extend(self.world.take_sounds());
                 trigger_sounds.extend(self.world.take_trigger_sounds());
+                scaled_sounds.extend(self.world.take_scaled_sounds());
                 self.accumulator -= 1000.0 / 30.0;
             }
             let (w, h) = (self.canvas.width().max(1), self.canvas.height().max(1));
@@ -324,7 +326,7 @@ mod browser {
             self.renderer.upload(&frame).map_err(js_error)?;
             self.renderer.render();
             let loops = if self.paused { &[][..] } else { &self.world.loops[..] };
-            serde_json::to_string(&(sounds, loops, camera, trigger_sounds)).map_err(js_error)
+            serde_json::to_string(&(sounds, loops, camera, trigger_sounds, scaled_sounds)).map_err(js_error)
         }
     }
 }

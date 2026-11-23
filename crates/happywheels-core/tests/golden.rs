@@ -3465,3 +3465,27 @@ fn segway_jump_plays_its_sound_once() {
     }
     assert_eq!(jumps, 1, "one jump, one sound");
 }
+
+/// `PogoRelease` carries a volume (`min(1, -translation·62.5/20)` when the held charge is released): behaviour only, not compared with the oracle.
+#[test]
+fn pogo_release_sound_has_a_volume() {
+    use happywheels_core::vehicle::Keys;
+    let level = level::parse(
+        "<levelXML><info v='1.99' x='1000' y='250'/><shapes>\
+         <sh t='0' p0='1000' p1='425' p2='3000' p3='50' p4='0' p5='t' p6='f' p7='1' p8='0' p9='-1' p10='100' p11='1'/></shapes></levelXML>",
+    )
+    .unwrap();
+    let mut w = World::from_level(&level);
+    assert!(w.spawn_bike(9, [1000.0, 250.0]));
+    for _ in 0..60 {
+        w.step();
+    }
+    w.take_scaled_sounds();
+    let mut heard = Vec::new();
+    for i in 0..90 {
+        w.set_rider_keys(Keys { space: (5..40).contains(&i), ..Default::default() });
+        w.step();
+        heard.extend(w.take_scaled_sounds());
+    }
+    assert!(heard.iter().any(|s| s.0 == "PogoRelease" && s.2 > 0.0 && s.2 <= 1.0), "no PogoRelease with a volume in {heard:?}");
+}

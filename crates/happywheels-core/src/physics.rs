@@ -619,6 +619,8 @@ pub struct World {
     mines: Vec<Mine>,
     /// Sound effects requested this step (audiosprite name, world position in px); the app drains them with `take_sounds`.
     pub sounds: Vec<(String, [f32; 2])>,
+    /// Sounds played with a volume argument (`playAreaSoundInstance(name, body, volume)`): (name, position px, volume 0..1).
+    scaled_sounds: Vec<(String, [f32; 2], f32)>,
     pub trigger_sounds: Vec<TriggerSound>,
     /// Blood particles and flows (see `blood.rs`).
     pub blood: crate::blood::Blood,
@@ -711,6 +713,7 @@ impl World {
             loose: Vec::new(),
             mines: Vec::new(),
             sounds: Vec::new(),
+            scaled_sounds: Vec::new(),
             trigger_sounds: Vec::new(),
             blood: crate::blood::Blood::default(),
             loops: Vec::new(),
@@ -2833,6 +2836,15 @@ impl World {
     pub(crate) fn play(&mut self, name: &str, variants: u32, at: Vec2) {
         let full = if variants > 1 { format!("{name}{}", self.frame % variants + 1) } else { name.to_string() };
         self.sounds.push((full, [(at.x * PS) as f32, (at.y * PS) as f32]));
+    }
+
+    /// `playAreaSoundInstance(name, body, volume)`: like [`play`](Self::play) with a volume multiplier.
+    pub(crate) fn play_scaled(&mut self, name: &str, at: Vec2, volume: f64) {
+        self.scaled_sounds.push((name.to_string(), [(at.x * PS) as f32, (at.y * PS) as f32], volume as f32));
+    }
+
+    pub fn take_scaled_sounds(&mut self) -> Vec<(String, [f32; 2], f32)> {
+        std::mem::take(&mut self.scaled_sounds)
     }
 
     /// Sounds queued since the last call.

@@ -516,10 +516,14 @@ impl ApplicationHandler for App {
             }
             let sounds = sim.world.take_sounds();
             let trigger_sounds = sim.world.take_trigger_sounds();
+            let scaled = sim.world.take_scaled_sounds();
             if let Some(audio) = &self.audio {
                 let listener = sim.camera();
                 for (name, at) in sounds {
                     audio.play(&name, at, listener);
+                }
+                for (name, at, volume) in scaled {
+                    audio.play_scaled(&name, at, listener, volume);
                 }
                 for sound in &trigger_sounds { audio.play_trigger(sound, listener); }
                 audio.set_loops(&sim.world.loops, listener);
