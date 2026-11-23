@@ -915,6 +915,20 @@ impl Sprites {
             for k in &clips[usize::from(harpoon)] {
                 self.draw_node(img, k, mul(cam, body_matrix(world, b)));
             }
+            if harpoon {
+                // blood left on the shaft by impaled flesh (`HarpoonBloodMC` frames, drawn in the harpoon's local px)
+                static BLOOD: std::sync::OnceLock<Vec<Vec<Node>>> = std::sync::OnceLock::new();
+                #[derive(Deserialize)]
+                struct Frames {
+                    frames: Vec<Vec<Node>>,
+                }
+                let frames = BLOOD.get_or_init(|| serde_json::from_str::<Frames>(include_str!("../data/game-HarpoonBloodMC.json")).map(|f| f.frames).unwrap_or_default());
+                for &(frame, ..) in world.harpoon_blood(b) {
+                    for k in frames.get(frame as usize).into_iter().flatten() {
+                        self.draw_node(img, k, mul(cam, body_matrix(world, b)));
+                    }
+                }
+            }
         }
     }
 

@@ -3597,6 +3597,11 @@ impl World {
                     if self.b.shape_material(self.b.body(other).shapes[0]) & 6 != 0 {
                         self.shape_impale(other, true, Some(tip), 0.01);
                         self.blood.burst(at, Vec2::default(), 5.0, 15.0, 50);
+                        if !self.blood.off {
+                            // `HarpoonBloodMC.gotoAndStop(ceil(5·random))` drawn into the harpoon's 106×16 bitmap, once per new body
+                            let frame = (self.blood.rand() * 5.0).floor().min(4.0);
+                            self.arrows[ai].blood.push((frame, 0.0, 0.0, 1.0));
+                        }
                         if self.arrows[ai].flesh_sounds & 1 == 0 {
                             self.arrows[ai].flesh_sounds |= 1;
                             self.play("HarpoonFlesh", 2, tip);
@@ -3706,6 +3711,11 @@ impl World {
                 }
             }
         }
+    }
+
+    /// Harpoon blood stamps (`HarpoonBloodMC` frame indices 0..4, in the first tuple field) of the harpoon whose body is `body`.
+    pub fn harpoon_blood(&self, body: BodyId) -> &[(f64, f64, f64, f64)] {
+        self.arrows.iter().find(|a| a.body == body && a.blade.is_none() && a.harpoon).map_or(&[], |a| a.blood.as_slice())
     }
 
     /// BladeWeapon blood stamps (clip-local px x, y, rotation, scaleX) of the blade whose body is `body`.
@@ -5821,6 +5831,31 @@ mod tests {
         assert!(w.arrows[0].armed && !w.arrows[0].done, "harpoon should be pinned and intact");
         assert_eq!(max_blood, 50, "impaling flesh bursts 50 blood particles");
         assert!(sounds.iter().any(|s| s.0.starts_with("HarpoonFlesh")), "{sounds:?}");
+        // the shaft keeps one `HarpoonBloodMC` stamp (frame 0..4) per impaled body; with blood switched off there is none
+        let body = w.arrows[0].body;
+        let stamps = w.harpoon_blood(body);
+        assert_eq!(stamps.len(), 1);
+        assert!(stamps[0].0 >= 0.0 && stamps[0].0 <= 4.0);
+    }
+
+    #[test]
+    fn harpoon_leaves_no_blood_stamp_when_blood_is_off() {
+        let lvl = crate::level::parse("<levelXML><info v='1.99'/><shapes/><specials><sp t='15' p0='1000' p1='500' p2='0' p3='f' p4='f' p5='0' p6='f' p7='f'/></specials></levelXML>").unwrap();
+        let mut w = World::from_level(&lvl);
+        w.blood.off = true;
+        let b = w.b.create_body(&BodyDef { position: Vec2::new(1000.0 / PS, 200.0 / PS), ..Default::default() });
+        let mut sd = ShapeDef::new(Geometry::Circle { local_position: Vec2::default(), radius: 20.0 / PS });
+        sd.density = 50.0;
+        sd.filter = Filter { category_bits: 8, mask_bits: 0xFFFF, group_index: 0 };
+        let sh = w.b.create_shape(b, &sd);
+        w.b.shape_mut(sh).material = 2;
+        w.b.set_mass_from_shapes(b);
+        for _ in 0..120 {
+            w.b.body_mut(b).linear_velocity = Vec2::default();
+            w.step();
+        }
+        assert!(w.arrows[0].armed);
+        assert!(w.harpoon_blood(w.arrows[0].body).is_empty());
     }
 
     #[test]
