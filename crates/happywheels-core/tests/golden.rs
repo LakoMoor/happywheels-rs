@@ -3620,3 +3620,21 @@ fn torn_ligament_chains_play_lig_tear() {
     }
     assert!(heard_any, "some smash order tears a chain and plays LigTear1");
 }
+
+/// The BMX bike's `contactAddSounds`: dropping it on the ground plays a `TireHit`/`BikeHit` (source behaviour; not oracle-checked, not heard).
+#[test]
+fn bmx_landing_plays_hit_sounds() {
+    let level = level::parse(
+        "<levelXML><info v='1.99' x='1000' y='150'/><shapes>\
+         <sh t='0' p0='1000' p1='425' p2='2000' p3='50' p4='0' p5='t' p6='f' p7='1' p8='0' p9='-1' p10='100' p11='1'/></shapes></levelXML>",
+    )
+    .unwrap();
+    let mut w = World::from_level(&level);
+    assert!(w.spawn_bike(3, [1000.0, 150.0]));
+    let mut heard = Vec::new();
+    for _ in 0..120 {
+        w.step();
+        heard.extend(w.take_sounds().into_iter().map(|s| s.0));
+    }
+    assert!(heard.iter().any(|n| n.starts_with("TireHit") || n.starts_with("BikeHit")), "landing makes a hit sound: {heard:?}");
+}

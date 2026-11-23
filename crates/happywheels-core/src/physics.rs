@@ -2078,6 +2078,50 @@ impl World {
         }
     }
 
+    /// Vehicle `contactAddSounds` (`BikeHit*`, `TireHit*`, ...): same buffering as the rider's thuds (closing speed above 4 against a non-sensor shape that is
+    /// massless or at least as heavy), one sound per shape per step. Only the vehicles listed in `vehicle_contact_sounds` are covered so far; a vehicle smash
+    /// does not clear the buffered sound here (the original does).
+    fn collect_vehicle_sounds(&mut self, events: &[box2d::world::ContactEvent]) {
+        let table = self.vehicle_contact_sounds();
+        if table.is_empty() {
+            return;
+        }
+        let mut heard: Vec<(ShapeId, &'static str, Vec2)> = Vec::new();
+        for ev in events.iter().filter(|e| e.kind == ContactEventKind::Add) {
+            for (mine, other) in [(ev.shape1, ev.shape2), (ev.shape2, ev.shape1)] {
+                let Some(&(_, name)) = table.iter().find(|(s, _)| *s == mine) else { continue };
+                if heard.iter().any(|h| h.0 == mine) {
+                    continue;
+                }
+                let o = &self.b.c.shapes[other];
+                let body = self.b.c.shapes[mine].body;
+                let (om, mm) = (self.b.body(o.body).mass, self.b.body(body).mass);
+                if o.shape.is_sensor || (om != 0.0 && om < mm) {
+                    continue;
+                }
+                if (ev.velocity.x * ev.normal.x + ev.velocity.y * ev.normal.y).abs() > 4.0 {
+                    heard.push((mine, name, self.b.body(body).sweep.c));
+                }
+            }
+        }
+        for (_, n, at) in heard {
+            self.play(n, 1, at);
+        }
+    }
+
+    fn vehicle_contact_sounds(&self) -> Vec<(ShapeId, &'static str)> {
+        let first = |b: BodyId, k: usize| self.b.body(b).shapes.get(k).copied();
+        let mut out = Vec::new();
+        if let Some(crate::vehicle::Vehicle::Bike(v)) = self.bike.as_ref() {
+            for (k, n) in ["BikeHit3", "BikeHit2", "BikeHit1"].into_iter().enumerate() {
+                out.extend(first(v.frame, k).map(|s| (s, n)));
+            }
+            out.extend(first(v.back_wheel, 0).map(|s| (s, "TireHit1")));
+            out.extend(first(v.front_wheel, 0).map(|s| (s, "TireHit2")));
+        }
+        out
+    }
+
     fn collect_smashes(&mut self, events: &[box2d::world::ContactEvent]) {
         self.smashes.clear();
         let Some(doll) = self.character.as_ref() else { return };
@@ -2200,6 +2244,7 @@ impl World {
         let events: Vec<_> = self.b.c.events.drain(..).collect();
         self.collect_smashes(&events);
         self.collect_thuds(&events);
+        self.collect_vehicle_sounds(&events);
         if self.joints_break && self.character.as_ref().is_some_and(|d| d.helmet_on) {
             // the head shape doubles as the helmet shape: a Result above 2 loses the helmet (and the head cannot smash that frame)
             let head = self.character.as_ref().map(|d| d.bodies[&crate::character::Part::Head]);
