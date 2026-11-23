@@ -7,7 +7,17 @@ use box2d::math::Vec2;
 const SCALER: f64 = 62.5 / 30.0;
 const GRAVITY: f64 = 10.0 * 62.5 / 900.0;
 const Y_LIMIT: f64 = 850.0;
-const MAX_PARTICLES: usize = 2000;
+/// `ParticleController.maxParticles` (options slider 0..2000, default 2000), process-wide like the blood setting.
+static MAX_PARTICLES_SETTING: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(2000);
+
+/// Sets the particle cap new emissions respect (the options screen's "maximum particles" slider, clamped to 0..=2000).
+pub fn set_max_particles(max: usize) {
+    MAX_PARTICLES_SETTING.store(max.min(2000), std::sync::atomic::Ordering::Relaxed);
+}
+
+fn max_particles() -> usize {
+    MAX_PARTICLES_SETTING.load(std::sync::atomic::Ordering::Relaxed)
+}
 /// `ShardKind::Food` index of the 13-frame `Blood` clip (bloodSetting 1 particles).
 pub const BLOOD: u8 = 8;
 /// `ShardKind::Food` index of the 13-frame `WaterMC` clip (toilet water sprays).
@@ -105,7 +115,7 @@ pub fn set_blood_setting(setting: u8) {
 impl Default for Blood {
     fn default() -> Self {
         let setting = BLOOD_SETTING.load(std::sync::atomic::Ordering::Relaxed);
-        Self { particles: Vec::new(), sparks: Vec::new(), sprites: Vec::new(), flows: Vec::new(), line_blood: setting >= 2, off: setting == 0, setting, rng: 0 }
+        Self { particles: Vec::new(), sparks: Vec::new(), sprites: Vec::new(), flows: Vec::new(), line_blood: setting >= 2, off: setting == 0, setting, max: max_particles(), rng: 0 }
     }
 }
 
@@ -120,6 +130,8 @@ pub struct Blood {
     pub off: bool,
     /// The raw `bloodSetting` (3 and 4 are the metaball looks: line particles blurred and thresholded, see `render`).
     pub setting: u8,
+    /// Particle cap of this world (`maxParticles` when it was created).
+    pub max: usize,
     rng: u64,
 }
 
@@ -187,7 +199,7 @@ impl Blood {
             return;
         }
         for _ in 0..total {
-            if self.particles.len() + self.sprites.len() >= MAX_PARTICLES {
+            if self.particles.len() + self.sprites.len() >= self.max {
                 return;
             }
             let vx = vel.x + self.rand() * (self.rand() * speed_range - speed_range / 2.0);
@@ -208,7 +220,7 @@ impl Blood {
         }
         if !self.line_blood {
             self.spawn_sprite(ShardKind::Food(BLOOD), at, vel);
-        } else if self.particles.len() < MAX_PARTICLES {
+        } else if self.particles.len() < self.max {
             self.particles.push(Particle::new(at[0], at[1], vel[0], vel[1]));
         }
     }
@@ -218,7 +230,7 @@ impl Blood {
     pub fn sprite_burst(&mut self, kind: ShardKind, start: [f64; 2], range: f64, speed: f64, total: u32) {
         let frames = kind.clip().2;
         for _ in 0..total {
-            if self.particles.len() + self.sprites.len() >= MAX_PARTICLES {
+            if self.particles.len() + self.sprites.len() >= self.max {
                 return;
             }
             let vx = self.rand() * (self.rand() * speed - speed / 2.0);
@@ -233,7 +245,7 @@ impl Blood {
 
     /// One particle of a sprite flow (`Mk.createParticle`): velocity in m/s, centred on `at` (px).
     pub fn spawn_sprite(&mut self, kind: ShardKind, at: [f64; 2], vel: [f64; 2]) {
-        if self.particles.len() + self.sprites.len() >= MAX_PARTICLES {
+        if self.particles.len() + self.sprites.len() >= self.max {
             return;
         }
         let frames = kind.clip().2;
@@ -277,5 +289,22 @@ mod tests {
         assert_eq!((sprites.particles.len(), sprites.live()), (0, 21), "setting 1: bitmap particles");
         let lines = with(2);
         assert_eq!((lines.particles.len(), lines.sprites.len()), (21, 0), "setting 2: lines");
+    }
+}
+
+#[cfg(test)]
+mod max_particle_tests {
+    use super::*;
+
+    #[test]
+    fn the_particle_cap_limits_new_emissions() {
+        let mut b = Blood::default();
+        b.max = 25;
+        b.burst([0.0, 0.0], Vec2::default(), 5.0, 15.0, 200);
+        let n = b.particles.len() + b.sprites.len();
+        assert!(n <= 25, "capped at 25, saw {n}");
+        let mut c = Blood::default();
+        c.burst([0.0, 0.0], Vec2::default(), 5.0, 15.0, 200);
+        assert!(c.particles.len() + c.sprites.len() > 25, "default cap lets them through");
     }
 }

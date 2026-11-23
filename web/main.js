@@ -22,6 +22,13 @@ try {
     audio.setVolume(Number(volume.value));
     try { localStorage.setItem('hw-volume', volume.value); } catch {}
   });
+  const particles = document.querySelector('#particles');
+  try { const saved = localStorage.getItem('hw-particles'); if (saved !== null) particles.value = saved; } catch {}
+  game.set_max_particles(Number(particles.value));
+  particles.addEventListener('input', () => {
+    game.set_max_particles(Number(particles.value));
+    try { localStorage.setItem('hw-particles', particles.value); } catch {}
+  });
   window.addEventListener('pointerdown', resumeAudio);
   window.addEventListener('keydown', resumeAudio);
   status.textContent = 'Running sample level.';

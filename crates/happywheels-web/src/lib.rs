@@ -257,6 +257,11 @@ mod browser {
             happywheels_core::blood::set_blood_setting(setting.min(4));
         }
 
+        /// Maximum number of blood/shard particles (the options slider, 0..=2000); applies to worlds created from now on (Restart / level load).
+        pub fn set_max_particles(&mut self, max: u32) {
+            happywheels_core::blood::set_max_particles(max as usize);
+        }
+
         pub fn pointer(&mut self, x: f32, y: f32, clicked: bool) {
             if self.paused || self.menu_open { return; }
             let mut topmost = None;
