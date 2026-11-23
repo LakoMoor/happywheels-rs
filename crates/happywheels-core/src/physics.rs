@@ -336,6 +336,9 @@ struct Glass {
 
 /// One glass triangle (`nd`/`te`): shatters above `shatter` (10·mass) and, when the pane is `stabbing`, pins flesh it hits above `stab_limit` with a sensor +
 /// prismatic joints like spikes (motor force 30), until nothing is pinned any more.
+/// Which `b2*Contact` class evaluated a contact: (shape1 is a circle, shape2 is a circle).
+type ContactClass = (bool, bool);
+
 struct Shard {
     body: BodyId,
     shape: ShapeId,
@@ -351,7 +354,7 @@ struct Shard {
     pinned: Vec<(BodyId, usize, u32)>,
     /// (flesh body, contact normal, aliased): the original's listener hands the sensor-as-shape1 case the shared `s_evalCP` itself, whose normal keeps changing
     /// until the queue runs, so `aliased` entries take the normal of the last Add/Persist/Remove event instead of their own.
-    queue_add: Vec<(BodyId, Vec2, Option<(bool, bool)>)>,
+    queue_add: Vec<(BodyId, Vec2, Option<ContactClass>)>,
     queue_remove: Vec<BodyId>,
     sounds: u32,
     /// `GlassBloodMC` stamps in the shard body's local px: (x, y, rotation rad, scaleX ±1), one per impaled body.
