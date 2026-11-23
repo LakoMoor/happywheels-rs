@@ -117,6 +117,7 @@ try {
     const file = event.target.files[0];
     if (!file) return;
     try {
+      game.set_blood_setting(Number(document.querySelector('#blood').value));
       game.load_level(await file.text(), Number(character.value));
       setPaused(false);
       menuOpen = false;
