@@ -4249,7 +4249,7 @@ impl World {
                 continue;
             }
             let (body, shape, limit) = (self.glasses[k].body, self.glasses[k].shape, self.glasses[k].smash_impulse);
-            let Some(hit) = events.iter().filter(|e| e.kind == ContactEventKind::Result && (e.shape1 == shape || e.shape2 == shape) && e.normal_impulse > limit).max_by(|a, b| a.normal_impulse.total_cmp(&b.normal_impulse)) else { continue };
+            let Some(hit) = events.iter().find(|e| e.kind == ContactEventKind::Result && (e.shape1 == shape || e.shape2 == shape) && e.normal_impulse > limit) else { continue };
             let src = self.b.body(body).clone();
             let mut impact = src.local_point(hit.position);
             self.glasses[k].done = true;
@@ -5690,6 +5690,41 @@ mod tests {
         let soft = run(8.0);
         assert_eq!(soft[39].1, 1, "a soft hit leaves the boombox intact");
         close(&soft[39].0[0], [1000.011, 476.317, 0.0], "soft f39");
+    }
+
+    /// Glass against the original `Glass` class (oracle `analysis/golden-glass-break.js`): 100×20 pane at (1000,430) dropped at 40 m/s with strength 10 (shatters)
+    /// and at 8 m/s with strength 10000 (stays whole).
+    #[test]
+    fn glass_break_matches_the_original() {
+        let run = |strength: u32, vy: f64| {
+            let xml = format!("<levelXML><info v='1.99'/><shapes>{FLOOR}</shapes><specials><sp t='18' p0='1000' p1='430' p2='100' p3='20' p4='0' p5='f' p6='{strength}' p7='f'/></specials></levelXML>");
+            let mut w = World::from_level(&crate::level::parse(&xml).unwrap());
+            let b = w.special_bodies[0].unwrap();
+            w.b.body_mut(b).linear_velocity = Vec2::new(0.0, vy);
+            let mut frames = Vec::new();
+            for _ in 0..40 {
+                w.step();
+                let list: Vec<BodyId> = if w.glass_pieces().count() > 0 { w.glass_pieces().map(|p| p.0).collect() } else { vec![b] };
+                let mut v: Vec<[f64; 3]> = list.into_iter().map(|id| { let [x, y] = w.body_position_px(id).unwrap(); [f64::from(x), f64::from(y), w.body_angle(id) as f64] }).collect();
+                v.sort_by(|a, b| a[0].total_cmp(&b[0]).then(a[1].total_cmp(&b[1])));
+                frames.push(v);
+            }
+            frames
+        };
+        let close = |got: &[f64; 3], want: [f64; 3], tol: f64, what: &str| assert!((got[0] - want[0]).abs() < tol && (got[1] - want[1]).abs() < tol && (got[2] - want[2]).abs() < 0.002, "{what}: {got:?} vs {want:?}");
+        let broke = run(10, 40.0);
+        assert_eq!(broke[0].len(), 4, "impact on a corner: two intact sides, four triangles");
+        for g in &broke[0] { close(g, [1000.0, 477.972, 0.0], 0.01, "break frame"); }
+        // frame 24 (first landing), 26 and 36 of the oracle, pieces sorted by x then y
+        for (frame, want) in [
+            (24, [[1000.0, 484.639, 0.0], [1000.0, 484.639, 0.0], [1000.004, 480.365, 0.001], [1000.123, 487.414, -0.14]]),
+            (36, [[998.183, 486.96, -0.113], [999.477, 480.78, -0.001], [999.785, 483.809, -0.079], [1000.516, 473.557, 0.098]]),
+        ] {
+            for (g, w) in broke[frame].iter().zip(want) { close(g, w, 0.02, &format!("frame {frame}")); }
+        }
+        let whole = run(10000, 8.0);
+        assert_eq!(whole[39].len(), 1);
+        close(&whole[39][0], [1000.0, 480.318, 0.0], 0.01, "whole pane");
     }
 
     /// A TV cracks above 7 (shards, frame 2..5) and shatters above 20 into three triangular pieces and 60 shards.
