@@ -259,6 +259,19 @@ fn npc_tag(char_index: i32) -> &'static str {
     }
 }
 
+/// SpringBox special: the pad rides a prismatic joint locked at 0..0; after a Result on the pad and `delay` frames the motor drives it 32 px out, then back,
+/// and the joint is locked again (`actions` of the original).
+struct SpringBox {
+    body: BodyId,
+    pad: ShapeId,
+    joint: usize,
+    hit: bool,
+    /// Motor running (the listener is off until the pad is locked again).
+    active: bool,
+    delay_total: i32,
+    delay_counter: i32,
+}
+
 /// Boombox special (`Boombox`): cracks at an impulse above 6.5 (damage frame 2..4, 15 shards), shatters above 17.5 (or on the next hit after a crack)
 /// into two pieces and 30 shards.
 struct Boombox {
@@ -547,6 +560,7 @@ pub struct World {
     /// Chunk bodies born from smashed food: (body, food type, chunk index).
     food_chunks: Vec<(BodyId, u8, u8)>,
     boomboxes: Vec<Boombox>,
+    spring_boxes: Vec<SpringBox>,
     chairs: Vec<BreakChair>,
     sprays: Vec<Spray>,
     logs: Vec<Log>,
@@ -637,6 +651,7 @@ impl World {
             foods: Vec::new(),
             food_chunks: Vec::new(),
             boomboxes: Vec::new(),
+            spring_boxes: Vec::new(),
             chairs: Vec::new(),
             sprays: Vec::new(),
             logs: Vec::new(),
@@ -1201,6 +1216,17 @@ impl World {
                 self.b.create_prismatic_joint(&d);
             }
             None => {}
+        }
+        if sp.kind == 5 {
+            if let Some(joint) = (0..self.b.c.joints.len()).find(|&j| self.b.c.joints[j].body2 == body && matches!(self.b.c.joints[j].kind, box2d::joints::JointKind::Prismatic(_))) {
+                self.b.c.report_results = true;
+                let delay = (f64::from(sp.num("springDelay").unwrap_or(1.0)) * 30.0).round() as i32;
+                let pad = self.b.body(body).shapes[0];
+                if let box2d::joints::JointKind::Prismatic(p) = &mut self.b.joint_mut(joint).kind {
+                    p.max_motor_force = 1e6;
+                }
+                self.spring_boxes.push(SpringBox { body, pad, joint, hit: false, active: false, delay_total: delay, delay_counter: delay });
+            }
         }
         Some(body)
     }
@@ -2089,6 +2115,7 @@ impl World {
         self.run_mines();
         self.update_loops();
         self.run_arrow_guns();
+        self.run_spring_boxes();
         self.check_npc_joints();
         self.check_npc_vocals();
         self.b.step(TIME_STEP, ITERATIONS);
@@ -2340,6 +2367,7 @@ impl World {
         self.token_events(&events);
         self.food_events(&events);
         self.boombox_events(&events);
+        self.spring_box_events(&events);
         self.chair_events(&events);
         self.glass_events(&events);
         self.toilet_events(&events);
@@ -4023,6 +4051,56 @@ impl World {
     }
 
     /// `Boombox.checkContact` / `singleAction` / `shatter`.
+    /// `SpringBox.checkContact`: the first Result on the pad arms the box (the listener is gone until the pad is back).
+    fn spring_box_events(&mut self, events: &[box2d::world::ContactEvent]) {
+        for s in &mut self.spring_boxes {
+            if !s.hit && events.iter().any(|e| e.kind == ContactEventKind::Result && (e.shape1 == s.pad || e.shape2 == s.pad)) && !s.active {
+                s.hit = true;
+            }
+        }
+    }
+
+    /// `SpringBox.actions`: when armed and the delay counter is zero the pad is driven out (motor speed 10, limits 0..32 px) with a bounce sound; while armed the
+    /// counter counts down. Afterwards the motor speed turns to -1 past 32 px and, back at 0, the joint is locked again and the contact listener restored.
+    fn run_spring_boxes(&mut self) {
+        for k in 0..self.spring_boxes.len() {
+            let (body, joint) = (self.spring_boxes[k].body, self.spring_boxes[k].joint);
+            if self.spring_boxes[k].hit {
+                if self.spring_boxes[k].delay_counter == 0 {
+                    self.spring_boxes[k].hit = false;
+                    self.spring_boxes[k].active = true;
+                    self.b.body_mut(body).wake_up();
+                    if let box2d::joints::JointKind::Prismatic(p) = &mut self.b.joint_mut(joint).kind {
+                        p.motor_speed = 10.0;
+                        p.lower_translation = 0.0;
+                        p.upper_translation = 32.0 / PS;
+                        p.enable_motor = true;
+                    }
+                    self.spring_boxes[k].delay_counter = self.spring_boxes[k].delay_total;
+                    let at = self.b.body(body).sweep.c;
+                    self.play("SpringBoxBounce", 1, at);
+                } else {
+                    self.spring_boxes[k].delay_counter -= 1;
+                }
+            } else if self.spring_boxes[k].active {
+                let tr = self.b.prismatic_translation(joint).unwrap_or(0.0) * PS;
+                if let box2d::joints::JointKind::Prismatic(p) = &mut self.b.joint_mut(joint).kind {
+                    if p.motor_speed > 0.0 {
+                        if tr > 32.0 {
+                            p.motor_speed = -1.0;
+                        }
+                    } else if p.motor_speed < 0.0 && tr < 0.0 {
+                        p.enable_motor = false;
+                        p.lower_translation = 0.0;
+                        p.upper_translation = 0.0;
+                        p.motor_speed = 0.0;
+                        self.spring_boxes[k].active = false;
+                    }
+                }
+            }
+        }
+    }
+
     fn boombox_events(&mut self, events: &[box2d::world::ContactEvent]) {
         for k in 0..self.boomboxes.len() {
             if self.boomboxes[k].done {
@@ -5725,6 +5803,24 @@ mod tests {
         let whole = run(10000, 8.0);
         assert_eq!(whole[39].len(), 1);
         close(&whole[39][0], [1000.0, 480.318, 0.0], 0.01, "whole pane");
+    }
+
+    /// SpringBox launches a ball like the original (oracle `analysis/golden-springbox.js`): ball (r 20) dropped from y 300 onto a box at (1000,430) with a 0.5 s
+    /// delay; the pad waits 15 frames, drives out (motor 10, 32 px) and comes back, the ball flies up.
+    #[test]
+    fn spring_box_launches_like_the_original() {
+        let xml = "<levelXML><info v='1.99'/><shapes><sh t='1' p0='1000' p1='300' p2='40' p3='40' p4='0' p5='f' p6='f' p7='1' p8='0' p9='-1' p10='100' p11='1' p12='0'/></shapes><specials><sp t='5' p0='1000' p1='430' p2='0' p3='0.5'/></specials></levelXML>";
+        let mut w = World::from_level(&crate::level::parse(xml).unwrap());
+        let pad = w.special_bodies[0].unwrap();
+        let ball = (0..w.b.c.bodies.len()).find(|&b| b != pad && !w.body_is_fixed(b) && w.b.c.bodies[b].alive && w.b.body(b).xf.position.y * PS < 400.0).unwrap();
+        let mut got = Vec::new();
+        for _ in 0..120 {
+            w.step();
+            got.push((w.body_position_px(pad).unwrap()[1], w.body_position_px(ball).unwrap()[1]));
+        }
+        for (k, pad_y, ball_y) in [(16, 430.0, 390.139), (30, 430.0, 390.365), (35, 399.771, 309.101), (40, 410.187, 222.296), (50, 431.021, 100.768), (60, 430.0, 48.685), (80, 430.0, 152.851), (119, 410.187, 222.303)] {
+            assert!((f64::from(got[k].0) - pad_y).abs() < 0.05 && (f64::from(got[k].1) - ball_y).abs() < 0.05, "frame {k}: {:?} vs ({pad_y}, {ball_y})", got[k]);
+        }
     }
 
     /// A TV cracks above 7 (shards, frame 2..5) and shatters above 20 into three triangular pieces and 60 shards.
