@@ -194,8 +194,17 @@ impl Audio {
 
     /// Plays sprite `name` heard from `listener` (px) while the sound sits at `at` (px).
     pub fn play(&self, name: &str, at: [f32; 2], listener: [f32; 2]) {
+        self.play_with_transform(name, sound_gain(name, at, listener), if name == "Victory" { 0.0 } else { area_pan(at, listener) });
+    }
+
+    pub fn play_trigger(&self, sound: &happywheels_core::physics::TriggerSound, listener: [f32; 2]) {
+        let gain = if sound.global { sound.volume } else { area_gain(sound.position, listener) * sound.volume };
+        let pan = if sound.global { sound.pan.clamp(-1.0, 1.0) } else { area_pan(sound.position, listener) };
+        self.play_with_transform(&sound.name, gain, pan);
+    }
+
+    fn play_with_transform(&self, name: &str, gain: f32, pan: f32) {
         let Some(&[start_ms, dur_ms]) = self.table.get(name) else { return };
-        let gain = sound_gain(name, at, listener);
         if gain <= 0.0 {
             return;
         }
@@ -205,7 +214,6 @@ impl Audio {
         }
         let start = (start_ms * WAV_RATE / 1000.0) as usize;
         let end = (((start_ms + dur_ms) * WAV_RATE / 1000.0) as usize).min(m.samples.len());
-        let pan = if name == "Victory" { 0.0 } else { area_pan(at, listener) };
         m.voices.push(Voice { end, at: start as f64, gain, pan });
     }
 }

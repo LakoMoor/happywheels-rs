@@ -69,3 +69,15 @@ test('victory is audible independent of its position', async () => {
   assert.equal(audio.voices.length, 1);
   assert.equal(audio.voices[0].volume.gain.value, 1);
 });
+
+test('sound triggers use their volume, location and global pan', async () => {
+  const audio = new SpriteAudio(new Context(), { Hit: [1000, 500] });
+  await audio.load(new ArrayBuffer(0));
+  audio.update([[], [], [0, 0], [{name:'Hit', position:[5000, 0], global:true, volume:0.4, pan:-0.5}]]);
+  assert.equal(audio.voices[0].volume.gain.value, 0.4);
+  assert.equal(audio.voices[0].panner.pan.value, -0.5);
+  audio.update([[], [], [0, 0], [{name:'Hit', position:[500, 0], global:false, volume:0.4, pan:0}]]);
+  assert.equal(audio.voices[1].volume.gain.value, 0.2);
+  audio.update([[], [], [250, 0], []]);
+  assert.ok(Math.abs(audio.voices[1].volume.gain.value - 0.3) < 1e-9);
+});

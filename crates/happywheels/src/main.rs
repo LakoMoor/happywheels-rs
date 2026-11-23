@@ -288,6 +288,7 @@ impl Player {
         self.world.set_rider_keys(happywheels_core::vehicle::Keys { left: k[0], right: k[1], up: k[2], down: k[3], space: k[4], z: k[5], shift: k[6], ctrl: k[7] });
         self.world.step();
         self.world.take_sounds();
+        self.world.take_trigger_sounds();
     }
 }
 
@@ -514,11 +515,13 @@ impl ApplicationHandler for App {
                 println!("trigger {} fired at step {}", e.trigger, e.frame);
             }
             let sounds = sim.world.take_sounds();
+            let trigger_sounds = sim.world.take_trigger_sounds();
             if let Some(audio) = &self.audio {
                 let listener = sim.camera();
                 for (name, at) in sounds {
                     audio.play(&name, at, listener);
                 }
+                for sound in &trigger_sounds { audio.play_trigger(sound, listener); }
                 audio.set_loops(&sim.world.loops, listener);
             }
             sim.next_step += std::time::Duration::from_secs_f64(happywheels_core::physics::TIME_STEP);

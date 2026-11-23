@@ -247,6 +247,10 @@ pub struct Trigger {
     pub start_disabled: bool,
     pub repeat_interval: Option<f32>,
     pub delay: Option<f32>,
+    pub sound_index: Option<usize>,
+    pub sound_location: i32,
+    pub sound_volume: f32,
+    pub sound_pan: f32,
     pub targets: Vec<TriggerTarget>,
 }
 
@@ -410,6 +414,10 @@ pub fn parse(xml: &str) -> Result<Level> {
                 start_disabled: flag(t, "sd"),
                 repeat_interval: f(t, "i"),
                 delay: f(t, "d"),
+                sound_index: t.attribute("s").and_then(|s| s.parse().ok()),
+                sound_location: f(t, "l").unwrap_or(1.0) as i32,
+                sound_volume: f(t, "v").unwrap_or(1.0),
+                sound_pan: f(t, "p").unwrap_or(0.0),
                 targets: Vec::new(),
             };
             for c in t.children().filter(|c| c.is_element()) {

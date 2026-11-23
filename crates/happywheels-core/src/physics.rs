@@ -141,6 +141,15 @@ pub struct TriggerEvent {
     pub frame: u32,
 }
 
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct TriggerSound {
+    pub name: String,
+    pub position: [f32; 2],
+    pub global: bool,
+    pub volume: f32,
+    pub pan: f32,
+}
+
 /// Runtime state of one trigger, transcribed from the original's trigger class (contact-listener driven):
 /// triggeredBy 1 = main character, 2 = any character, 3 = any non-fixed shape, 4 = only this trigger's
 /// targets, 5 = other triggers (not modelled), 6 = mouse click (not modelled); repeatType 1 = once,
@@ -150,6 +159,7 @@ struct TriggerState {
     sensor: ShapeId,
     kind: i32,
     position: [f32; 2],
+    sound: Option<TriggerSound>,
     by: i32,
     repeat: i32,
     repeat_frames: Option<u32>,
@@ -523,6 +533,7 @@ pub struct World {
     mines: Vec<Mine>,
     /// Sound effects requested this step (audiosprite name, world position in px); the app drains them with `take_sounds`.
     pub sounds: Vec<(String, [f32; 2])>,
+    pub trigger_sounds: Vec<TriggerSound>,
     /// Blood particles and flows (see `blood.rs`).
     pub blood: crate::blood::Blood,
     /// Looping sounds wanted this frame (`playAreaSoundLoop`): sprite name and position in px; the audio layer fades them in/out.
@@ -610,6 +621,7 @@ impl World {
             loose: Vec::new(),
             mines: Vec::new(),
             sounds: Vec::new(),
+            trigger_sounds: Vec::new(),
             blood: crate::blood::Blood::default(),
             loops: Vec::new(),
             arrow_guns: Vec::new(),
@@ -1257,6 +1269,11 @@ impl World {
                 sensor,
                 kind: t.type_index,
                 position: t.pos,
+                sound: t.sound_index.and_then(|index| {
+                    static NAMES: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
+                    let names = NAMES.get_or_init(|| serde_json::from_str(include_str!("../data/trigger-sounds.json")).expect("valid trigger sound table"));
+                    Some(TriggerSound { name: names.get(index)?.clone(), position: t.pos, global: t.sound_location == 1, volume: t.sound_volume, pan: t.sound_pan })
+                }),
                 by: t.triggered_by,
                 repeat: t.repeat_type,
                 repeat_frames: t.repeat_interval.map(|v| (v * 30.0).floor() as u32),
@@ -1309,6 +1326,9 @@ impl World {
         if kind == 3 {
             self.level_complete = true;
             self.play("Victory", 1, Vec2::new(f64::from(position[0]) / PS, f64::from(position[1]) / PS));
+        }
+        if kind == 2 {
+            if let Some(sound) = self.triggers[trigger].sound.clone() { self.trigger_sounds.push(sound); }
         }
         for (index, actions) in self.triggers[trigger].shape_actions.clone() {
             for a in &actions {
@@ -2640,6 +2660,10 @@ impl World {
     /// Sounds queued since the last call.
     pub fn take_sounds(&mut self) -> Vec<(String, [f32; 2])> {
         std::mem::take(&mut self.sounds)
+    }
+
+    pub fn take_trigger_sounds(&mut self) -> Vec<TriggerSound> {
+        std::mem::take(&mut self.trigger_sounds)
     }
 
     /// Original character cameraFocus follows the chest, then the heart after a chest smash.
@@ -5222,6 +5246,18 @@ mod tests {
         assert_eq!(w.take_sounds().iter().filter(|s| s.0 == "Victory").count(), 1);
         w.click_trigger(0);
         assert!(w.take_sounds().is_empty());
+    }
+
+    #[test]
+    fn sound_trigger_preserves_original_lookup_and_transform() {
+        let xml = "<levelXML><info v='1.99'/><triggers><t x='400' y='200' w='50' h='50' b='6' t='2' r='1' s='0' l='1' v='0.4' p='-0.5'/></triggers></levelXML>";
+        let mut w = World::from_level(&crate::level::parse(xml).unwrap());
+        w.click_trigger(0);
+        let sounds = w.take_trigger_sounds();
+        assert_eq!(sounds.len(), 1);
+        assert_eq!(sounds[0].name, "Char1Foot1");
+        assert!(sounds[0].global);
+        assert_eq!((sounds[0].volume, sounds[0].pan, sounds[0].position), (0.4, -0.5, [400.0, 200.0]));
     }
 
     #[test]

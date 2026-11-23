@@ -277,13 +277,14 @@ mod browser {
                 self.renderer.resize(w, h);
                 self.renderer.upload(&frame).map_err(js_error)?;
                 self.renderer.render();
-                return Ok("[[],[],[0,0]]".into());
+                return Ok("[[],[],[0,0],[]]".into());
             }
             // A hidden tab must not accumulate minutes of simulation to catch up on return.
             let elapsed = crate::elapsed_ms(self.last_time, now_ms, self.paused);
             self.last_time = Some(now_ms);
             self.accumulator += elapsed;
             let mut sounds = Vec::new();
+            let mut trigger_sounds = Vec::new();
             while !self.paused && self.accumulator >= 1000.0 / 30.0 {
                 let k = self.keys;
                 self.world
@@ -300,6 +301,7 @@ mod browser {
                 });
                 self.world.step();
                 sounds.extend(self.world.take_sounds());
+                trigger_sounds.extend(self.world.take_trigger_sounds());
                 self.accumulator -= 1000.0 / 30.0;
             }
             let (w, h) = (self.canvas.width().max(1), self.canvas.height().max(1));
@@ -317,7 +319,7 @@ mod browser {
             self.renderer.upload(&frame).map_err(js_error)?;
             self.renderer.render();
             let loops = if self.paused { &[][..] } else { &self.world.loops[..] };
-            serde_json::to_string(&(sounds, loops, camera)).map_err(js_error)
+            serde_json::to_string(&(sounds, loops, camera, trigger_sounds)).map_err(js_error)
         }
     }
 }

@@ -69,6 +69,24 @@ export class SpriteAudio {
     voice.source.start(0, voice.start, voice.duration);
   }
 
+  playTrigger(sound, listener) {
+    const gain = sound.global ? sound.volume : this.gainAt(sound.position, listener, sound.volume);
+    if (gain <= 0) return;
+    const voice = this.create(sound.name, gain);
+    if (!voice) return;
+    voice.at = sound.global ? null : sound.position;
+    voice.scale = sound.volume;
+    voice.panner.pan.value = sound.global ? Math.max(-1, Math.min(1, sound.pan)) : this.panAt(sound.position, listener);
+    while (this.voices.length >= 24) this.voices.shift().source.stop();
+    this.voices.push(voice);
+    voice.source.onended = () => {
+      const index = this.voices.indexOf(voice);
+      if (index !== -1) this.voices.splice(index, 1);
+      voice.source.disconnect(); voice.volume.disconnect(); voice.panner.disconnect();
+    };
+    voice.source.start(0, voice.start, voice.duration);
+  }
+
   syncLoops(wanted, listener) {
     const names = new Set(wanted.map(([name]) => name));
     const now = this.context.currentTime;
@@ -100,13 +118,14 @@ export class SpriteAudio {
     }
   }
 
-  update([sounds, loops, listener]) {
+  update([sounds, loops, listener, triggerSounds = []]) {
     for (const voice of this.voices) {
       if (!voice.at) continue;
-      voice.volume.gain.value = this.gainAt(voice.at, listener);
+      voice.volume.gain.value = this.gainAt(voice.at, listener, voice.scale ?? 1);
       voice.panner.pan.value = this.panAt(voice.at, listener);
     }
     for (const [name, at] of sounds) this.play(name, at, listener);
+    for (const sound of triggerSounds) this.playTrigger(sound, listener);
     this.syncLoops(loops, listener);
   }
 }
