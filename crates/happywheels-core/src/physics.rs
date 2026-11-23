@@ -6071,6 +6071,44 @@ mod tests {
         }
     }
 
+    /// Trash can against the original `TrashCan` (oracle `analysis/golden-trash.js`): can with trash at (1000,420) dropped at 40 and at 12 m/s.
+    #[test]
+    fn trash_can_break_matches_the_original() {
+        let run = |vy: f64| {
+            let xml = format!("<levelXML><info v='1.99'/><shapes>{FLOOR}</shapes><specials><sp t='26' p0='1000' p1='420' p2='0' p3='f' p4='t' p5='t'/></specials></levelXML>");
+            let mut w = World::from_level(&crate::level::parse(&xml).unwrap());
+            let can = w.special_bodies[0].unwrap();
+            w.b.body_mut(can).linear_velocity = Vec2::new(0.0, vy);
+            let mut frames = Vec::new();
+            for _ in 0..40 {
+                w.step();
+                let can = w.special_bodies[0].unwrap();
+                let mut ids: Vec<BodyId> = std::iter::once(can).chain(w.loose.iter().copied()).filter(|&b| w.b.c.bodies[b].alive).collect();
+                ids.sort_unstable();
+                ids.dedup();
+                let mut v: Vec<[f64; 3]> = ids.into_iter().map(|b| { let [x, y] = w.body_position_px(b).unwrap(); [f64::from(x), f64::from(y), w.body_angle(b) as f64] }).collect();
+                v.sort_by(|a, b| a[0].total_cmp(&b[0]).then(a[1].total_cmp(&b[1])));
+                frames.push(v);
+            }
+            frames
+        };
+        let a = run(40.0);
+        let b = run(12.0);
+        // crush (first Result 14.9 > 12): the can is replaced by a crushed box and ten trash bodies; spill (4.7 > 3.5, at frame 1) keeps the hollow can
+        for (what, got, want) in [
+            ("crush f1", &a[1], [[982.314, 406.123, 0.003], [985.116, 421.439, -0.175], [990.510, 422.891, -0.121], [991.847, 408.196, -0.022], [999.810, 427.176, -0.008], [999.861, 450.063, -0.127], [999.869, 401.859, 0.117], [1005.611, 422.564, -0.000], [1006.165, 408.947, 0.008], [1010.280, 426.878, -0.004], [1016.990, 412.428, 0.118]]),
+            ("crush f39", &a[39], [[955.399, 446.179, 1.674], [964.374, 454.630, -1.792], [987.093, 443.611, 0.009], [987.371, 426.580, 0.057], [997.663, 420.135, 0.200], [997.923, 449.820, 0.017], [999.224, 472.421, 0.000], [1002.557, 428.428, 0.042], [1003.179, 438.585, 0.039], [1009.123, 450.020, 0.315], [1020.654, 449.855, 0.059]]),
+            ("spill f39", &b[39], [[984.026, 420.025, -0.468], [985.897, 436.299, -0.030], [991.947, 437.211, -0.006], [995.531, 420.095, 0.363], [1001.366, 412.779, 0.215], [1001.573, 443.474, 0.002], [1001.732, 454.499, 0.001], [1007.997, 432.093, 0.071], [1010.814, 422.088, 0.071], [1012.397, 443.684, 0.228], [1019.084, 436.531, 0.164]]),
+        ] {
+            let want: Vec<[f64; 3]> = want.to_vec();
+            assert_eq!(got.len(), want.len(), "{what}: body count");
+            for (g, w) in got.iter().zip(&want) {
+                assert!((g[0] - w[0]).abs() < 0.02 && (g[1] - w[1]).abs() < 0.02 && (g[2] - w[2]).abs() < 0.005, "{what}: {g:?} vs {w:?}");
+            }
+        }
+        assert_eq!(b[0].len(), 1, "the spill is processed on the next frame");
+    }
+
     /// A TV cracks above 7 (shards, frame 2..5) and shatters above 20 into three triangular pieces and 60 shards.
     #[test]
     fn tv_cracks_then_shatters() {
