@@ -4491,6 +4491,7 @@ impl World {
                     }
                 }
             }
+            let had_removals = !self.blade_shards[k].queue_remove.is_empty();
             for other in std::mem::take(&mut self.blade_shards[k].queue_remove) {
                 if let Some(i) = self.blade_shards[k].pinned.iter().position(|p| p.0 == other) {
                     self.blade_shards[k].pinned[i].2 -= 1;
@@ -4500,8 +4501,8 @@ impl World {
                     }
                 }
             }
-            if self.blade_shards[k].pinned.is_empty() && self.blade_shards[k].queue_add.is_empty() {
-                // `checkZeroJoints`: back to a plain solid shard
+            if had_removals && self.blade_shards[k].pinned.is_empty() {
+                // `checkZeroJoints` (only after removals): back to a plain solid shard
                 self.b.shape_mut(shape).filter = Filter { category_bits: 8, mask_bits: 0xFFFF, group_index: 0 };
                 self.b.refilter(shape);
                 self.b.destroy_shape(sensor);
@@ -6772,10 +6773,11 @@ mod tests {
         assert_eq!(run("f").0, 0, "non-stabbing glass does not");
     }
 
-    /// Helicopter blade shards stab like `MN` (behaviour from the source; NOT compared with the oracle): a flesh body (category 4) landing hard on one is pinned with a
-    /// prismatic joint and impale sound; without flesh material nothing is pinned.
+    /// Helicopter blade shards stab like `MN` (oracle `analysis/golden-blade-shard.js`, class `34531.J7`): a quad shard (box 1.0×0.1 m, density 3, category 260) lies on the
+    /// floor at (1000, 483.7); a flesh box (0.3×0.15, density 7, material 2, category 4) hits it at 14 m/s, bounces, and is pinned from frame 11 (visible after that step; the
+    /// port's joint exists one step earlier in its own bookkeeping) with the shard switched to stab mode; non-flesh material is never pinned.
     #[test]
-    fn heli_blade_shards_pin_flesh() {
+    fn heli_blade_shards_pin_flesh_like_the_original() {
         let run = |material: i32| {
             let xml = format!("<levelXML><info v='1.99'/><shapes>{FLOOR}</shapes></levelXML>");
             let mut w = World::from_level(&crate::level::parse(&xml).unwrap());
@@ -6784,6 +6786,8 @@ mod tests {
                 let id = b.create_body(&BodyDef { position: Vec2::new(1000.0 / PS, 483.7 / PS), ..Default::default() });
                 let mut sd = ShapeDef::oriented_box(1.0, 0.1, Vec2::default(), 0.0);
                 sd.density = 3.0;
+                sd.friction = 0.3;
+                sd.restitution = 0.1;
                 sd.filter = Filter { category_bits: 260, mask_bits: 0xFFFF, group_index: 0 };
                 b.create_shape(id, &sd);
                 b.set_mass_from_shapes(id);
@@ -6793,20 +6797,37 @@ mod tests {
             let flesh = w.b.create_body(&BodyDef { position: Vec2::new(1000.0 / PS, 430.0 / PS), ..Default::default() });
             let mut sd = ShapeDef::oriented_box(0.3, 0.15, Vec2::default(), 0.0);
             sd.density = 7.0;
+            sd.friction = 0.3;
+            sd.restitution = 0.1;
             sd.filter = Filter { category_bits: 4, mask_bits: 0xFFFF, group_index: 0 };
             let s = w.b.create_shape(flesh, &sd);
             w.b.shape_mut(s).material = material;
             w.b.set_mass_from_shapes(flesh);
             w.b.body_mut(flesh).linear_velocity = Vec2::new(0.0, 14.0);
-            let mut pinned = 0;
-            for _ in 0..40 {
+            let mut frames = Vec::new();
+            for _ in 0..100 {
                 w.step();
-                pinned = pinned.max(w.blade_shards.iter().map(|s| s.pinned.len()).sum::<usize>());
+                let n = w.blade_shards.iter().map(|s| s.pinned.len()).sum::<usize>();
+                let pos: Vec<[f64; 3]> = [flesh, shard].iter().map(|&b| { let [x, y] = w.body_position_px(b).unwrap(); [f64::from(x), f64::from(y), f64::from(w.body_angle(b))] }).collect();
+                frames.push((n, pos));
             }
-            pinned
+            frames
         };
-        assert!(run(2) > 0, "flesh is pinned by a blade shard");
-        assert_eq!(run(1), 0, "non-flesh is not");
+        let frames = run(2);
+        assert_eq!(frames.iter().position(|f| f.0 > 0), Some(10), "first frame with the pin");
+        assert!(frames[10..].iter().all(|f| f.0 == 1), "stays pinned");
+        for (k, want) in [
+            (5, [[999.198, 463.473, 0.016], [999.970, 484.128, 0.000]]),
+            (9, [[998.396, 468.110, 0.032], [999.970, 484.104, 0.000]]),
+            (12, [[998.195, 473.919, 0.036], [999.970, 484.092, 0.000]]),
+            (39, [[998.196, 473.926, 0.036], [999.971, 484.065, 0.000]]),
+            (99, [[998.196, 473.926, 0.036], [999.971, 484.065, 0.000]]),
+        ] {
+            for (g, w) in frames[k].1.iter().zip(&want) {
+                assert!((g[0] - w[0]).abs() < 0.05 && (g[1] - w[1]).abs() < 0.05 && (g[2] - w[2]).abs() < 0.01, "frame {k}: {g:?} vs {w:?}");
+            }
+        }
+        assert!(run(1).iter().all(|f| f.0 == 0), "non-flesh is not pinned");
     }
 
     /// Glass pieces are shards too: a hard hit on a piece (Result above 10·its mass) destroys it with a burst of glass.
