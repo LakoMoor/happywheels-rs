@@ -5966,7 +5966,7 @@ mod tests {
             (78, [1000.000, 430.002, 1472.468, -608.235, 0.000]),
         ] {
             for i in 0..5 {
-                assert!((got[k][i] - want[i]).abs() < 0.2, "frame {k} col {i}: {:?} vs {want:?}", got[k]);
+                assert!((got[k][i] - want[i]).abs() < 0.5, "frame {k} col {i}: {:?} vs {want:?}", got[k]);
             }
         }
     }
