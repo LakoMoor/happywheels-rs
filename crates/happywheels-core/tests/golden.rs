@@ -3516,3 +3516,26 @@ fn chair_jet_requests_the_jetblast_loop() {
     w.step();
     assert!(!w.loops.iter().any(|l| l.0 == "JetBlast"), "stops with the key");
 }
+
+/// The daughter's `detachFrame` plays `StrapSnap1` once (behaviour only, not compared with the oracle).
+#[test]
+fn daughter_detach_plays_strap_snap() {
+    use happywheels_core::vehicle::Vehicle;
+    let level = level::parse(
+        "<levelXML><info v='1.99' x='1000' y='250'/><shapes>\
+         <sh t='0' p0='1000' p1='425' p2='3000' p3='50' p4='0' p5='t' p6='f' p7='1' p8='0' p9='-1' p10='100' p11='1'/></shapes></levelXML>",
+    )
+    .unwrap();
+    let mut w = World::from_level(&level);
+    assert!(w.spawn_bike(10, [1000.0, 250.0]));
+    for _ in 0..10 {
+        w.step();
+    }
+    w.take_sounds();
+    let Some(Vehicle::Family(mut f)) = w.bike.take() else { panic!("not the family") };
+    f.daughter.detach(&mut w);
+    f.daughter.detach(&mut w);
+    w.bike = Some(Vehicle::Family(f));
+    let n = w.take_sounds().iter().filter(|s| s.0 == "StrapSnap1").count();
+    assert_eq!(n, 1, "one snap for the one break");
+}

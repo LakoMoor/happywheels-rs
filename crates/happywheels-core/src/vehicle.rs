@@ -4607,6 +4607,9 @@ impl Daughter {
         let end = b.body(self.frame).shapes[0];
         b.shape_mut(end).is_sensor = false;
         b.refilter(end);
+        // `playAreaSoundInstance("StrapSnap1", frameBody)`
+        let at = world.b2().body(self.frame).sweep.c;
+        world.play("StrapSnap1", 1, at);
     }
 
     /// `frameSmash` (limit 50 on the frame shape): eject, then the frame body is replaced by fork / broken frame / seat bodies (density 2,
