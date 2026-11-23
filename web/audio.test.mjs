@@ -129,3 +129,14 @@ test('identical loops from different bodies play independently', async () => {
   assert.equal(audio.loops.size, 1);
   assert.ok(audio.loops.has('11:MineHover'));
 });
+
+test('master volume is clamped and scaled sounds multiply the positional gain', async () => {
+  const audio = new SpriteAudio(new Context(), { Hit: [1000, 500] });
+  await audio.load(new ArrayBuffer(0));
+  audio.setVolume(2);
+  assert.equal(audio.master.gain.value, 1);
+  audio.setVolume(0.4);
+  assert.equal(audio.master.gain.value, 0.4);
+  audio.update([[], [], [0, 0], [], [['Hit', [500, 125], 0.5]]]);
+  assert.equal(audio.voices[0].volume.gain.value, 0.25);
+});

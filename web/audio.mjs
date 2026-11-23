@@ -6,6 +6,13 @@ export class SpriteAudio {
     this.buffer = null;
     this.voices = [];
     this.loops = new Map();
+    // master volume (the options screen's volume slider)
+    this.master = context.createGain();
+    this.master.connect(context.destination);
+  }
+
+  setVolume(value) {
+    this.master.gain.value = Math.min(1, Math.max(0, value));
   }
 
   async load(bytes) {
@@ -49,7 +56,7 @@ export class SpriteAudio {
     volume.gain.value = gain;
     source.connect(volume);
     volume.connect(panner);
-    panner.connect(this.context.destination);
+    panner.connect(this.master);
     return { source, volume, panner, start, duration };
   }
 

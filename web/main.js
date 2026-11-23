@@ -15,6 +15,13 @@ try {
   const audioContext = new AudioContext();
   const audio = new SpriteAudio(audioContext, JSON.parse(audio_table()));
   const resumeAudio = () => { if (audioContext.state === 'suspended') audioContext.resume().catch(console.error); };
+  const volume = document.querySelector('#volume');
+  try { const saved = localStorage.getItem('hw-volume'); if (saved !== null) volume.value = saved; } catch {}
+  audio.setVolume(Number(volume.value));
+  volume.addEventListener('input', () => {
+    audio.setVolume(Number(volume.value));
+    try { localStorage.setItem('hw-volume', volume.value); } catch {}
+  });
   window.addEventListener('pointerdown', resumeAudio);
   window.addEventListener('keydown', resumeAudio);
   status.textContent = 'Running sample level.';
