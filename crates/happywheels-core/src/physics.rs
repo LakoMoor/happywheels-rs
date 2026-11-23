@@ -163,7 +163,7 @@ struct TriggerState {
     /// Group actions use a different index ordering from individual shapes.
     group_actions: Vec<(BodyId, Vec<Vec<String>>)>,
     /// Triggers activated when this one fires (`TargetKind::Trigger` targets).
-    trigger_targets: Vec<usize>,
+    trigger_targets: Vec<(usize, Vec<u8>)>,
     disabled: bool,
     /// One-shot trigger already spent (mouse / trigger-activated modes).
     done: bool,
@@ -1280,7 +1280,10 @@ impl World {
                         .filter_map(|tg| Some((*self.group_bodies.get(tg.index)?, tg.actions.clone())))
                         .collect()
                 } else { Vec::new() },
-                trigger_targets: t.targets.iter().filter(|tg| tg.kind == crate::level::TargetKind::Trigger).map(|tg| tg.index).collect(),
+                trigger_targets: t.targets.iter().filter(|tg| tg.kind == crate::level::TargetKind::Trigger).map(|tg| {
+                    let actions: Vec<u8> = tg.actions.iter().filter_map(|a| a.first()?.parse().ok()).collect();
+                    (tg.index, if actions.is_empty() { vec![0] } else { actions })
+                }).collect(),
                 disabled: t.start_disabled,
                 done: false,
                 listening: (1..=4).contains(&t.triggered_by),
@@ -1299,6 +1302,7 @@ impl World {
         let t = &mut self.triggers[trigger];
         if t.repeat == 1 {
             t.listening = false;
+            t.done = true;
             let sensor = t.sensor;
             self.b.destroy_shape(sensor); // singleAction: levelBody.DestroyShape(sensor)
         }
@@ -1345,11 +1349,38 @@ impl World {
             }
         }
         if kind == 1 {
-            for target in self.triggers[trigger].trigger_targets.clone() {
+            for (target, actions) in self.triggers[trigger].trigger_targets.clone() {
                 if target != trigger {
-                    self.activate_by_trigger(target);
+                    for action in actions {
+                        match action {
+                            0 => self.activate_by_trigger(target),
+                            1 => self.set_trigger_disabled(target, true),
+                            2 => self.set_trigger_disabled(target, false),
+                            _ => {}
+                        }
+                    }
                 }
             }
+        }
+    }
+
+    /// Trigger.disabled setter: disable clears pending actions; enabling refilters its live sensor.
+    fn set_trigger_disabled(&mut self, index: usize, disabled: bool) {
+        let Some(trigger) = self.triggers.get_mut(index) else { return };
+        if trigger.disabled == disabled { return; }
+        trigger.disabled = disabled;
+        if disabled {
+            trigger.triggering_body = None;
+            trigger.triggering_count = 0;
+            trigger.repeat_count = trigger.repeat_frames.unwrap_or(0);
+            trigger.delay.clear();
+            trigger.active = false;
+            trigger.watching_remove = false;
+            trigger.listening = false;
+        } else if !trigger.done {
+            trigger.listening = (1..=4).contains(&trigger.by);
+            let sensor = trigger.sensor;
+            self.b.refilter(sensor);
         }
     }
 
@@ -4823,6 +4854,24 @@ mod tests {
         assert!(!w.mouse_trigger_enabled(0));
         w.click_trigger(0); // once only
         assert_eq!(w.events.iter().map(|e| e.trigger).collect::<Vec<_>>(), vec![0, 1]);
+    }
+
+    #[test]
+    fn trigger_targets_can_disable_and_enable_other_triggers() {
+        let xml = "<levelXML><info v='1.99'/><triggers><t x='0' y='0' w='50' h='50' b='6' t='1' r='2'><t i='2'><a i='1'/></t></t><t x='100' y='0' w='50' h='50' b='6' t='1' r='2'><t i='2'><a i='2'/></t></t><t x='200' y='0' w='50' h='50' b='6' t='3' r='2' d='0.2'/></triggers></levelXML>";
+        let mut w = World::from_level(&crate::level::parse(xml).unwrap());
+        w.click_trigger(2);
+        w.click_trigger(0);
+        assert!(!w.mouse_trigger_enabled(2));
+        for _ in 0..20 { w.step(); }
+        assert!(!w.level_complete, "disabling cancels pending activation");
+        w.click_trigger(2);
+        assert!(!w.level_complete);
+        w.click_trigger(1);
+        assert!(w.mouse_trigger_enabled(2));
+        w.click_trigger(2);
+        for _ in 0..20 { w.step(); }
+        assert!(w.level_complete);
     }
 
     #[test]
