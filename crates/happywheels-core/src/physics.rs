@@ -5971,6 +5971,34 @@ mod tests {
         }
     }
 
+    /// Fan against the original `Fan` class (oracle `analysis/golden-fan.js`): a fan at (1000,480) pointing up pushes two balls (r 20, density 3 and 6) placed at
+    /// (1000,400) and (1040,300); the light one rises and falls again, the heavy one only settles on the fan.
+    #[test]
+    fn fan_pushes_like_the_original() {
+        let xml = "<levelXML><info v='1.99'/><shapes>\
+            <sh t='1' p0='1000' p1='400' p2='40' p3='40' p4='0' p5='f' p6='f' p7='3' p8='0' p9='-1' p10='100' p11='1' p12='0'/>\
+            <sh t='1' p0='1040' p1='300' p2='40' p3='40' p4='0' p5='f' p6='f' p7='6' p8='0' p9='-1' p10='100' p11='1' p12='0'/></shapes>\
+            <specials><sp t='8' p0='1000' p1='480' p2='0'/></specials></levelXML>";
+        let mut w = World::from_level(&crate::level::parse(xml).unwrap());
+        let mut got = Vec::new();
+        for _ in 0..120 {
+            w.step();
+            got.push([w.position_px(0).unwrap()[1], w.position_px(1).unwrap()[1]]);
+        }
+        for (k, want) in [
+            (10, [397.263, 321.548]),
+            (20, [355.342, 362.737]),
+            (40, [165.761, 410.274]),
+            (60, [-37.227, 410.274]),
+            (90, [118.512, 410.274]),
+            (119, [383.338, 410.274]),
+        ] {
+            for i in 0..2 {
+                assert!((f64::from(got[k][i]) - want[i]).abs() < 0.2, "frame {k} ball {i}: {:?} vs {want:?}", got[k]);
+            }
+        }
+    }
+
     /// A TV cracks above 7 (shards, frame 2..5) and shatters above 20 into three triangular pieces and 60 shards.
     #[test]
     fn tv_cracks_then_shatters() {
