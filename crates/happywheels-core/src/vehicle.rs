@@ -1925,6 +1925,21 @@ impl Mower {
         }
     }
 
+    /// `targetMaskHolder` mask of a body being ground (`contactBladeResultHandler`: a target heavier than 0.1 gets a rect `drawRect(-100, y, 200, 100)` with `y` = the
+    /// clearance shape's first vertex minus the mower's local centre, in px, in the mower's frame): (mower centre px, mower angle, `y` px).
+    pub fn blade_mask(&self, world: &World, target: BodyId) -> Option<([f64; 2], f64, f64)> {
+        if !self.targets.iter().any(|t| t.0 == target) || world.b2().body(target).mass <= 0.1 {
+            return None;
+        }
+        let b = world.b2().body(self.body);
+        let v0 = match &world.b2().c.shapes[self.clearance_shape].shape.kind {
+            box2d::shape::ShapeKind::Polygon { poly, .. } => poly.vertices[0],
+            _ => return None,
+        };
+        let y = (v0.y - b.sweep.local_center.y) * 62.5;
+        Some(([b.sweep.c.x * 62.5, b.sweep.c.y * 62.5], b.sweep.a, y))
+    }
+
     /// The `GrindLoop2` sound plays while something is being ground.
     pub fn grinding(&self) -> bool {
         !self.targets.is_empty() || !self.added.is_empty()

@@ -143,6 +143,8 @@ pub struct Sprites {
     hidden: std::cell::RefCell<Vec<&'static str>>,
     /// `wound` overlays of the chest / pelvis are drawn only while this is set (see `Ragdoll::part_wound`).
     show_wound: std::cell::Cell<bool>,
+    /// `targetMaskHolder` mask of the body being drawn: screen → mower-frame matrix and the rect's top `y` (px); pixels outside x ±100, y..y+100 are skipped.
+    grind_mask: std::cell::Cell<Option<(M, f64)>>,
     /// Asset root (kept for the lazily opened NPC clips) and those clips (`NPCSprite1..12` as top-level nodes `npc1..12`).
     assets: SpriteAssets,
     npc: std::cell::OnceCell<Option<Box<Sprites>>>,
@@ -237,7 +239,7 @@ impl Sprites {
                 pages.push((atlas.frames, img.to_rgba8()));
             }
         }
-        Some(Self { clip, pages, bindings: Vec::new(), shift: [0.0, 0.0], city: Vec::new(), hidden: Default::default(), show_wound: Default::default(), assets: source.clone(), npc: Default::default() })
+        Some(Self { clip, pages, bindings: Vec::new(), shift: [0.0, 0.0], city: Vec::new(), hidden: Default::default(), show_wound: Default::default(), grind_mask: Default::default(), assets: source.clone(), npc: Default::default() })
     }
 
     /// Clip set of the NPC ragdolls: `NPCSprite1..12` (dumped from the oracle) with the atlas pages that hold their textures (game atlases and the
@@ -294,7 +296,7 @@ impl Sprites {
             missing.retain(|t| !atlas.frames.contains_key(t));
             pages.push((atlas.frames, img.to_rgba8()));
         }
-        Some(Self { clip, pages, bindings: Vec::new(), shift: [0.0, 0.0], city: Vec::new(), hidden: Default::default(), show_wound: Default::default(), assets: source.clone(), npc: Default::default() })
+        Some(Self { clip, pages, bindings: Vec::new(), shift: [0.0, 0.0], city: Vec::new(), hidden: Default::default(), show_wound: Default::default(), grind_mask: Default::default(), assets: source.clone(), npc: Default::default() })
     }
 
     /// Draws the NPC of special `sp` (frame 1 of every part, `shape` guides hidden): each part clip sits at its body's centre of mass with the body's
@@ -317,10 +319,21 @@ impl Sprites {
                 node = &node.k[i];
             }
             let m = mul(cam, mul(body_matrix(world, body), local(0.0, 0.0, 0.0, 0.5 * flip * node.sx, 0.5 * node.sy)));
+            self.set_grind_mask(world, body, cam);
             for child in &node.k {
                 self.draw_node(img, child, m);
             }
+            self.grind_mask.set(None);
         }
+    }
+
+    /// Sets (or clears) the `targetMaskHolder` clip for drawing `body` under camera matrix `cam`.
+    fn set_grind_mask(&self, world: &World, body: BodyId, cam: M) {
+        let mask = match world.bike.as_ref() {
+            Some(crate::vehicle::Vehicle::Mower(m)) => m.blade_mask(world, body),
+            _ => None,
+        };
+        self.grind_mask.set(mask.and_then(|(c, a, y)| invert(mul(cam, local(c[0], c[1], a, 1.0, 1.0))).map(|inv| (inv, y))));
     }
 
     /// Every texture name used anywhere in `nodes` (including alternate frames).
@@ -395,7 +408,7 @@ impl Sprites {
         if pages.is_empty() {
             return None;
         }
-        Some(Self { clip, pages, bindings: Vec::new(), shift: [0.0, 0.0], city: Vec::new(), hidden: Default::default(), show_wound: Default::default(), assets: source.clone(), npc: Default::default() })
+        Some(Self { clip, pages, bindings: Vec::new(), shift: [0.0, 0.0], city: Vec::new(), hidden: Default::default(), show_wound: Default::default(), grind_mask: Default::default(), assets: source.clone(), npc: Default::default() })
     }
 
     /// City backdrop (`bg='2'`): `city_bd1` (fixed sky/clouds) below two layers of baked buildings (`backdrop2`: multiplier .25, blur 5;
@@ -672,6 +685,7 @@ impl Sprites {
             Some(Vehicle::Mower(m)) => {
                 let (body, back, front) = (m.body, m.back_wheel, m.front_wheel);
                 self.bind(world, "mower", body, start);
+                self.bind_origin("bladecover", body);
                 self.bind_origin("backWheel", back);
                 self.bind_origin("frontWheel", front);
             }
@@ -1792,9 +1806,12 @@ impl Sprites {
         }
         let children = if frame > 1 { node.alt.get(&frame.to_string()).unwrap_or(&node.k) } else { &node.k };
         self.show_wound.set(owner.is_some_and(|d| d.part_wound(&node.n)));
+        // a body the mower is grinding is clipped by `targetMaskHolder`'s rect
+        self.set_grind_mask(world, b.body, local(f64::from(camera_offset.0), f64::from(camera_offset.1), 0.0, 1.0, 1.0));
         for child in children {
             self.draw_node(img, child, g);
         }
+        self.grind_mask.set(None);
         self.show_wound.set(false);
     }
 
@@ -1833,9 +1850,17 @@ impl Sprites {
         let max_x = corners.iter().map(|c| c.0).fold(f64::MIN, f64::max).ceil().min(f64::from(img.width())) as i64;
         let min_y = corners.iter().map(|c| c.1).fold(f64::MAX, f64::min).floor().max(0.0) as i64;
         let max_y = corners.iter().map(|c| c.1).fold(f64::MIN, f64::max).ceil().min(f64::from(img.height())) as i64;
+        let clip = self.grind_mask.get();
         for py in min_y..max_y {
             for px in min_x..max_x {
                 let (sx, sy) = (px as f64 + 0.5, py as f64 + 0.5);
+                if let Some((to_mower, top)) = clip {
+                    let mx = to_mower[0] * sx + to_mower[2] * sy + to_mower[4];
+                    let my = to_mower[1] * sx + to_mower[3] * sy + to_mower[5];
+                    if mx < -100.0 || mx > 100.0 || my < top || my > top + 100.0 {
+                        continue;
+                    }
+                }
                 let u = inv[0] * sx + inv[2] * sy + inv[4];
                 let v = inv[1] * sx + inv[3] * sy + inv[5];
                 if u < 0.0 || v < 0.0 || u >= w || v >= h {
