@@ -1906,7 +1906,6 @@ fn other_vehicles_ask_for_wheel_loops() {
     .unwrap();
     for index in [5usize, 2, 4, 1] {
         let mut w = World::from_level(&level);
-        w.dad_kid = false;
         assert!(w.spawn_bike(index, [1000.0, 250.0]));
         let mut asked = false;
         let mut motor = false;
@@ -3629,14 +3628,18 @@ fn bmx_landing_plays_hit_sounds() {
          <sh t='0' p0='1000' p1='425' p2='2000' p3='50' p4='0' p5='t' p6='f' p7='1' p8='0' p9='-1' p10='100' p11='1'/></shapes></levelXML>",
     )
     .unwrap();
-    let mut w = World::from_level(&level);
-    assert!(w.spawn_bike(3, [1000.0, 150.0]));
-    let mut heard = Vec::new();
-    for _ in 0..120 {
-        w.step();
-        heard.extend(w.take_sounds().into_iter().map(|s| s.0));
+    // Bike (3): Bike/TireHit; jet chair (1) and moped (5): ChairHit/TireHit
+    for (index, prefixes) in [(3, ["BikeHit", "TireHit"]), (1, ["ChairHit", "TireHit"]), (5, ["ChairHit", "TireHit"])] {
+        let mut w = World::from_level(&level);
+        assert!(w.spawn_bike(index, [1000.0, 50.0]));
+        w.dad_kid = false;
+        let mut heard = Vec::new();
+        for _ in 0..120 {
+            w.step();
+            heard.extend(w.take_sounds().into_iter().map(|s| s.0));
+        }
+        assert!(heard.iter().any(|n| prefixes.iter().any(|p| n.starts_with(p))), "character {index}: landing makes a hit sound: {heard:?}");
     }
-    assert!(heard.iter().any(|n| n.starts_with("TireHit") || n.starts_with("BikeHit")), "landing makes a hit sound: {heard:?}");
 }
 
 /// `registerShapeSound`: a heavy dynamic level shape that lands on the ground plays `ShapeHit4` at a volume of `min(closing speed / 12, 1)`
