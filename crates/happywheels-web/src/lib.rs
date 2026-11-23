@@ -236,6 +236,11 @@ mod browser {
             self.keys = [false; 8];
         }
 
+        /// Discard wall-clock time spent while the page is hidden or suspended.
+        pub fn reset_clock(&mut self) {
+            self.last_time = None;
+        }
+
         pub fn level_complete(&self) -> bool {
             self.world.level_complete
         }

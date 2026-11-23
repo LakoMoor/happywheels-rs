@@ -21,6 +21,7 @@ try {
   const input = new GameInput(game);
   let menuOpen = false;
   let paused = false;
+  let victoryShown = false;
   const pauseButton = document.querySelector('#pause');
   const setPaused = value => {
     paused = value;
@@ -40,6 +41,7 @@ try {
         character.value = String(action);
         game.restart(action);
         setPaused(false);
+        victoryShown = false;
         menuOpen = false;
         audio.clear();
         status.textContent = `Started character ${action}.`;
@@ -55,7 +57,6 @@ try {
   canvas.addEventListener('pointerup', event => { if (event.button === 0) pointer(event, true); });
   canvas.addEventListener('pointermove', event => pointer(event, false));
   canvas.addEventListener('pointerleave', () => { if (!menuOpen) game.pointer(-1e9, -1e9, false); });
-  let victoryShown = false;
   const updateKey = (event, down) => {
     const target = event.target;
     const editing = target instanceof HTMLElement && (target.isContentEditable || target.closest('input, select, textarea, button'));
@@ -69,7 +70,10 @@ try {
   window.addEventListener('keydown', event => updateKey(event, true));
   window.addEventListener('keyup', event => updateKey(event, false));
   window.addEventListener('blur', () => input.clear());
-  document.addEventListener('visibilitychange', () => { if (document.hidden) input.clear(); });
+  document.addEventListener('visibilitychange', () => {
+    game.reset_clock();
+    if (document.hidden) input.clear();
+  });
   document.addEventListener('focusin', event => {
     if (event.target instanceof HTMLElement && (event.target.isContentEditable || event.target.closest('input, select, textarea, button'))) input.clear();
   });
