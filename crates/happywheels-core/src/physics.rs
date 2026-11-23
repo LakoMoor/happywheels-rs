@@ -2166,6 +2166,22 @@ impl World {
             out.extend(first(v.back_wheel, 0).map(|s| (s, "TireHit1")));
             out.extend(first(v.front_wheel, 0).map(|s| (s, "TireHit2")));
         }
+        if let Some(crate::vehicle::Vehicle::Cart(v)) = self.bike.as_ref() {
+            if !v.main_smashed {
+                for (k, n) in [(2, "BikeHit1"), (3, "BikeHit3")] {
+                    out.extend(first(v.body, k).map(|s| (s, n)));
+                }
+            }
+            out.extend(first(v.back_wheel, 0).map(|s| (s, "CarTire1")));
+            out.extend(first(v.front_wheel, 0).map(|s| (s, "CarTire1")));
+        }
+        if let Some(crate::vehicle::Vehicle::Mower(v)) = self.bike.as_ref() {
+            for (k, n) in [(2, "ChairHit3"), (3, "ChairHit2"), (4, "BikeHit1"), (6, "ChairHit2"), (7, "BikeHit3")] {
+                out.extend(first(v.body, k).map(|s| (s, n)));
+            }
+            out.extend(first(v.back_wheel, 0).map(|s| (s, "CarTire1")));
+            out.extend(first(v.front_wheel, 0).map(|s| (s, "CarTire1")));
+        }
         if let Some(crate::vehicle::Vehicle::Chair(v)) = self.bike.as_ref() {
             if !v.chair_smashed {
                 for (k, n) in ["ChairHit1", "ChairHit2", "ChairHit3"].into_iter().enumerate() {
