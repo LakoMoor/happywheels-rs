@@ -1814,7 +1814,8 @@ impl World {
                     }
                     let ok = match t.by {
                         1 => Some(body) == main_body,
-                        2 => character_bodies.contains(&body),
+                        // The original checks the contacting shape's character userData. Heart debris has no such owner.
+                        2 => character_bodies.contains(&body) && self.b.shape_material(other) & 2 != 0,
                         3 => mass > 0.0 && !other_sensor,
                         4 => mass > 0.0 && !other_sensor && t.targets.contains(&body),
                         _ => false,
@@ -4730,6 +4731,24 @@ mod tests {
         for _ in 0..60 { w.step(); }
         assert!(!w.events.iter().any(|e| e.trigger == 0));
         assert!(w.events.iter().any(|e| e.trigger == 1));
+    }
+
+    #[test]
+    fn main_character_trigger_sees_heart_without_counting_it_as_owned_flesh() {
+        let xml = "<levelXML><info v='1.99'/><triggers><t x='1000' y='300' w='120' h='60' b='1' t='0' r='1'/><t x='1000' y='300' w='120' h='60' b='2' t='0' r='1'/></triggers></levelXML>";
+        let mut w = World::from_level(&crate::level::parse(xml).unwrap());
+        assert!(w.spawn_character(1, [1000.0, 100.0]));
+        let mut rider = w.character.take().unwrap();
+        rider.smash_chest(&mut w);
+        let heart = rider.heart.unwrap();
+        w.character = Some(rider);
+        // Remove the rest of the ragdoll so only the heart can enter the sensors.
+        let other: Vec<_> = w.character.as_ref().unwrap().bodies.values().copied().filter(|&b| w.b.body(b).alive).collect();
+        for body in other { w.b.destroy_body(body); }
+        assert!(w.b.body(heart).alive);
+        for _ in 0..80 { w.step(); }
+        assert!(w.events.iter().any(|e| e.trigger == 0));
+        assert!(!w.events.iter().any(|e| e.trigger == 1));
     }
 
     #[test]
