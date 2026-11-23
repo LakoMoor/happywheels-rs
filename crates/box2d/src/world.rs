@@ -109,6 +109,13 @@ impl Body {
     pub fn is_bullet(&self) -> bool {
         self.flags & BULLET != 0
     }
+    pub fn set_bullet(&mut self, on: bool) {
+        if on {
+            self.flags |= BULLET;
+        } else {
+            self.flags &= !BULLET;
+        }
+    }
     pub fn wake_up(&mut self) {
         self.flags &= !SLEEP;
         self.sleep_time = 0.0;

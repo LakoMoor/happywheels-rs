@@ -272,6 +272,21 @@ struct SpringBox {
     delay_counter: i32,
 }
 
+/// Paddle special: a pad pinned to the level by a locked revolute joint; after a hit and `delay` frames the motor swings it to `target` and back, then it locks again.
+struct Paddle {
+    body: BodyId,
+    pad: ShapeId,
+    joint: usize,
+    dir: f64,
+    target: f64,
+    speed: f64,
+    hit: bool,
+    active: bool,
+    broken: bool,
+    delay_total: i32,
+    delay_counter: i32,
+}
+
 /// Boombox special (`Boombox`): cracks at an impulse above 6.5 (damage frame 2..4, 15 shards), shatters above 17.5 (or on the next hit after a crack)
 /// into two pieces and 30 shards.
 struct Boombox {
@@ -561,6 +576,7 @@ pub struct World {
     food_chunks: Vec<(BodyId, u8, u8)>,
     boomboxes: Vec<Boombox>,
     spring_boxes: Vec<SpringBox>,
+    paddles: Vec<Paddle>,
     chairs: Vec<BreakChair>,
     sprays: Vec<Spray>,
     logs: Vec<Log>,
@@ -652,6 +668,7 @@ impl World {
             food_chunks: Vec::new(),
             boomboxes: Vec::new(),
             spring_boxes: Vec::new(),
+            paddles: Vec::new(),
             chairs: Vec::new(),
             sprays: Vec::new(),
             logs: Vec::new(),
@@ -1216,6 +1233,20 @@ impl World {
                 self.b.create_prismatic_joint(&d);
             }
             None => {}
+        }
+        if sp.kind == 35 {
+            if let Some(joint) = (0..self.b.c.joints.len()).find(|&j| self.b.c.joints[j].body2 == body && matches!(self.b.c.joints[j].kind, box2d::joints::JointKind::Revolute(_))) {
+                self.b.c.report_results = true;
+                if let box2d::joints::JointKind::Revolute(r) = &mut self.b.joint_mut(joint).kind {
+                    r.max_motor_torque = 1e6;
+                }
+                let dir = if sp.flag("reverse").unwrap_or(false) { -1.0 } else { 1.0 };
+                let delay = (f64::from(sp.num("springDelay").unwrap_or(1.0)) * 30.0).round() as i32;
+                let target = f64::from(sp.num("paddleAngle").unwrap_or(90.0)).to_radians() * dir;
+                let speed = 0.5 + 5.5 * f64::from(sp.num("paddleSpeed").unwrap_or(5.0)) / 10.0;
+                let pad = self.b.body(body).shapes[0];
+                self.paddles.push(Paddle { body, pad, joint, dir, target, speed, hit: false, active: false, broken: false, delay_total: delay, delay_counter: delay });
+            }
         }
         if sp.kind == 5 {
             if let Some(joint) = (0..self.b.c.joints.len()).find(|&j| self.b.c.joints[j].body2 == body && matches!(self.b.c.joints[j].kind, box2d::joints::JointKind::Prismatic(_))) {
@@ -2116,6 +2147,7 @@ impl World {
         self.update_loops();
         self.run_arrow_guns();
         self.run_spring_boxes();
+        self.run_paddles();
         self.check_npc_joints();
         self.check_npc_vocals();
         self.b.step(TIME_STEP, ITERATIONS);
@@ -2368,6 +2400,7 @@ impl World {
         self.food_events(&events);
         self.boombox_events(&events);
         self.spring_box_events(&events);
+        self.paddle_events(&events);
         self.chair_events(&events);
         self.glass_events(&events);
         self.toilet_events(&events);
@@ -4056,6 +4089,89 @@ impl World {
         for s in &mut self.spring_boxes {
             if !s.hit && events.iter().any(|e| e.kind == ContactEventKind::Result && (e.shape1 == s.pad || e.shape2 == s.pad)) && !s.active {
                 s.hit = true;
+            }
+        }
+    }
+
+    /// `Paddle.checkContact`: a Result on the pad against anything but its own blocker (group 15) arms it.
+    fn paddle_events(&mut self, events: &[box2d::world::ContactEvent]) {
+        for k in 0..self.paddles.len() {
+            let (pad, armed) = (self.paddles[k].pad, self.paddles[k].hit || self.paddles[k].active || self.paddles[k].broken);
+            if armed {
+                continue;
+            }
+            let touched = events.iter().any(|e| {
+                if e.kind != ContactEventKind::Result {
+                    return false;
+                }
+                let other = if e.shape1 == pad { e.shape2 } else if e.shape2 == pad { e.shape1 } else { return false };
+                self.b.c.shapes[other].shape.filter.group_index != 15
+            });
+            if touched {
+                self.paddles[k].hit = true;
+            }
+        }
+    }
+
+    /// `Paddle.actions`: armed + counter 0 → bullet body, motor `dir·speed`, limits 0..90° (or -90°..0), `SpringBoxBounce`; moving, the speed flips to ∓2 past the
+    /// target angle and, back at the start, the joint is locked again. A joint stretched by more than 0.43 (squared anchor gap) breaks (pad density 10, `PaddleBreak`).
+    fn run_paddles(&mut self) {
+        for k in 0..self.paddles.len() {
+            if self.paddles[k].broken {
+                continue;
+            }
+            let (body, joint, dir) = (self.paddles[k].body, self.paddles[k].joint, self.paddles[k].dir);
+            if self.paddles[k].hit {
+                if self.paddles[k].delay_counter == 0 {
+                    self.paddles[k].hit = false;
+                    self.paddles[k].active = true;
+                    self.b.body_mut(body).wake_up();
+                    self.b.body_mut(body).set_bullet(true);
+                    let speed = dir * self.paddles[k].speed;
+                    if let box2d::joints::JointKind::Revolute(r) = &mut self.b.joint_mut(joint).kind {
+                        r.motor_speed = speed;
+                        (r.lower_angle, r.upper_angle) = if dir < 0.0 { (-std::f64::consts::FRAC_PI_2, 0.0) } else { (0.0, std::f64::consts::FRAC_PI_2) };
+                        r.enable_motor = true;
+                    }
+                    self.paddles[k].delay_counter = self.paddles[k].delay_total;
+                    let at = self.b.body(body).sweep.c;
+                    self.play("SpringBoxBounce", 1, at);
+                } else {
+                    self.paddles[k].delay_counter -= 1;
+                }
+            } else if self.paddles[k].active {
+                if let Some((_, gap)) = self.b.revolute_reaction(joint) {
+                    if gap * gap > 0.43 {
+                        self.b.destroy_joint(joint);
+                        self.paddles[k].broken = true;
+                        self.paddles[k].active = false;
+                        let pad = self.paddles[k].pad;
+                        self.b.shape_mut(pad).density = 10.0;
+                        self.b.set_mass_from_shapes(body);
+                        let at = self.b.body(body).sweep.c;
+                        self.play("PaddleBreak", 1, at);
+                        continue;
+                    }
+                }
+                let angle = self.b.revolute_angle(joint).unwrap_or(0.0);
+                let target = self.paddles[k].target;
+                if let box2d::joints::JointKind::Revolute(r) = &mut self.b.joint_mut(joint).kind {
+                    let forward = (r.motor_speed > 0.0 && dir > 0.0) || (r.motor_speed < 0.0 && dir < 0.0);
+                    if forward {
+                        if dir > 0.0 && angle > target {
+                            r.motor_speed = -2.0;
+                        } else if dir < 0.0 && angle < target {
+                            r.motor_speed = 2.0;
+                        }
+                    } else if (dir > 0.0 && angle < 0.0) || (dir < 0.0 && angle > 0.0) {
+                        r.enable_motor = false;
+                        r.lower_angle = 0.0;
+                        r.upper_angle = 0.0;
+                        r.motor_speed = 0.0;
+                        self.paddles[k].active = false;
+                        self.b.body_mut(body).set_bullet(false);
+                    }
+                }
             }
         }
     }
@@ -5820,6 +5936,38 @@ mod tests {
         }
         for (k, pad_y, ball_y) in [(16, 430.0, 390.139), (30, 430.0, 390.365), (35, 399.771, 309.101), (40, 410.187, 222.296), (50, 431.021, 100.768), (60, 430.0, 48.685), (80, 430.0, 152.851), (119, 410.187, 222.303)] {
             assert!((f64::from(got[k].0) - pad_y).abs() < 0.05 && (f64::from(got[k].1) - ball_y).abs() < 0.05, "frame {k}: {:?} vs ({pad_y}, {ball_y})", got[k]);
+        }
+    }
+
+    /// Paddle swings a ball like the original (oracle `analysis/golden-paddle.js`): ball (r 20) at (900,360) falls on a paddle at (1000,430), delay 0.5 s, angle 90°,
+    /// speed 5; the ball's landing arms the pad, it swings to ~1.42 rad (flipping the motor at the target), returns and locks; the ball is launched.
+    #[test]
+    fn paddle_swings_like_the_original() {
+        let xml = "<levelXML><info v='1.99'/><shapes><sh t='1' p0='900' p1='360' p2='40' p3='40' p4='0' p5='f' p6='f' p7='1' p8='0' p9='-1' p10='100' p11='1' p12='0'/></shapes><specials><sp t='35' p0='1000' p1='430' p2='0' p3='0.5' p4='f' p5='90' p6='5'/></specials></levelXML>";
+        let mut w = World::from_level(&crate::level::parse(xml).unwrap());
+        let pad = w.special_bodies[0].unwrap();
+        let ball = (0..w.b.c.bodies.len()).find(|&b| b != pad && !w.body_is_fixed(b) && w.b.c.bodies[b].alive && w.b.body(b).xf.position.y * PS < 400.0).unwrap();
+        let mut got = Vec::new();
+        for _ in 0..120 {
+            w.step();
+            let p = w.body_position_px(pad).unwrap();
+            let q = w.body_position_px(ball).unwrap();
+            got.push([f64::from(p[0]), f64::from(p[1]), f64::from(q[0]), f64::from(q[1]), w.body_angle(pad) as f64]);
+        }
+        for (k, want) in [
+            (12, [1000.000, 430.015, 900.000, 390.359, 0.000]),
+            (24, [1000.000, 430.001, 900.000, 390.315, -0.000]),
+            (30, [1027.577, 337.863, 924.218, 214.739, 0.648]),
+            (36, [1105.227, 281.018, 992.749, 24.368, 1.296]),
+            (42, [1123.416, 276.457, 1061.281, -141.004, 1.420]),
+            (54, [1025.301, 341.180, 1198.343, -396.748, 0.621]),
+            (60, [1002.594, 396.686, 1266.874, -487.119, 0.222]),
+            (66, [1000.000, 430.013, 1335.405, -552.491, -0.000]),
+            (78, [1000.000, 430.002, 1472.468, -608.235, 0.000]),
+        ] {
+            for i in 0..5 {
+                assert!((got[k][i] - want[i]).abs() < 0.2, "frame {k} col {i}: {:?} vs {want:?}", got[k]);
+            }
         }
     }
 
