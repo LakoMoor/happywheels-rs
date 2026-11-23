@@ -2643,7 +2643,7 @@ impl World {
             };
             for &ji in brk {
                 if ji < self.npcs[ni].joints.len() {
-                    self.npc_break_joint(ni, ji);
+                    self.npc_break_joint(ni, ji, true);
                 }
             }
         }
@@ -2735,7 +2735,7 @@ impl World {
                 }
                 let Some((force, gap)) = self.b.revolute_reaction(id) else { continue };
                 if force > limit || gap > 0.5 {
-                    self.npc_break_joint(ni, ji);
+                    self.npc_break_joint(ni, ji, true);
                 }
             }
         }
@@ -3053,14 +3053,65 @@ impl World {
         self.npcs.iter().flat_map(|n| n.bodies.iter().chain(n.pieces.iter())).chain(self.loose.iter()).copied().filter(|&b| self.b.body(b).alive).collect()
     }
 
+    /// Blood and sound of the original's `neckBreak/torsoBreak/shoulderBreakN/elbowBreakN/hipBreakN/kneeBreakN` (defaults: flows and sound on). `a1`/`a2` are the
+    /// joint's local anchors on the parent/child body. Approximation: the neck's chest flow starts at the neck anchor instead of the `spineRef` clip point.
+    fn npc_break_effects(&mut self, ni: usize, ji: usize, a1: Vec2, a2: Vec2) {
+        // bodies: 0 chest 1 head 2 pelvis 3/4 upper arms 5/6 lower arms 7/8 upper legs 9/10 lower legs
+        let b = self.npcs[ni].bodies;
+        let at = |w: &World, i: usize| w.b.body(b[i]).sweep.c;
+        match ji {
+            0 => {
+                self.blood_flow(2.5, 4.0, b[1], Vec2::default(), 90.0, 150);
+                self.blood_flow(2.5, 4.0, b[0], a1, 270.0, 500);
+                let p = at(self, 1);
+                self.play("NeckBreak", 1, p);
+            }
+            1 => {
+                self.blood_flow(2.0, 3.0, b[0], Vec2::default(), 90.0, 500);
+                let p = at(self, 2);
+                self.play("LimbRip1", 1, p);
+            }
+            2 | 3 => {
+                let arm = if ji == 2 { 3 } else { 4 };
+                self.blood_flow(1.0, 3.0, b[arm], a2, 270.0, 200);
+                self.blood_flow(0.0, 1.0, b[0], a1, 270.0, 500);
+                let p = at(self, arm);
+                self.play("LimbRip2", 1, p);
+            }
+            6 | 7 => {
+                let leg = if ji == 6 { 7 } else { 8 };
+                self.blood_flow(1.0, 3.0, b[leg], a2, 270.0, 200);
+                self.blood_flow(0.0, 1.0, b[2], Vec2::default(), 90.0, 500);
+                let p = at(self, leg);
+                self.play("LimbRip3", 1, p);
+            }
+            4 | 5 | 8 | 9 => {
+                // elbows and knees: 50-drop blood burst at the child's joint anchor, BoneBreak1..4
+                let lower = match ji { 4 => 5, 5 => 6, 8 => 9, _ => 10 };
+                let w = self.b.body(b[lower]).world_point(a2);
+                self.blood.burst([w.x * PS, w.y * PS], Vec2::default(), 5.0, 15.0, 50);
+                let p = at(self, lower);
+                self.play("BoneBreak", 4, p);
+            }
+            _ => {}
+        }
+    }
+
     /// Joint break reaction: destroy the joint and clear the collision group of the broken limb and everything hanging below it.
-    fn npc_break_joint(&mut self, ni: usize, ji: usize) {
+    fn npc_break_joint(&mut self, ni: usize, ji: usize, effects: bool) {
         let (id, child, _, broken) = self.npcs[ni].joints[ji];
         if broken {
             return;
         }
+        let anchors = match &self.b.joint(id).kind {
+            box2d::joints::JointKind::Revolute(r) => Some((r.local_anchor1, r.local_anchor2)),
+            _ => None,
+        };
         self.b.destroy_joint(id);
         self.npcs[ni].joints[ji].3 = true;
+        if let (true, Some((a1, a2))) = (effects, anchors) {
+            self.npc_break_effects(ni, ji, a1, a2);
+        }
         let kids: &[usize] = match child {
             1 => &[1],
             2 => &[2, 7, 8, 9, 10],
@@ -3108,8 +3159,9 @@ impl World {
                     1 => &[0, 2, 3, 1],
                     _ => &[6, 7, 1],
                 };
+                // `chestSmash`/`pelvisSmash` call the break handlers with blood and sound off
                 for &ji in brk {
-                    self.npc_break_joint(ni, ji);
+                    self.npc_break_joint(ni, ji, false);
                 }
                 let body = bodies[[1, 0, 2][part]];
                 let (pos, ang, w) = {
@@ -5696,6 +5748,22 @@ mod tests {
         assert_eq!(broken(&w), [false, false, false, false, false, false, true, false, true, false]);
         w.npc_remove_body(chest);
         assert_eq!(broken(&w), [true, true, true, true, false, false, true, false, true, false]);
+    }
+
+    /// Breaking an NPC's joints makes blood flows/bursts and the original's sounds (neck, limb rips, bone breaks), all existing sprite names.
+    #[test]
+    fn npc_joint_breaks_bleed_and_make_noise() {
+        let xml = "<levelXML><info v='1.99'/><specials><sp t='17' p0='1000' p1='100' p2='0' p3='1' p4='f' p5='f'/></specials></levelXML>";
+        let mut w = World::from_level(&crate::level::parse(xml).unwrap());
+        let chest = w.npcs[0].bodies[0];
+        w.npc_remove_body(chest);
+        let names: Vec<String> = w.take_sounds().into_iter().map(|s| s.0).collect();
+        for n in ["NeckBreak", "LimbRip1", "LimbRip2"] {
+            assert!(names.iter().any(|s| s == n), "{n} missing in {names:?}");
+        }
+        assert_eq!(w.blood.flows.len(), 2 + 1 + 4, "neck 2, waist 1, two shoulders 2 each");
+        let table: serde_json::Value = serde_json::from_str(include_str!("../data/audiosprite.json")).unwrap();
+        assert!(names.iter().all(|n| table.get(n.as_str()).is_some()));
     }
 
     /// A boombox hit hard enough to shatter drops its `BoomboxHit` impact sound listener; a merely cracked one keeps it.
