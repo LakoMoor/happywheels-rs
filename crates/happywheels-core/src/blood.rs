@@ -298,8 +298,7 @@ mod max_particle_tests {
 
     #[test]
     fn the_particle_cap_limits_new_emissions() {
-        let mut b = Blood::default();
-        b.max = 25;
+        let mut b = Blood { max: 25, ..Blood::default() };
         b.burst([0.0, 0.0], Vec2::default(), 5.0, 15.0, 200);
         let n = b.particles.len() + b.sprites.len();
         assert!(n <= 25, "capped at 25, saw {n}");
