@@ -81,3 +81,18 @@ test('sound triggers use their volume, location and global pan', async () => {
   audio.update([[], [], [250, 0], []]);
   assert.ok(Math.abs(audio.voices[1].volume.gain.value - 0.3) < 1e-9);
 });
+
+test('positional one-shots stop beyond the cutoff but remain alive on its boundary', async () => {
+  const audio = new SpriteAudio(new Context(), { Hit: [1000, 500] });
+  await audio.load(new ArrayBuffer(0));
+  audio.update([[['Hit', [1000, 0]]], [], [0, 0]]);
+  const voice = audio.voices[0];
+  assert.equal(voice.volume.gain.value, 0);
+  audio.update([[], [], [1, 0]]);
+  assert.ok(voice.volume.gain.value > 0);
+  audio.update([[], [], [-1, 0]]);
+  assert.deepEqual(voice.source.stopped, []);
+  assert.equal(audio.voices.length, 0);
+  audio.update([[], [], [0, 0]]);
+  assert.equal(audio.voices.length, 0);
+});

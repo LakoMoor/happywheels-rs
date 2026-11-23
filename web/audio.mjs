@@ -27,6 +27,10 @@ export class SpriteAudio {
     return Math.max(0, 1 - Math.max(x, y)) * volume;
   }
 
+  inRange(at, listener) {
+    return Math.abs(at[0] - listener[0]) <= 1000 && Math.abs(at[1] - listener[1]) <= 500;
+  }
+
   panAt(at, listener) {
     return Math.max(-1, Math.min(1, (at[0] - listener[0]) / 1000));
   }
@@ -52,7 +56,7 @@ export class SpriteAudio {
   play(name, at, listener) {
     // Victory uses playSoundItem in the original, not a positional sound instance.
     const gain = name === 'Victory' ? 1 : this.gainAt(at, listener);
-    if (gain <= 0) return;
+    if (name !== 'Victory' && !this.inRange(at, listener)) return;
     const voice = this.create(name, gain);
     if (!voice) return;
     voice.at = name === 'Victory' ? null : at;
@@ -71,7 +75,7 @@ export class SpriteAudio {
 
   playTrigger(sound, listener) {
     const gain = sound.global ? sound.volume : this.gainAt(sound.position, listener, sound.volume);
-    if (gain <= 0) return;
+    if (sound.volume <= 0 || (!sound.global && !this.inRange(sound.position, listener))) return;
     const voice = this.create(sound.name, gain);
     if (!voice) return;
     voice.at = sound.global ? null : sound.position;
@@ -119,8 +123,13 @@ export class SpriteAudio {
   }
 
   update([sounds, loops, listener, triggerSounds = []]) {
-    for (const voice of this.voices) {
+    for (const voice of [...this.voices]) {
       if (!voice.at) continue;
+      if (!this.inRange(voice.at, listener)) {
+        this.voices.splice(this.voices.indexOf(voice), 1);
+        voice.source.stop();
+        continue;
+      }
       voice.volume.gain.value = this.gainAt(voice.at, listener, voice.scale ?? 1);
       voice.panner.pan.value = this.panAt(voice.at, listener);
     }
