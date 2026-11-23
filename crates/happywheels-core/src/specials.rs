@@ -127,8 +127,8 @@ pub fn simple_body(s: &Special) -> Option<SimpleBody> {
         11 => (vec![ball(num(s, "shapeWidth")? / 2.0)], 75.0, 0.5, 0.1, fixed),
         // SoccerBall: circle r=10, density .5, friction .1, restitution .5
         10 => (vec![ball(10.0)], 0.5, 0.1, 0.5, false),
-        // Mine: box 25×2 (the extra trigger sensor is not modelled), density 1, friction 1, restitution .1
-        2 => (cuboid(12.5, 1.0), 1.0, 1.0, 0.1, false),
+        // Mine: box 25×2 plus the 2×1 trigger box at (0,-2.5) (a solid shape whose Result detonates it), density 1, friction 1, restitution .1
+        2 => (boxes(&[(12.5, 1.0, 0.0, 0.0), (1.0, 0.5, 0.0, -2.5)]), 1.0, 1.0, 0.1, false),
         // Bottle: box 10×29, density 2, friction .3, restitution .1
         20 => (cuboid(5.0, 14.5), 2.0, 0.3, 0.1, false),
         // TV: box 55×40, density 2, friction .3, restitution .1

@@ -287,6 +287,13 @@ struct Paddle {
     delay_counter: i32,
 }
 
+/// Mine special (`Mine`): a Result on its small trigger box detonates it: the body goes and every non-static body within 2 m gets an impulse `10·(1 − d/2)` away from it.
+struct PlainMine {
+    body: BodyId,
+    trigger: ShapeId,
+    done: bool,
+}
+
 /// Boombox special (`Boombox`): cracks at an impulse above 6.5 (damage frame 2..4, 15 shards), shatters above 17.5 (or on the next hit after a crack)
 /// into two pieces and 30 shards.
 struct Boombox {
@@ -577,6 +584,7 @@ pub struct World {
     boomboxes: Vec<Boombox>,
     spring_boxes: Vec<SpringBox>,
     paddles: Vec<Paddle>,
+    plain_mines: Vec<PlainMine>,
     chairs: Vec<BreakChair>,
     sprays: Vec<Spray>,
     logs: Vec<Log>,
@@ -669,6 +677,7 @@ impl World {
             boomboxes: Vec::new(),
             spring_boxes: Vec::new(),
             paddles: Vec::new(),
+            plain_mines: Vec::new(),
             chairs: Vec::new(),
             sprays: Vec::new(),
             logs: Vec::new(),
@@ -1233,6 +1242,11 @@ impl World {
                 self.b.create_prismatic_joint(&d);
             }
             None => {}
+        }
+        if sp.kind == 2 && self.b.body(body).shapes.len() == 2 {
+            self.b.c.report_results = true;
+            let trigger = self.b.body(body).shapes[1];
+            self.plain_mines.push(PlainMine { body, trigger, done: false });
         }
         if sp.kind == 35 {
             if let Some(joint) = (0..self.b.c.joints.len()).find(|&j| self.b.c.joints[j].body2 == body && matches!(self.b.c.joints[j].kind, box2d::joints::JointKind::Revolute(_))) {
@@ -2401,6 +2415,7 @@ impl World {
         self.boombox_events(&events);
         self.spring_box_events(&events);
         self.paddle_events(&events);
+        self.plain_mine_events(&events);
         self.chair_events(&events);
         self.glass_events(&events);
         self.toilet_events(&events);
@@ -4090,6 +4105,35 @@ impl World {
             if !s.hit && events.iter().any(|e| e.kind == ContactEventKind::Result && (e.shape1 == s.pad || e.shape2 == s.pad)) && !s.active {
                 s.hit = true;
             }
+        }
+    }
+
+    /// `Mine.checkContact/actions`: the explosion (sound `MineExplosion`, impulse `10·(1 − d/2)` within 2 m, AABB query of up to 30 shapes).
+    fn plain_mine_events(&mut self, events: &[box2d::world::ContactEvent]) {
+        for k in 0..self.plain_mines.len() {
+            if self.plain_mines[k].done {
+                continue;
+            }
+            let (body, trigger) = (self.plain_mines[k].body, self.plain_mines[k].trigger);
+            if !events.iter().any(|e| e.kind == ContactEventKind::Result && (e.shape1 == trigger || e.shape2 == trigger)) {
+                continue;
+            }
+            self.plain_mines[k].done = true;
+            let c = self.b.body(body).sweep.c;
+            self.b.destroy_body(body);
+            let found = self.b.query(&box2d::collision::Aabb { lower: Vec2::new(c.x - 2.0, c.y - 2.0), upper: Vec2::new(c.x + 2.0, c.y + 2.0) }, 30);
+            for s in found {
+                let other = self.b.c.shapes[s].body;
+                if other == body || !self.b.c.bodies[other].alive || self.b.body(other).is_static {
+                    continue;
+                }
+                let v = self.b.body(other).sweep.c;
+                let (dx, dy) = (v.x - c.x, v.y - c.y);
+                let f = 1.0 - dx.hypot(dy).min(2.0) / 2.0;
+                let a = dy.atan2(dx);
+                self.b.body_mut(other).apply_impulse(Vec2::new(a.cos() * f * 10.0, a.sin() * f * 10.0), v);
+            }
+            self.play("MineExplosion", 1, c);
         }
     }
 
@@ -5995,6 +6039,34 @@ mod tests {
         ] {
             for i in 0..2 {
                 assert!((f64::from(got[k][i]) - want[i]).abs() < 0.2, "frame {k} ball {i}: {:?} vs {want:?}", got[k]);
+            }
+        }
+    }
+
+    /// Mine against the original `Mine` class (oracle `analysis/golden-mine.js`): a ball dropped on a mine at (1000,489) sets it off; two more balls beside it
+    /// get the radial impulse (`10·(1 − d/2)`).
+    #[test]
+    fn mine_explodes_like_the_original() {
+        let xml = format!("<levelXML><info v='1.99'/><shapes>{FLOOR}\
+            <sh t='1' p0='1000' p1='420' p2='40' p3='40' p4='0' p5='f' p6='f' p7='1' p8='0' p9='-1' p10='100' p11='1' p12='0'/>\
+            <sh t='1' p0='1060' p1='460' p2='30' p3='30' p4='0' p5='f' p6='f' p7='1' p8='0' p9='-1' p10='100' p11='1' p12='0'/>\
+            <sh t='1' p0='940' p1='470' p2='24' p3='24' p4='0' p5='f' p6='f' p7='2' p8='0' p9='-1' p10='100' p11='1' p12='0'/></shapes>\
+            <specials><sp t='2' p0='1000' p1='489' p2='0'/></specials></levelXML>");
+        let mut w = World::from_level(&crate::level::parse(&xml).unwrap());
+        let mut got = Vec::new();
+        for _ in 0..90 {
+            w.step();
+            got.push((1..4).flat_map(|i| { let p = w.position_px(i).unwrap_or([f32::NAN; 2]); [f64::from(p[0]), f64::from(p[1])] }).collect::<Vec<_>>());
+        }
+        assert!(w.take_sounds().iter().any(|s| s.0 == "MineExplosion"));
+        for (k, want) in [
+            (5, [1000.000, 434.583, 1060.000, 474.583, 940.000, 478.323]),
+            (12, [1000.014, 470.805, 1060.000, 475.323, 940.000, 478.315]),
+            (16, [1002.304, 283.449, 1286.944, 429.689, 758.291, 452.004]),
+            (20, [1004.594, 107.203, 1513.889, 395.166, 576.583, 436.804]),
+        ] {
+            for i in 0..6 {
+                assert!((got[k][i] - want[i]).abs() < 0.5, "frame {k} col {i}: {:?} vs {want:?}", got[k]);
             }
         }
     }
