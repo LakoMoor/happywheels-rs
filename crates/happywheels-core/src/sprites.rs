@@ -1857,7 +1857,7 @@ impl Sprites {
                 if let Some((to_mower, top)) = clip {
                     let mx = to_mower[0] * sx + to_mower[2] * sy + to_mower[4];
                     let my = to_mower[1] * sx + to_mower[3] * sy + to_mower[5];
-                    if mx < -100.0 || mx > 100.0 || my < top || my > top + 100.0 {
+                    if !(-100.0..=100.0).contains(&mx) || !(top..=top + 100.0).contains(&my) {
                         continue;
                     }
                 }
