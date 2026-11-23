@@ -869,16 +869,31 @@ impl Ragdoll {
 
     /// `checkJoints` of both chains: an end joint whose |impulse| exceeds 1.5 tears.
     pub fn check_chains(&mut self, world: &mut World) {
-        for chain in [self.intestines.as_mut(), self.spine.as_mut()].into_iter().flatten() {
+        let mut torn = Vec::new();
+        for (spine, chain) in [(false, self.intestines.as_mut()), (true, self.spine.as_mut())] {
+            let Some(chain) = chain else { continue };
             let last = chain.joints.len() - 1;
             for k in [0, last] {
                 if let Some(j) = chain.joints[k] {
                     if world.b2().distance_impulse(j).is_some_and(|i| i.abs() > 1.5) {
                         world.b2_mut().destroy_joint(j);
                         chain.joints[k] = None;
+                        torn.push((spine, k == 0));
                     }
                 }
             }
+        }
+        for (spine, first) in torn {
+            self.tear_sound(world, spine, first);
+        }
+    }
+
+    /// `LigTear1` of `spineBreak1` (chest) / `intestineBreak1` (pelvis) / `intestineBreak2` (chest); `spineBreak2` is silent.
+    fn tear_sound(&self, world: &mut World, spine: bool, first: bool) {
+        match (spine, first) {
+            (true, true) | (false, false) => self.sound(world, Part::Chest, "LigTear1", 1),
+            (false, true) => self.sound(world, Part::Pelvis, "LigTear1", 1),
+            (true, false) => {}
         }
     }
 
@@ -888,6 +903,7 @@ impl Ragdoll {
         let k = if end == 0 { 0 } else { chain.joints.len() - 1 };
         if let Some(j) = chain.joints[k].take() {
             world.b2_mut().destroy_joint(j);
+            self.tear_sound(world, spine, end == 0);
         }
     }
 

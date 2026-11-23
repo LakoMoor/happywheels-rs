@@ -3581,3 +3581,42 @@ fn santa_elf_wheels_make_step_sounds() {
     let odd = steps.iter().filter(|n| n[4..].parse::<u32>().unwrap() % 2 == 1).count();
     assert!(odd > 0 && odd < steps.len(), "odd and even steps alternate: {steps:?}");
 }
+
+/// `intestineBreak1/2` / `spineBreak1`: tearing a ligament chain end plays `LigTear1` (behaviour from the source; not oracle-checked, not heard).
+#[test]
+fn torn_ligament_chains_play_lig_tear() {
+    let level = level::parse(
+        "<levelXML><info v='1.99' x='1000' y='250'/><shapes>\
+         <sh t='0' p0='1000' p1='425' p2='2000' p3='50' p4='0' p5='t' p6='f' p7='1' p8='0' p9='-1' p10='100' p11='1'/></shapes></levelXML>",
+    )
+    .unwrap();
+    let mut heard_any = false;
+    for first in [true, false] {
+        let mut w = World::from_level(&level);
+        w.dad_kid = false;
+        assert!(w.spawn_bike(3, [1000.0, 250.0]));
+        for _ in 0..30 {
+            w.step();
+        }
+        let mut doll = w.character.take().unwrap();
+        if first {
+            doll.smash_chest(&mut w);
+            doll.smash_pelvis(&mut w);
+        } else {
+            doll.smash_pelvis(&mut w);
+            doll.smash_chest(&mut w);
+        }
+        let has_chain = doll.intestines.is_some() || doll.spine.is_some();
+        w.character = Some(doll);
+        let mut heard = w.take_sounds();
+        for _ in 0..40 {
+            w.step();
+            heard.extend(w.take_sounds());
+        }
+        let tears = heard.iter().filter(|s| s.0 == "LigTear1").count();
+        if has_chain {
+            heard_any |= tears > 0;
+        }
+    }
+    assert!(heard_any, "some smash order tears a chain and plays LigTear1");
+}
