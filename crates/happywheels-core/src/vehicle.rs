@@ -1993,6 +1993,7 @@ impl Mower {
         }
         // original start of `mowerSmash`: everything being ground is destroyed with its rising body, sprays stop, the grind loop ends
         for (target, rising) in std::mem::take(&mut self.targets) {
+            world.npc_remove_body(target);
             let b = world.b2_mut();
             b.destroy_body(target);
             b.destroy_body(rising);

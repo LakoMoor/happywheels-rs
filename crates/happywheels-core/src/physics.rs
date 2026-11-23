@@ -2624,6 +2624,31 @@ impl World {
         }
     }
 
+    /// `NPCharacter.removeBody` (the mower calls it on a ground target): breaks the joints that held the removed part — head: neck; chest: neck, both
+    /// shoulders, waist; pelvis: both hips, waist; an upper arm/leg: its shoulder/hip and its elbow/knee. The original's break handlers also start
+    /// blood flows and sounds, which are not repeated here (only the joint effect).
+    pub fn npc_remove_body(&mut self, body: BodyId) {
+        // bodies: 0 chest 1 head 2 pelvis 3/4 upper arms 5/6 lower arms 7/8 upper legs 9/10 lower legs; joints: 0 neck 1 waist 2/3 shoulders 4/5 elbows 6/7 hips 8/9 knees
+        for ni in 0..self.npcs.len() {
+            let Some(part) = self.npcs[ni].bodies.iter().position(|&b| b == body) else { continue };
+            let brk: &[usize] = match part {
+                1 => &[0],
+                0 => &[0, 2, 3, 1],
+                2 => &[6, 7, 1],
+                3 => &[2, 4],
+                4 => &[3, 5],
+                7 => &[6, 8],
+                8 => &[7, 9],
+                _ => &[],
+            };
+            for &ji in brk {
+                if ji < self.npcs[ni].joints.len() {
+                    self.npc_break_joint(ni, ji);
+                }
+            }
+        }
+    }
+
     /// Bodies of the NPCs' eleven main parts (those a sprite set draws; detached pieces are not included).
     pub fn npc_main_bodies(&self) -> Vec<BodyId> {
         self.npcs.iter().flat_map(|n| n.bodies).collect()
@@ -5658,6 +5683,19 @@ mod tests {
         assert!(w.b.c.bodies[soft].alive);
         assert_eq!(w.log_halves().count(), 2, "{:?}", w.b.c.bodies[hard].alive);
         assert!(!w.b.c.bodies[hard].alive);
+    }
+
+    /// `NPCharacter.removeBody`: removing the chest breaks neck, both shoulders and waist; removing a thigh breaks its hip and knee; the rest stays joined.
+    #[test]
+    fn npc_remove_body_breaks_the_right_joints() {
+        let xml = "<levelXML><info v='1.99'/><specials><sp t='17' p0='1000' p1='100' p2='0' p3='1' p4='f' p5='f'/></specials></levelXML>";
+        let mut w = World::from_level(&crate::level::parse(xml).unwrap());
+        let (chest, thigh) = (w.npcs[0].bodies[0], w.npcs[0].bodies[7]);
+        w.npc_remove_body(thigh);
+        let broken = |w: &World| w.npcs[0].joints.iter().map(|j| j.3).collect::<Vec<_>>();
+        assert_eq!(broken(&w), [false, false, false, false, false, false, true, false, true, false]);
+        w.npc_remove_body(chest);
+        assert_eq!(broken(&w), [true, true, true, true, false, false, true, false, true, false]);
     }
 
     /// A boombox hit hard enough to shatter drops its `BoomboxHit` impact sound listener; a merely cracked one keeps it.
