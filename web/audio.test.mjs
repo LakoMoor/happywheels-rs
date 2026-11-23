@@ -117,3 +117,15 @@ test('area loops stop outside the cutoff and restart at the sprite start', async
   assert.deepEqual(second.source.stopped, []);
   assert.equal(audio.loops.size, 0);
 });
+
+test('identical loops from different bodies play independently', async () => {
+  const audio = new SpriteAudio(new Context(), { MineHover: [2000, 1000] });
+  await audio.load(new ArrayBuffer(0));
+  audio.syncLoops([['MineHover', [-500, 0], 1, 10], ['MineHover', [500, 0], 1, 11]], [0, 0]);
+  assert.equal(audio.loops.size, 2);
+  assert.equal(audio.loops.get('10:MineHover').panner.pan.value, -0.5);
+  assert.equal(audio.loops.get('11:MineHover').panner.pan.value, 0.5);
+  audio.syncLoops([['MineHover', [500, 0], 1, 11]], [0, 0]);
+  assert.equal(audio.loops.size, 1);
+  assert.ok(audio.loops.has('11:MineHover'));
+});

@@ -451,6 +451,7 @@ struct Mine {
     seek: f64,
     counter: f64,
     counting_down: bool,
+    hovering: bool,
     in_contact: bool,
     retarget: u32,
     target: Option<BodyId>,
@@ -537,7 +538,7 @@ pub struct World {
     /// Blood particles and flows (see `blood.rs`).
     pub blood: crate::blood::Blood,
     /// Looping sounds wanted this frame (`playAreaSoundLoop`): sprite name and position in px; the audio layer fades them in/out.
-    pub loops: Vec<(String, [f32; 2], f32)>,
+    pub loops: Vec<(String, [f32; 2], f32, BodyId)>,
     arrow_guns: Vec<ArrowGun>,
     npcs: Vec<Npc>,
     npc_groups: i16,
@@ -2057,11 +2058,11 @@ impl World {
             doll.check_vocals(self);
             self.character = Some(doll);
         }
-        self.update_loops();
         self.frame += 1;
         self.thrust_jets();
         self.run_cannons();
         self.run_mines();
+        self.update_loops();
         self.run_arrow_guns();
         self.check_npc_joints();
         self.b.step(TIME_STEP, ITERATIONS);
@@ -2524,13 +2525,20 @@ impl World {
         let w = wheel.angular_velocity.abs();
         let name = if w > t[0] { "BikeLoop3" } else if w > t[1] { "BikeLoop2" } else if w > t[2] { "BikeLoop1" } else { return };
         let at = [(wheel.sweep.c.x * PS) as f32, (wheel.sweep.c.y * PS) as f32];
-        self.loops.push((name.to_string(), at, 1.0));
+        self.loops.push((name.to_string(), at, 1.0, spin));
     }
 
     /// Per-frame loop requests (`actions` of each class). c3 bike / family dad / c5 dirt bike / c2 segway: back-wheel |ω| > 18 / 9 / 1 → BikeLoop3/2/1;
     /// c4 cart: 50 / 25 / 5; c1 chair: the big wheel above 1 → BikeLoop1; heli and mower have their own loops.
     fn update_loops(&mut self) {
         self.loops.clear();
+        for mine in &self.mines {
+            if mine.done { continue; }
+            let c = self.b.body(mine.body).sweep.c;
+            let at = [(c.x * PS) as f32, (c.y * PS) as f32];
+            if mine.hovering { self.loops.push(("MineHover".into(), at, 1.0, mine.body)); }
+            if mine.counting_down { self.loops.push(("HomingMineBeep".into(), at, 1.0, mine.body)); }
+        }
         use crate::vehicle::Vehicle;
         let wheels: Option<(Vec<BodyId>, BodyId, [f64; 3])> = match self.bike.as_ref() {
             Some(Vehicle::Bike(b)) => Some((vec![b.back_wheel, b.front_wheel], b.back_wheel, [18.0, 9.0, 1.0])),
@@ -2544,26 +2552,26 @@ impl World {
         if let Some(Vehicle::Cart(c)) = self.bike.as_ref() {
             if c.motor_on(self) {
                 let w = self.b.body(c.back_wheel).sweep.c;
-                self.loops.push(("ElectricMotor1".to_string(), [(w.x * PS) as f32, (w.y * PS) as f32], 1.0));
+                self.loops.push(("ElectricMotor1".to_string(), [(w.x * PS) as f32, (w.y * PS) as f32], 1.0, c.back_wheel));
             }
         }
         if let Some(Vehicle::Mower(m)) = self.bike.as_ref() {
             if m.grinding() {
                 let c = self.b.body(m.body).sweep.c;
-                self.loops.push(("GrindLoop2".to_string(), [(c.x * PS) as f32, (c.y * PS) as f32], 1.0));
+                self.loops.push(("GrindLoop2".to_string(), [(c.x * PS) as f32, (c.y * PS) as f32], 1.0, m.body));
             }
         }
         if let Some(Vehicle::Santa(sa)) = self.bike.as_ref() {
             if sa.bell {
                 let c = self.b.body(sa.sleigh).sweep.c;
-                self.loops.push(("SleighBellLoop".to_string(), [(c.x * PS) as f32, (c.y * PS) as f32], 1.0));
+                self.loops.push(("SleighBellLoop".to_string(), [(c.x * PS) as f32, (c.y * PS) as f32], 1.0, sa.sleigh));
             }
             if !sa.wheels_gone {
                 let touching: usize = sa.wheels.iter().map(|&w| self.b.touching_non_sensor_contacts(w)).sum();
                 let back = self.b.body(sa.wheels[0]);
                 if touching > 0 && back.angular_velocity.abs() > 12.0 {
                     let c = self.b.body(sa.sleigh).sweep.c;
-                    self.loops.push(("SkiLoop".to_string(), [(c.x * PS) as f32, (c.y * PS) as f32], 1.0));
+                    self.loops.push(("SkiLoop".to_string(), [(c.x * PS) as f32, (c.y * PS) as f32], 1.0, sa.sleigh));
                 }
             }
         }
@@ -2573,11 +2581,11 @@ impl World {
         match self.bike.as_ref() {
             Some(crate::vehicle::Vehicle::Heli(h)) if !h.copter_smashed => {
                 let c = self.b.body(h.copter).sweep.c;
-                self.loops.push(("HeliLoop".to_string(), [(c.x * PS) as f32, (c.y * PS) as f32], h.loop_volume()));
+                self.loops.push(("HeliLoop".to_string(), [(c.x * PS) as f32, (c.y * PS) as f32], h.loop_volume(), h.copter));
             }
             Some(crate::vehicle::Vehicle::Mower(m)) if m.halves.is_none() => {
                 let c = self.b.body(m.body).sweep.c;
-                self.loops.push(("MowerLoop".to_string(), [(c.x * PS) as f32, (c.y * PS) as f32], m.loop_volume(self)));
+                self.loops.push(("MowerLoop".to_string(), [(c.x * PS) as f32, (c.y * PS) as f32], m.loop_volume(self), m.body));
             }
             _ => {}
         }
@@ -3552,6 +3560,7 @@ impl World {
             seek: 0.01 * f64::from(sp.num("seekSpeed").unwrap_or(1.0)),
             counter: 30.0 * f64::from(sp.num("explosionDelay").unwrap_or(0.0)),
             counting_down: false,
+            hovering: false,
             in_contact: false,
             retarget: 0,
             target: None,
@@ -3679,6 +3688,7 @@ impl World {
                 }
             }
             let (cx, cy);
+            let mut hovering = false;
             if let Some(t) = self.mines[mi].target {
                 let s = self.b.body(t).sweep.c;
                 let a = Vec2::new(s.x - e.x, s.y - e.y);
@@ -3693,6 +3703,7 @@ impl World {
                 let d = a.y.atan2(a.x) + 0.5 * std::f64::consts::PI;
                 self.b.set_xform(tid, e, d);
                 if self.path_clear(e, s, t) {
+                    hovering = true;
                     let p = Vec2::new(n.x / 30.0, n.y / 30.0);
                     let len = h.sqrt();
                     let m = Vec2::new(a.x / len, a.y / len);
@@ -3714,6 +3725,10 @@ impl World {
                 }
             } else {
                 (cx, cy) = (-n.x * sf / inv_m, -n.y * sf / inv_m);
+            }
+            if hovering != self.mines[mi].hovering {
+                self.play(if hovering { "HomingMineFind" } else { "HomingMineLose" }, 1, e);
+                self.mines[mi].hovering = hovering;
             }
             let bi = -i * sf / inv_i;
             let b = self.b.body_mut(bid);
@@ -5303,6 +5318,32 @@ mod tests {
             w.step();
         }
         assert!(!w.b2().c.bodies[food].alive, "food did not smash");
+    }
+
+    #[test]
+    fn homing_mine_sound_follows_target_and_fuse() {
+        let lvl = crate::level::parse("<levelXML><info v='1.99'/><specials><sp t='25' p0='1000' p1='500' p2='5' p3='2'/></specials></levelXML>").unwrap();
+        let mut w = World::from_level(&lvl);
+        let target = w.b.create_body(&BodyDef { position: Vec2::new(1000.0 / PS + 2.0, 500.0 / PS), ..Default::default() });
+        let mut shape = ShapeDef::new(Geometry::Circle { local_position: Vec2::default(), radius: 0.1 });
+        shape.density = 1.0;
+        w.b.create_shape(target, &shape);
+        w.b.set_mass_from_shapes(target);
+        w.mines[0].target = Some(target);
+        w.run_mines();
+        w.update_loops();
+        assert!(w.take_sounds().iter().any(|s| s.0 == "HomingMineFind"), "done={} hovering={} target={:?} mine={:?} target_pos={:?}", w.mines[0].done, w.mines[0].hovering, w.mines[0].target, w.b.body(w.mines[0].body).sweep.c, w.b.body(target).sweep.c);
+        assert!(w.loops.iter().any(|s| s.0 == "MineHover"));
+        w.mines[0].counting_down = true;
+        w.mines[0].counter = 30.0;
+        w.update_loops();
+        assert!(w.loops.iter().any(|s| s.0 == "HomingMineBeep"));
+        w.mines[0].target = None;
+        w.run_mines();
+        w.update_loops();
+        assert!(w.take_sounds().iter().any(|s| s.0 == "HomingMineLose"));
+        assert!(!w.loops.iter().any(|s| s.0 == "MineHover"));
+        assert!(w.loops.iter().any(|s| s.0 == "HomingMineBeep"));
     }
 
     #[test]

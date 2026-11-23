@@ -92,7 +92,8 @@ export class SpriteAudio {
   }
 
   syncLoops(wanted, listener) {
-    const names = new Set(wanted.map(([name]) => name));
+    const keyFor = ([name, , , source]) => source === undefined ? name : `${source}:${name}`;
+    const names = new Set(wanted.map(keyFor));
     const now = this.context.currentTime;
     for (const [name, voice] of this.loops) {
       if (names.has(name)) continue;
@@ -102,14 +103,16 @@ export class SpriteAudio {
       voice.source.stop(now + 0.2);
       this.loops.delete(name);
     }
-    for (const [name, at, volume] of wanted) {
-      let voice = this.loops.get(name);
+    for (const request of wanted) {
+      const [name, at, volume] = request;
+      const key = keyFor(request);
+      let voice = this.loops.get(key);
       // AreaSoundLoop stops outside the listening rectangle and restarts when
       // audible again; a zero max volume also suspends its audio channel.
       if (!this.inRange(at, listener) || volume <= 0) {
         if (voice) {
           voice.source.stop();
-          this.loops.delete(name);
+          this.loops.delete(key);
         }
         continue;
       }
@@ -122,7 +125,7 @@ export class SpriteAudio {
         voice.source.loopEnd = voice.start + voice.duration;
         voice.source.onended = () => { voice.source.disconnect(); voice.volume.disconnect(); voice.panner.disconnect(); };
         voice.source.start(0, voice.start);
-        this.loops.set(name, voice);
+        this.loops.set(key, voice);
       }
       voice.volume.gain.cancelScheduledValues(now);
       voice.volume.gain.setValueAtTime(target, now);

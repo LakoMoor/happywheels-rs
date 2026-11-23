@@ -50,6 +50,7 @@ struct Voice {
 /// A looping voice (`playAreaSoundLoop`): fades in/out over 0.2 s towards `target`, dropped once silent with target 0.
 struct LoopVoice {
     name: String,
+    source: usize,
     start: usize,
     end: usize,
     at: f64,
@@ -171,23 +172,23 @@ impl Audio {
     }
 
     /// Syncs the looping voices with `wanted` (sprite name, position px): new ones fade in, missing ones fade out, kept ones follow the distance gain.
-    pub fn set_loops(&self, wanted: &[(String, [f32; 2], f32)], listener: [f32; 2]) {
+    pub fn set_loops(&self, wanted: &[(String, [f32; 2], f32, usize)], listener: [f32; 2]) {
         let Ok(mut m) = self.mixer.lock() else { return };
         for l in &mut m.loops {
-            if !wanted.iter().any(|w| w.0 == l.name) {
+            if !wanted.iter().any(|w| w.0 == l.name && w.3 == l.source) {
                 l.target = 0.0;
             }
         }
-        for (name, at, volume) in wanted {
+        for (name, at, volume, source) in wanted {
             let target = area_gain(*at, listener) * volume;
             let pan = area_pan(*at, listener);
-            if let Some(l) = m.loops.iter_mut().find(|l| &l.name == name) {
+            if let Some(l) = m.loops.iter_mut().find(|l| &l.name == name && l.source == *source) {
                 l.target = target;
                 l.pan = pan;
             } else if let Some(&[start_ms, dur_ms]) = self.table.get(name.as_str()) {
                 let start = (start_ms * WAV_RATE / 1000.0) as usize;
                 let end = (((start_ms + dur_ms) * WAV_RATE / 1000.0) as usize).min(m.samples.len());
-                m.loops.push(LoopVoice { name: name.clone(), start, end, at: start as f64, gain: 0.0, target, pan });
+                m.loops.push(LoopVoice { name: name.clone(), source: *source, start, end, at: start as f64, gain: 0.0, target, pan });
             }
         }
     }

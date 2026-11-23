@@ -1845,7 +1845,7 @@ fn bike_wheel_loop_follows_wheel_spin() {
     for i in 0..150 {
         w.set_rider_keys(happywheels_core::vehicle::Keys { up: i > 20, ..Default::default() });
         w.step();
-        if let Some((n, _, _)) = w.loops.first() {
+        if let Some((n, _, _, _)) = w.loops.first() {
             if seen.last() != Some(n) {
                 seen.push(n.clone());
             }
