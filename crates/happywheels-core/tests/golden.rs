@@ -3558,3 +3558,26 @@ fn daughter_detach_plays_strap_snap() {
     let n = w.take_sounds().iter().filter(|s| s.0 == "StrapSnap1").count();
     assert_eq!(n, 1, "one snap for the one break");
 }
+
+/// Santa's elves ride wheels: while they spin the `Step` sounds alternate odd/even each half turn (behaviour from the source, not oracle-checked; the audio
+/// sprite itself only has Step1..Step4).
+#[test]
+fn santa_elf_wheels_make_step_sounds() {
+    use happywheels_core::vehicle::Keys;
+    let level = level::parse(
+        "<levelXML><info v='1.99' x='1000' y='250'/><shapes>\
+         <sh t='0' p0='4000' p1='425' p2='8000' p3='50' p4='0' p5='t' p6='f' p7='1' p8='0' p9='-1' p10='100' p11='1'/></shapes></levelXML>",
+    )
+    .unwrap();
+    let mut w = World::from_level(&level);
+    assert!(w.spawn_bike(8, [1000.0, 250.0]));
+    let mut steps = Vec::new();
+    for i in 0..400 {
+        w.set_rider_keys(Keys { up: i > 20, ..Default::default() });
+        w.step();
+        steps.extend(w.take_sounds().into_iter().map(|s| s.0).filter(|n| n.starts_with("Step")));
+    }
+    assert!(steps.len() >= 4, "elf wheels should make steps while Santa rides: {steps:?}");
+    let odd = steps.iter().filter(|n| n[4..].parse::<u32>().unwrap() % 2 == 1).count();
+    assert!(odd > 0 && odd < steps.len(), "odd and even steps alternate: {steps:?}");
+}

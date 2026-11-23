@@ -5426,6 +5426,8 @@ pub struct Elf {
     pub head_attached: bool,
     pub chest_attached: bool,
     pub strapped_in: bool,
+    /// `sign`: which half of the wheel's turn the last step sound was played in.
+    step_sign: bool,
     wheel_max_speed: f64,
     accel_step: f64,
     anti_grav: Vec<BodyId>,
@@ -5509,6 +5511,7 @@ impl Elf {
             head_attached: true,
             chest_attached: true,
             strapped_in: true,
+            step_sign: true,
             wheel_max_speed: 30.0 * multiplier,
             accel_step: 1.25 * multiplier,
             anti_grav,
@@ -6424,6 +6427,34 @@ impl Santa {
         // `playAreaSoundInstance("StrapSnap1" / "StrapSnap2", ball)`
         let at = world.b2().body(ball).sweep.c;
         world.play(if n == 1 { "StrapSnap1" } else { "StrapSnap2" }, 1, at);
+    }
+
+    /// Elf `actions`: while the wheel touches something and spins above 5 rad/s, `Step{odd}` plays when the wheel's cosine falls below −0.9396 (first foot on)
+    /// and `Step{even}` when it rises above 0.9396 (second foot on); the number is `ceil(random·5)·2 (−1)`, taken from the frame counter here.
+    pub fn elf_steps(&mut self, world: &mut World) {
+        let frame = world.frame();
+        for elf in [&mut self.elf1, &mut self.elf2] {
+            let wheel = elf.wheel_id;
+            if world.b2().touching_non_sensor_contacts(wheel) == 0 || world.b2().body(wheel).angular_velocity.abs() <= 5.0 {
+                continue;
+            }
+            let cos = world.b2().body(wheel).sweep.a.cos();
+            let at = world.b2().body(wheel).sweep.c;
+            let pick = (frame % 5) as usize + 1;
+            if elf.step_sign {
+                if cos < -0.9396 {
+                    elf.step_sign = false;
+                    if elf.feet[0].is_some() {
+                        world.play(&format!("Step{}", pick * 2 - 1), 1, at);
+                    }
+                }
+            } else if cos > 0.9396 {
+                elf.step_sign = true;
+                if elf.feet[1].is_some() {
+                    world.play(&format!("Step{}", pick * 2), 1, at);
+                }
+            }
+        }
     }
 
     /// `checkJoints`: Santa's limb breaks let go of the sleigh; straps snap above 0.4; the elves' limbs break too.
