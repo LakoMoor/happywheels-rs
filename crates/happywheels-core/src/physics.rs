@@ -614,6 +614,8 @@ pub struct World {
     blade_shards: Vec<BladeShard>,
     cans: Vec<TrashCan>,
     hit_sounds: Vec<HitSound>,
+    /// Dynamic level shapes with a `ShapeHit1..4` contact sound (`registerShapeSound`).
+    shape_hits: Vec<(ShapeId, &'static str)>,
     /// Bodies born from specials (trash, hollow cans…) that only the renderer cares about.
     loose: Vec<BodyId>,
     mines: Vec<Mine>,
@@ -710,6 +712,7 @@ impl World {
             blade_shards: Vec::new(),
             cans: Vec::new(),
             hit_sounds: Vec::new(),
+            shape_hits: Vec::new(),
             loose: Vec::new(),
             mines: Vec::new(),
             sounds: Vec::new(),
@@ -779,8 +782,14 @@ impl World {
             let mut d = ShapeDef::new(g);
             d.density = num(s, "density").unwrap_or(1.0);
             set_shape_filter(&mut d, s.num("collision").unwrap_or(1.0) as i32, false, version);
-            w.b.create_shape(body, &d);
+            let shape = w.b.create_shape(body, &d);
             w.b.set_mass_from_shapes(body);
+            // `registerShapeSound`: the body's mass picks ShapeHit1..4
+            let m = w.b.body(body).mass;
+            let name = if m > 15.0 { "ShapeHit4" } else if m > 10.0 { "ShapeHit3" } else if m > 5.0 { "ShapeHit2" } else if m > 1.0 { "ShapeHit1" } else { "" };
+            if !name.is_empty() {
+                w.shape_hits.push((shape, name));
+            }
             handles[i] = Some(body);
         }
         w.shape_bodies = handles;
@@ -2109,6 +2118,35 @@ impl World {
         }
     }
 
+    /// `shapeContactAdd` + `handleContactAdds` of dynamic level shapes: `ShapeHit*` at volume `min(closing speed / 12, 1)`.
+    fn collect_shape_hits(&mut self, events: &[box2d::world::ContactEvent]) {
+        if self.shape_hits.is_empty() {
+            return;
+        }
+        let mut heard: Vec<(ShapeId, &'static str, Vec2, f64)> = Vec::new();
+        for ev in events.iter().filter(|e| e.kind == ContactEventKind::Add) {
+            for (mine, other) in [(ev.shape1, ev.shape2), (ev.shape2, ev.shape1)] {
+                let Some(&(_, name)) = self.shape_hits.iter().find(|(s, _)| *s == mine) else { continue };
+                if heard.iter().any(|h| h.0 == mine) {
+                    continue;
+                }
+                let o = &self.b.c.shapes[other];
+                let body = self.b.c.shapes[mine].body;
+                let (om, mm) = (self.b.body(o.body).mass, self.b.body(body).mass);
+                if o.shape.is_sensor || (om != 0.0 && om < mm) {
+                    continue;
+                }
+                let closing = (ev.velocity.x * ev.normal.x + ev.velocity.y * ev.normal.y).abs();
+                if closing > 4.0 {
+                    heard.push((mine, name, self.b.body(body).sweep.c, (closing / 12.0).min(1.0)));
+                }
+            }
+        }
+        for (_, n, at, v) in heard {
+            self.play_scaled(n, at, v);
+        }
+    }
+
     fn vehicle_contact_sounds(&self) -> Vec<(ShapeId, &'static str)> {
         let first = |b: BodyId, k: usize| self.b.body(b).shapes.get(k).copied();
         let mut out = Vec::new();
@@ -2245,6 +2283,7 @@ impl World {
         self.collect_smashes(&events);
         self.collect_thuds(&events);
         self.collect_vehicle_sounds(&events);
+        self.collect_shape_hits(&events);
         if self.joints_break && self.character.as_ref().is_some_and(|d| d.helmet_on) {
             // the head shape doubles as the helmet shape: a Result above 2 loses the helmet (and the head cannot smash that frame)
             let head = self.character.as_ref().map(|d| d.bodies[&crate::character::Part::Head]);

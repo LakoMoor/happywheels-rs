@@ -3638,3 +3638,23 @@ fn bmx_landing_plays_hit_sounds() {
     }
     assert!(heard.iter().any(|n| n.starts_with("TireHit") || n.starts_with("BikeHit")), "landing makes a hit sound: {heard:?}");
 }
+
+/// `registerShapeSound`: a heavy dynamic level shape that lands on the ground plays `ShapeHit4` at a volume of `min(closing speed / 12, 1)`
+/// (source behaviour; not oracle-checked, not heard).
+#[test]
+fn heavy_level_shape_plays_shape_hit() {
+    let level = level::parse(
+        "<levelXML><info v='1.99' x='1000' y='150'/><shapes>\
+         <sh t='0' p0='1000' p1='425' p2='2000' p3='50' p4='0' p5='t' p6='f' p7='1' p8='0' p9='-1' p10='100' p11='1'/>\
+         <sh t='0' p0='500' p1='0' p2='400' p3='400' p4='0' p5='f' p6='f' p7='1' p8='0' p9='-1' p10='100' p11='1'/></shapes></levelXML>",
+    )
+    .unwrap();
+    let mut w = World::from_level(&level);
+    let mut heard = Vec::new();
+    for _ in 0..200 {
+        w.step();
+        heard.extend(w.take_scaled_sounds());
+    }
+    let hit = heard.iter().find(|s| s.0.starts_with("ShapeHit"));
+    assert!(hit.is_some_and(|s| s.2 > 0.0 && s.2 <= 1.0), "a ShapeHit plays with a volume: {heard:?}");
+}
