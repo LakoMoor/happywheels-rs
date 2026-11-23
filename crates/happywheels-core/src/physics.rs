@@ -5890,6 +5890,34 @@ mod tests {
         assert!(w.npcs[0].dead);
     }
 
+    /// Chair break against the original's `Chair` class (oracle `analysis/golden-chair-break.js`): floor 4000×20 at y 500, chair at (1000,380) dropped at 40 m/s.
+    #[test]
+    fn chair_break_matches_the_original() {
+        for (reverse, first, last) in [
+            ("f", [[995.1255, 454.3433, 0.0247], [995.1255, 454.3433, 0.0247], [995.1255, 454.3433, 0.0247], [995.1255, 454.3433, 0.0247]], [[1566.544, 484.4102, -3.1413], [1180.963, 481.0451, 11.9779], [1968.429, 140.9048, 16.9869], [1835.3525, 469.1534, 17.2762]]),
+            ("t", [[1007.2058, 455.2993, 0.057]; 4], [[1924.0745, 490.1777, 0.0064], [992.1411, 470.6779, 32.0996], [2496.1112, 540.7303, 13.1208], [2458.1406, 577.2445, 91.0487]]),
+        ] {
+            let xml = format!("<levelXML><info v='1.99'/><shapes>{FLOOR}</shapes><specials><sp t='19' p0='1000' p1='380' p2='0' p3='{reverse}' p4='f' p5='t'/></specials></levelXML>");
+            let mut w = World::from_level(&crate::level::parse(&xml).unwrap());
+            let chair = w.special_bodies[0].unwrap();
+            w.b.body_mut(chair).linear_velocity = Vec2::new(0.0, 40.0);
+            let mut frames = Vec::new();
+            for _ in 0..40 {
+                w.step();
+                frames.push(w.chair_pieces().map(|p| { let [x, y] = w.body_position_px(p.0).unwrap(); [f64::from(x), f64::from(y), w.body_angle(p.0) as f64] }).collect::<Vec<_>>());
+            }
+            // pieces are compared as sets (the port creates them in another order), sorted by x
+            let sorted = |mut v: Vec<[f64; 3]>| { v.sort_by(|a, b| a[0].total_cmp(&b[0])); v };
+            for (got, want, what) in [(&frames[0], first.to_vec(), "break frame"), (&frames[39], last.to_vec(), "frame 39")] {
+                let (got, want) = (sorted(got.clone()), sorted(want));
+                assert_eq!(got.len(), want.len(), "{reverse} {what}: piece count");
+                for (g, w) in got.iter().zip(&want) {
+                    assert!((g[0] - w[0]).abs() < 0.05 && (g[1] - w[1]).abs() < 0.05 && (g[2] - w[2]).abs() < 0.01, "{reverse} {what}: {g:?} vs {w:?}");
+                }
+            }
+        }
+    }
+
     /// A boombox hit hard enough to shatter drops its `BoomboxHit` impact sound listener; a merely cracked one keeps it.
     #[test]
     fn shattered_boombox_stops_playing_hit_sounds() {
