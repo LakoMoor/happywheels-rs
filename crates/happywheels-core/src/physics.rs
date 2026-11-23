@@ -2691,6 +2691,25 @@ impl World {
     /// `shapeImpale` of the main rider (spikes call it with defaults, blades with `(fatal, tip, 0.01)`): chest/pelvis vocals, a lethal head impale
     /// ejects the rider from its vehicle and kills it.
     pub(crate) fn shape_impale(&mut self, body: BodyId, fatal: bool, point: Option<Vec2>, radius2: f64) {
+        if let Some(ni) = self.npcs.iter().position(|n| n.bodies.contains(&body)) {
+            // `NPCharacter.shapeImpale`: chest/pelvis → random vocal; head → `dead` for a fatal impale at the head's centre (or without a point), else a vocal
+            let part = self.npcs[ni].bodies.iter().position(|&b| b == body).unwrap_or(0);
+            let digit = format!("{}", self.b.body(body).xf.position.x).chars().last().and_then(|c| c.to_digit(10)).unwrap_or(0) as usize;
+            let vocal = ["Elbow1", "Elbow2", "Knee1", "Knee2", "Shoulder1", "Shoulder2", "Hip1", "Hip2", "Knee1", "Spikes"][digit];
+            match part {
+                0 | 2 => self.npcs[ni].voices[5] = Some(vocal),
+                1 => {
+                    let c = self.b.body(body).sweep.c;
+                    if fatal && point.is_none_or(|p| (p.x - c.x).powi(2) + (p.y - c.y).powi(2) < radius2) {
+                        self.npcs[ni].dead = true;
+                    } else {
+                        self.npcs[ni].voices[5] = Some(vocal);
+                    }
+                }
+                _ => {}
+            }
+            return;
+        }
         let Some(mut doll) = self.character.take() else { return };
         if doll.shape_impale(self, body, fatal, point, radius2) {
             if let Some(mut bike) = self.bike.take() {
@@ -5855,6 +5874,20 @@ mod tests {
         assert!(!names.iter().any(|n| n == "Char1Elbow1"), "{names:?}");
         let table: serde_json::Value = serde_json::from_str(include_str!("../data/audiosprite.json")).unwrap();
         assert!(table.get("Char1Hip1").is_some());
+    }
+
+    /// `NPCharacter.shapeImpale`: a chest impale queues the random vocal (priority 5) and is voiced; a fatal head impale without a point kills the NPC (silent).
+    #[test]
+    fn npc_shape_impale_voices_or_kills() {
+        let xml = "<levelXML><info v='1.99'/><specials><sp t='17' p0='1000' p1='100' p2='0' p3='1' p4='f' p5='f'/></specials></levelXML>";
+        let mut w = World::from_level(&crate::level::parse(xml).unwrap());
+        let (chest, head) = (w.npcs[0].bodies[0], w.npcs[0].bodies[1]);
+        w.shape_impale(chest, true, None, 0.0);
+        w.step();
+        let names: Vec<String> = w.take_sounds().into_iter().map(|s| s.0).collect();
+        assert!(names.iter().any(|n| n.starts_with("Char1")), "{names:?}");
+        w.shape_impale(head, true, None, 0.0);
+        assert!(w.npcs[0].dead);
     }
 
     /// A boombox hit hard enough to shatter drops its `BoomboxHit` impact sound listener; a merely cracked one keeps it.
