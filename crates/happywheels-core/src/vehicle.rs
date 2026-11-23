@@ -4256,6 +4256,9 @@ impl Grinder {
                 for n in 0..2 {
                     self.remove_dongle(world, n);
                 }
+                // `checkRemoveRailJoints`: `DoubleClickReverse` at the frame, volume `clickVolume` 0.6
+                let at = world.b2().body(self.frame).sweep.c;
+                world.play_scaled("DoubleClickReverse", at, 0.6);
             } else {
                 for n in 0..2 {
                     let Some(d) = self.dongles[n] else { continue };
@@ -4268,10 +4271,20 @@ impl Grinder {
             }
         }
         if !self.ejected {
+            // `DoubleClick` (volume 0.6) at the newly created dongle (the back one wins when both were created)
+            let mut created = None;
             for n in 0..2 {
                 if let Some(rail) = self.new_rail[n].take() {
+                    let fresh = self.dongles[n].is_none();
                     self.attach_dongle(world, n, rail);
+                    if fresh {
+                        created = self.dongles[n].map(|d| d.body);
+                    }
                 }
+            }
+            if let Some(body) = created {
+                let at = world.b2().body(body).sweep.c;
+                world.play_scaled("DoubleClick", at, 0.6);
             }
         }
         for d in self.dongles.iter().flatten() {

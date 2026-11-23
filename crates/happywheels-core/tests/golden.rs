@@ -985,9 +985,11 @@ fn c7_grinder_attaches_to_rail() {
     assert!(w.spawn_bike(7, [1000.0, 250.0]));
     let mut attached_at = None;
     let mut max_x = 0.0f64;
+    let mut clicks: Vec<(usize, String, f32)> = Vec::new();
     for i in 0..500 {
         w.set_rider_keys(Keys { up: i > 20, space: i < 420, ..Default::default() });
         w.step();
+        clicks.extend(w.take_scaled_sounds().into_iter().map(|s| (i, s.0, s.2)));
         let Some(Vehicle::Grinder(g)) = w.bike.as_ref() else { panic!("not a grinder") };
         let p = w.b2().body(g.frame).xf.position;
         assert!(p.x.is_finite() && p.y.is_finite(), "frame {i}");
@@ -999,6 +1001,10 @@ fn c7_grinder_attaches_to_rail() {
             assert!(g.dongles.iter().all(Option::is_none), "dongles are gone after space is released");
         }
     }
+    let on: Vec<_> = clicks.iter().filter(|c| c.1 == "DoubleClick").collect();
+    let off: Vec<_> = clicks.iter().filter(|c| c.1 == "DoubleClickReverse").collect();
+    assert!(!on.is_empty() && on.iter().all(|c| (c.2 - 0.6).abs() < 1e-6), "DoubleClick at attach: {clicks:?}");
+    assert!(off.len() <= 1, "DoubleClickReverse only when space is released with dongles on: {clicks:?}");
     assert!(attached_at.is_some(), "the wheels grabbed the rail");
     assert!(max_x > 1700.0, "rode along the rail: {max_x}");
 }
@@ -1021,11 +1027,17 @@ fn c7_rail_grinding_matches_original() {
     assert!(w.spawn_bike(7, [1000.0, 250.0]));
     w.joints_break = false;
     let (mut worst, mut worst_at) = (0.0f64, (0, 0));
+    let mut clicks: Vec<(usize, String)> = Vec::new();
+    let mut dongles_at_149 = false;
     for (i, frame) in v["frames"].as_array().unwrap().iter().enumerate() {
         w.set_rider_keys(Keys { up: (20..230).contains(&i), space: i < 150, left: (60..70).contains(&i), ..Default::default() });
         w.step();
+        clicks.extend(w.take_scaled_sounds().into_iter().map(|s| (i, s.0)));
         let doll = w.character.as_ref().unwrap();
         let Some(Vehicle::Grinder(g)) = w.bike.as_ref() else { panic!("not a grinder") };
+        if i == 149 {
+            dongles_at_149 = g.dongles.iter().any(Option::is_some);
+        }
         let mut ids: Vec<_> = PART_ORDER.iter().map(|p| doll.bodies[p]).collect();
         ids.extend([g.frame, g.back_wheel, g.front_wheel]);
         for (k, id) in ids.iter().enumerate() {
@@ -1050,6 +1062,10 @@ fn c7_rail_grinding_matches_original() {
                 }
             }
         }
+    }
+    assert!(clicks.iter().any(|c| c.1 == "DoubleClick"), "DoubleClick at attach: {clicks:?}");
+    if dongles_at_149 {
+        assert!(clicks.contains(&(150, "DoubleClickReverse".to_string())), "released with dongles on: {clicks:?}");
     }
     assert!(worst < 1e-6, "rail grinding diverges by {worst} px at frame/body {worst_at:?}");
 }
