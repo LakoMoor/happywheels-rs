@@ -103,10 +103,19 @@ export class SpriteAudio {
       this.loops.delete(name);
     }
     for (const [name, at, volume] of wanted) {
-      const target = this.gainAt(at, listener, volume);
       let voice = this.loops.get(name);
+      // AreaSoundLoop stops outside the listening rectangle and restarts when
+      // audible again; a zero max volume also suspends its audio channel.
+      if (!this.inRange(at, listener) || volume <= 0) {
+        if (voice) {
+          voice.source.stop();
+          this.loops.delete(name);
+        }
+        continue;
+      }
+      const target = this.gainAt(at, listener, volume);
       if (!voice) {
-        voice = this.create(name, 0);
+        voice = this.create(name, target);
         if (!voice) continue;
         voice.source.loop = true;
         voice.source.loopStart = voice.start;
@@ -116,8 +125,7 @@ export class SpriteAudio {
         this.loops.set(name, voice);
       }
       voice.volume.gain.cancelScheduledValues(now);
-      voice.volume.gain.setValueAtTime(voice.volume.gain.value, now);
-      voice.volume.gain.linearRampToValueAtTime(target, now + 0.2);
+      voice.volume.gain.setValueAtTime(target, now);
       voice.panner.pan.value = this.panAt(at, listener);
     }
   }

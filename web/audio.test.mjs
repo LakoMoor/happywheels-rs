@@ -96,3 +96,24 @@ test('positional one-shots stop beyond the cutoff but remain alive on its bounda
   audio.update([[], [], [0, 0]]);
   assert.equal(audio.voices.length, 0);
 });
+
+test('area loops stop outside the cutoff and restart at the sprite start', async () => {
+  const audio = new SpriteAudio(new Context(), { Motor: [2000, 1000] });
+  await audio.load(new ArrayBuffer(0));
+  audio.syncLoops([['Motor', [1001, 0], 1]], [0, 0]);
+  assert.equal(audio.loops.size, 0);
+  audio.syncLoops([['Motor', [1000, 0], 1]], [0, 0]);
+  const first = audio.loops.get('Motor');
+  assert.equal(first.volume.gain.value, 0);
+  audio.syncLoops([['Motor', [1001, 0], 1]], [0, 0]);
+  assert.deepEqual(first.source.stopped, []);
+  assert.equal(audio.loops.size, 0);
+  audio.syncLoops([['Motor', [0, 0], 0.5]], [0, 0]);
+  const second = audio.loops.get('Motor');
+  assert.notEqual(second, first);
+  assert.deepEqual(second.source.started, [0, 2]);
+  assert.equal(second.volume.gain.value, 0.5);
+  audio.syncLoops([['Motor', [0, 0], 0]], [0, 0]);
+  assert.deepEqual(second.source.stopped, []);
+  assert.equal(audio.loops.size, 0);
+});
