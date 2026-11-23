@@ -1,6 +1,6 @@
 #![allow(clippy::too_many_arguments)] // blit/text helpers take explicit geometry
 use ab_glyph::{FontArc, PxScale};
-use anyhow::Result;
+use anyhow::{Context, Result};
 use image::{imageops, Rgba, RgbaImage};
 use imageproc::drawing::{draw_hollow_rect_mut, draw_text_mut, text_size};
 
@@ -69,6 +69,16 @@ pub struct Menu {
 }
 
 impl Menu {
+    pub fn reset(&mut self) { self.scene = Scene::Main; }
+    pub fn load_memory(files: &std::collections::HashMap<std::path::PathBuf, Vec<u8>>) -> Result<Self> {
+        let read = |name: &str| files.get(std::path::Path::new(name)).with_context(|| format!("missing {name}"));
+        let (ui, ui_pixels) = Atlas::from_bytes(read("animate/game-ui/game_ui_atlas_1/game_ui_atlas_1.json")?, read("animate/game-ui/game_ui_atlas_1/game_ui_atlas_1.png")?)?;
+        let (ui_parts, ui_parts_pixels) = Atlas::from_bytes(read("animate/game-ui/game_ui_atlas_3/game_ui_atlas_3.json")?, read("animate/game-ui/game_ui_atlas_3/game_ui_atlas_3.png")?)?;
+        let (faces, face_pixels) = Atlas::from_bytes(read("image/character_images/character_images.json")?, read("image/character_images/character_images.png")?)?;
+        let title_font = FontArc::try_from_vec(read("fonts/ClarendonLTStd-Bold.otf")?.clone()).map_err(|e| anyhow::anyhow!("title font: {e:?}"))?;
+        let body_font = FontArc::try_from_vec(read("fonts/HelveticaNeueLTStd-Roman.otf")?.clone()).map_err(|e| anyhow::anyhow!("body font: {e:?}"))?;
+        Ok(Self { scene: Scene::Main, ui, ui_pixels, ui_parts, ui_parts_pixels, faces, face_pixels, title_font, body_font, buttons: Vec::new(), presentation: Presentation { scale: 1.0, offset_x: 0.0, offset_y: 0.0 } })
+    }
     pub fn load(assets: &AssetRoot) -> Result<Self> {
         let ui = assets.atlas("animate/game-ui/game_ui_atlas_1/game_ui_atlas_1.json")?;
         let ui_pixels = ui.load_pixels()?;

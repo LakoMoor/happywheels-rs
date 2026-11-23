@@ -24,7 +24,7 @@ python3 -m http.server --directory web 8000
 
 Open `http://localhost:8000` in a browser with WebGPU enabled. Arrow keys,
 Space, Z, Shift and Control control the rider. Select a character before opening
-a level XML file, or press Restart level to start the current level with the selected character. This preview does not yet provide the original menu.
+a level XML file, or press Restart level to start the current level with the selected character. After selecting the original assets folder, Open menu displays the port's partial main menu and character selection; browsing levels, editor and options are not implemented.
 
 Original game assets are **not** included; point the app at your own copy of the assets. See [docs/PORT.md](docs/PORT.md) for status.
 

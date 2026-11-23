@@ -33,6 +33,20 @@ pub struct Frame {
 }
 
 impl Atlas {
+    /// Parse an atlas and its image from memory, as used by browser-selected assets.
+    pub fn from_bytes(json: &[u8], image_bytes: &[u8]) -> Result<(Self, RgbaImage)> {
+        let file: AtlasFile = serde_json::from_slice(json).context("parsing atlas")?;
+        let pixels = image::load_from_memory(image_bytes).context("decoding atlas image")?.to_rgba8();
+        let (width, height) = pixels.dimensions();
+        if (width, height) != (file.meta.size.w, file.meta.size.h) { bail!("atlas image size mismatch"); }
+        for (name, frame) in &file.frames {
+            let rect = frame.frame;
+            if rect.x.checked_add(rect.w).is_none_or(|x| x > width) || rect.y.checked_add(rect.h).is_none_or(|y| y > height) {
+                bail!("frame {name} lies outside its atlas");
+            }
+        }
+        Ok((Self { image_path: PathBuf::from(file.meta.image), frames: file.frames, width, height }, pixels))
+    }
     pub fn open(json_path: impl AsRef<Path>) -> Result<Self> {
         let json_path = json_path.as_ref();
         let text = fs::read_to_string(json_path)

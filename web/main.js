@@ -19,13 +19,31 @@ try {
   window.addEventListener('keydown', resumeAudio);
   status.textContent = 'Running sample level.';
   const input = new GameInput(game);
+  let menuOpen = false;
   const pointer = (event, clicked) => {
     const rect = canvas.getBoundingClientRect();
-    if (rect.width && rect.height) game.pointer((event.clientX - rect.left) * 900 / rect.width, (event.clientY - rect.top) * 500 / rect.height, clicked);
+    if (!rect.width || !rect.height) return;
+    if (menuOpen) {
+      if (!clicked) return;
+      const action = game.menu_click((event.clientX - rect.left) * canvas.width / rect.width, (event.clientY - rect.top) * canvas.height / rect.height);
+      if (action > 0) {
+        character.value = String(action);
+        game.restart(action);
+        menuOpen = false;
+        audio.clear();
+        status.textContent = `Started character ${action}.`;
+      } else if (action === -1) {
+        document.querySelector('#level').click();
+      } else if (action === -2) {
+        menuOpen = false;
+      }
+    } else {
+      game.pointer((event.clientX - rect.left) * 900 / rect.width, (event.clientY - rect.top) * 500 / rect.height, clicked);
+    }
   };
   canvas.addEventListener('pointerup', event => { if (event.button === 0) pointer(event, true); });
   canvas.addEventListener('pointermove', event => pointer(event, false));
-  canvas.addEventListener('pointerleave', () => game.pointer(-1e9, -1e9, false));
+  canvas.addEventListener('pointerleave', () => { if (!menuOpen) game.pointer(-1e9, -1e9, false); });
   let victoryShown = false;
   const updateKey = (event, down) => {
     const target = event.target;
@@ -44,9 +62,12 @@ try {
       || [...event.target.files].find(file => file.name === 'audiosprite.big.ogg');
     const files = [...event.target.files].map(file => {
       const parts = file.webkitRelativePath.split('/');
-      const start = parts.indexOf('animate');
+      const start = parts.findIndex(part => ['animate', 'image', 'fonts'].includes(part));
       return { file, path: start < 0 ? '' : parts.slice(start).join('/') };
-    }).filter(({path}) => /^animate\/(character\d+|game|backgrounds)\/.*@0\.3x\.(json|png)$/.test(path));
+    }).filter(({path}) => /^animate\/(character\d+|game|backgrounds)\/.*@0\.3x\.(json|png)$/.test(path)
+      || /^animate\/game-ui\/game_ui_atlas_[13]\/game_ui_atlas_[13]\.(json|png)$/.test(path)
+      || /^image\/character_images\/character_images\.(json|png)$/.test(path)
+      || /^fonts\/(ClarendonLTStd-Bold|HelveticaNeueLTStd-Roman)\.otf$/.test(path));
     if (!files.length) {
       status.textContent = 'No sprite atlases found; select the original assets folder.';
       return;
@@ -77,6 +98,7 @@ try {
     if (!file) return;
     try {
       game.load_level(await file.text(), Number(character.value));
+      menuOpen = false;
       audio.clear();
       victoryShown = false;
       input.clear();
@@ -88,6 +110,7 @@ try {
   document.querySelector('#restart').addEventListener('click', () => {
     try {
       game.restart(Number(character.value));
+      menuOpen = false;
       audio.clear();
       victoryShown = false;
       input.clear();
@@ -96,6 +119,12 @@ try {
     } catch (error) {
       status.textContent = `Could not restart level: ${error}`;
     }
+  });
+  document.querySelector('#menu').addEventListener('click', () => {
+    input.clear();
+    menuOpen = game.open_menu();
+    audio.clear();
+    status.textContent = menuOpen ? 'Menu open.' : 'Select the original assets folder to load the menu.';
   });
   const draw = time => {
     try {

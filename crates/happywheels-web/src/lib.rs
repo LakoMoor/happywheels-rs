@@ -25,6 +25,7 @@ mod browser {
         render,
         sprites::{SpriteAssets, Sprites},
         vehicle::Keys,
+        Menu, MenuAction,
     };
     use std::{collections::HashMap, path::PathBuf};
     use wasm_bindgen::prelude::*;
@@ -56,7 +57,7 @@ mod browser {
         pub fn add(&mut self, path: &str, bytes: &[u8]) -> Result<(), JsValue> {
             // Only normalized relative atlas paths are accepted.
             let path = std::path::Path::new(path);
-            if !path.starts_with("animate")
+            if !(path.starts_with("animate") || path.starts_with("image") || path.starts_with("fonts"))
                 || path
                     .components()
                     .any(|part| !matches!(part, std::path::Component::Normal(_)))
@@ -81,6 +82,8 @@ mod browser {
         assets: Option<SpriteAssets>,
         sprites: Option<Sprites>,
         backdrop: Option<Sprites>,
+        menu: Option<Menu>,
+        menu_open: bool,
     }
 
     fn world_for(level: &Level, character: usize) -> World {
@@ -121,11 +124,14 @@ mod browser {
                 assets: None,
                 sprites: None,
                 backdrop: None,
+                menu: None,
+                menu_open: false,
             })
         }
 
         /// Load locally selected original atlas files without uploading them anywhere.
         pub fn set_assets(&mut self, pack: AssetPack) -> Result<(), JsValue> {
+            let menu = Menu::load_memory(&pack.files).ok();
             let assets = SpriteAssets::memory(pack.files);
             let mut sprites =
                 Sprites::open_from(&assets, self.character as u32).ok_or_else(|| {
@@ -142,8 +148,28 @@ mod browser {
             self.assets = Some(assets);
             self.sprites = Some(sprites);
             self.backdrop = backdrop;
+            self.menu = menu;
             Ok(())
         }
+
+        pub fn open_menu(&mut self) -> bool {
+            if let Some(menu) = &mut self.menu { menu.reset(); }
+            self.menu_open = self.menu.is_some();
+            self.keys = [false; 8];
+            self.menu_open
+        }
+
+        pub fn menu_click(&mut self, x: f32, y: f32) -> i32 {
+            if !self.menu_open { return 0; }
+            match self.menu.as_mut().and_then(|menu| menu.handle_click(x, y)) {
+                Some(MenuAction::CharacterSelected(index)) => i32::from(index),
+                Some(MenuAction::LoadLevel) => -1,
+                Some(MenuAction::Exit) => { self.menu_open = false; -2 },
+                None => 0,
+            }
+        }
+
+        pub fn close_menu(&mut self) { self.menu_open = false; self.last_time = None; }
 
         /// Replace the current level only after it parses successfully.
         pub fn load_level(&mut self, xml: &str, character: usize) -> Result<(), JsValue> {
@@ -180,6 +206,7 @@ mod browser {
             self.keys = [false; 8];
             self.accumulator = 0.0;
             self.last_time = None;
+            self.menu_open = false;
             Ok(())
         }
 
@@ -215,6 +242,15 @@ mod browser {
         }
 
         pub fn frame(&mut self, now_ms: f64) -> Result<String, JsValue> {
+            if self.menu_open {
+                self.last_time = None;
+                let (w, h) = (self.canvas.width().max(1), self.canvas.height().max(1));
+                let frame = self.menu.as_mut().ok_or_else(|| JsValue::from_str("Menu assets unavailable"))?.render(w, h).map_err(js_error)?;
+                self.renderer.resize(w, h);
+                self.renderer.upload(&frame).map_err(js_error)?;
+                self.renderer.render();
+                return Ok("[[],[],[0,0]]".into());
+            }
             // A hidden tab must not accumulate minutes of simulation to catch up on return.
             let elapsed = self
                 .last_time
