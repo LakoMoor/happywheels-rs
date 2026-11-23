@@ -252,6 +252,11 @@ mod browser {
         }
 
         /// Mouse triggers are transparent, unrotated rectangles in the original session's 900×500 screen space.
+        /// `bloodSetting` (0 off, 1 bitmap particles, 2 lines, 3/4 metaball) for worlds created from now on; call `restart` to apply it.
+        pub fn set_blood_setting(&mut self, setting: u8) {
+            happywheels_core::blood::set_blood_setting(setting.min(4));
+        }
+
         pub fn pointer(&mut self, x: f32, y: f32, clicked: bool) {
             if self.paused || self.menu_open { return; }
             let mut topmost = None;

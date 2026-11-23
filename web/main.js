@@ -130,6 +130,7 @@ try {
   });
   document.querySelector('#restart').addEventListener('click', () => {
     try {
+      game.set_blood_setting(Number(document.querySelector('#blood').value));
       game.restart(Number(character.value));
       setPaused(false);
       menuOpen = false;
