@@ -5658,6 +5658,40 @@ mod tests {
         assert!(w.blood.sprites.iter().any(|p| matches!(p.kind, crate::blood::ShardKind::Food(3))));
     }
 
+    /// Boombox against the original `Boombox` class (oracle `analysis/golden-boombox-break.js`): floor at y 500, boombox at (1000,430) dropped at 100, 40 and 8 m/s:
+    /// shatters into two pieces / cracks and keeps its body / is not damaged at all.
+    #[test]
+    fn boombox_break_matches_the_original() {
+        let run = |vy: f32| {
+            let xml = format!("<levelXML><info v='1.99'/><shapes>{FLOOR}</shapes><specials><sp t='22' p0='1000' p1='430' p2='0' p3='f' p4='t'/></specials></levelXML>");
+            let mut w = World::from_level(&crate::level::parse(&xml).unwrap());
+            let b = w.special_bodies[0].unwrap();
+            w.b.body_mut(b).linear_velocity = Vec2::new(0.0, f64::from(vy));
+            let mut frames = Vec::new();
+            for _ in 0..40 {
+                w.step();
+                let list: Vec<BodyId> = if w.boombox_pieces().count() > 0 { w.boombox_pieces().map(|p| p.0).collect() } else { vec![b] };
+                let mut v: Vec<[f64; 3]> = list.into_iter().map(|id| { let [x, y] = w.body_position_px(id).unwrap(); [f64::from(x), f64::from(y), w.body_angle(id) as f64] }).collect();
+                v.sort_by(|a, b| a[0].total_cmp(&b[0]));
+                frames.push((v, w.boombox_frame(b)));
+            }
+            frames
+        };
+        let close = |got: &[f64; 3], want: [f64; 3], what: &str| assert!((got[0] - want[0]).abs() < 0.01 && (got[1] - want[1]).abs() < 0.01 && (got[2] - want[2]).abs() < 0.002, "{what}: {got:?} vs {want:?}");
+        let shatter = run(100.0);
+        assert_eq!(shatter[0].0.len(), 2);
+        for (g, w) in shatter[0].0.iter().zip([[986.418, 462.897, -0.001], [1013.568, 462.88, -0.001]]) { close(g, w, "shatter f0"); }
+        for (g, w) in shatter[39].0.iter().zip([[987.281, 190.181, -0.031], [1014.431, 190.164, -0.031]]) { close(g, w, "shatter f39"); }
+        let crack = run(40.0);
+        assert_eq!(crack[39].0.len(), 1, "a crack keeps the body");
+        assert!(crack[39].1 >= 2, "and shows a damage frame");
+        close(&crack[0].0[0], [1000.004, 473.576, 0.0], "crack f0");
+        close(&crack[39].0[0], [1000.216, 476.225, 0.001], "crack f39");
+        let soft = run(8.0);
+        assert_eq!(soft[39].1, 1, "a soft hit leaves the boombox intact");
+        close(&soft[39].0[0], [1000.011, 476.317, 0.0], "soft f39");
+    }
+
     /// A TV cracks above 7 (shards, frame 2..5) and shatters above 20 into three triangular pieces and 60 shards.
     #[test]
     fn tv_cracks_then_shatters() {
