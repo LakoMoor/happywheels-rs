@@ -3437,3 +3437,31 @@ fn metaball_blood_shot() {
     }
     happywheels_core::render::render_level_scene(&level, &w, 500, 300, [1000.0, 330.0], None, None).save(path).unwrap();
 }
+
+/// The Segway's jump starts the shock motor and plays `SegwayJump` once (`spacePressedActions`: only when the motor was off).
+#[test]
+fn segway_jump_plays_its_sound_once() {
+    use happywheels_core::vehicle::{Keys, Vehicle};
+    let level = level::parse(
+        "<levelXML><info v='1.99' x='1000' y='250'/><shapes>\
+         <sh t='0' p0='1000' p1='425' p2='3000' p3='50' p4='0' p5='t' p6='f' p7='1' p8='0' p9='-1' p10='100' p11='1'/></shapes></levelXML>",
+    )
+    .unwrap();
+    let n = (1..=11).find(|&n| {
+        let mut w = World::from_level(&level);
+        w.spawn_bike(n, [1000.0, 250.0]) && matches!(w.bike, Some(Vehicle::Segway(_)))
+    });
+    let mut w = World::from_level(&level);
+    assert!(w.spawn_bike(n.expect("a Segway character"), [1000.0, 250.0]));
+    for _ in 0..30 {
+        w.step();
+    }
+    w.take_sounds();
+    let mut jumps = 0;
+    for i in 0..20 {
+        w.set_rider_keys(Keys { space: (2..12).contains(&i), ..Default::default() });
+        w.step();
+        jumps += w.take_sounds().iter().filter(|s| s.0 == "SegwayJump").count();
+    }
+    assert_eq!(jumps, 1, "one jump, one sound");
+}

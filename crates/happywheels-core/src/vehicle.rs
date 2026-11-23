@@ -790,6 +790,7 @@ impl Segway {
         use box2d::joints::JointKind::Prismatic;
         let translation = world.b2().prismatic_translation(self.shock_joint).unwrap_or(0.0);
         let jump = self.jump_translation;
+        let mut started = false;
         let Prismatic(p) = &mut world.b2_mut().joint_mut(self.shock_joint).kind else { return };
         if p.enable_motor {
             let speed = p.motor_speed;
@@ -808,6 +809,12 @@ impl Segway {
             p.lower_translation = 0.0;
             p.upper_translation = jump;
             p.enable_motor = true;
+            started = true;
+        }
+        if started {
+            // `playAreaSoundInstance("SegwayJump", wheelBody)`
+            let at = world.b2().body(self.wheel).sweep.c;
+            world.play("SegwayJump", 1, at);
         }
     }
 
