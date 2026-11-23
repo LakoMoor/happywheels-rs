@@ -5793,6 +5793,34 @@ mod tests {
         assert!(w.toilet_pieces().all(|(b, _, _)| w.b.c.bodies[b].alive));
     }
 
+    /// Toilet break against the original `Toilet` class (oracle `analysis/golden-toilet-break.js`): floor at y 500, toilet at (1000,400) dropped at 40 m/s.
+    #[test]
+    fn toilet_break_matches_the_original() {
+        for (reverse, first, last) in [
+            ("f", [[993.124, 456.499, -0.033]; 2], [[990.484, 459.208, 1.242], [912.279, 462.305, -0.978]]),
+            ("t", [[1005.63, 456.509, -0.003]; 2], [[953.281, 459.808, -1.199], [1014.899, 451.497, 0.408]]),
+        ] {
+            let xml = format!("<levelXML><info v='1.99'/><shapes>{FLOOR}</shapes><specials><sp t='24' p0='1000' p1='400' p2='0' p3='{reverse}' p4='f'/></specials></levelXML>");
+            let mut w = World::from_level(&crate::level::parse(&xml).unwrap());
+            let toilet = w.special_bodies[0].unwrap();
+            w.b.body_mut(toilet).linear_velocity = Vec2::new(0.0, 40.0);
+            let mut frames = Vec::new();
+            for _ in 0..40 {
+                w.step();
+                let mut v: Vec<[f64; 3]> = w.toilet_pieces().map(|p| { let [x, y] = w.body_position_px(p.0).unwrap(); [f64::from(x), f64::from(y), w.body_angle(p.0) as f64] }).collect();
+                v.sort_by(|a, b| a[0].total_cmp(&b[0]));
+                frames.push(v);
+            }
+            for (got, mut want, what) in [(&frames[0], first.to_vec(), "break frame"), (&frames[39], last.to_vec(), "frame 39")] {
+                want.sort_by(|a, b| a[0].total_cmp(&b[0]));
+                assert_eq!(got.len(), want.len(), "{reverse} {what}: piece count");
+                for (g, w) in got.iter().zip(&want) {
+                    assert!((g[0] - w[0]).abs() < 0.01 && (g[1] - w[1]).abs() < 0.01 && (g[2] - w[2]).abs() < 0.001, "{reverse} {what}: {g:?} vs {w:?}");
+                }
+            }
+        }
+    }
+
     /// An immovable log (a shape of the level body in the original) breaks like a free one: the heavy hitter above 2250 splits it, the halves start at rest.
     #[test]
     fn immovable_log_splits_too() {
