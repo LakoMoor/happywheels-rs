@@ -330,6 +330,13 @@ impl Ragdoll {
         Self::spawn_inner(world, guide, start_px, mower_torso, ref_scale, group, false)
     }
 
+    /// Like `spawn_full` but without the joints (see `finish_joints`): for characters whose class changes shapes between `createBodies` and `createJoints`.
+    pub fn spawn_full_deferred(world: &mut World, guide: &Guide, start_px: [f32; 2], mower_torso: bool, ref_scale: f64, group: i16) -> Option<Self> {
+        let mut d = Self::spawn_inner(world, guide, start_px, mower_torso, ref_scale, group, true)?;
+        d.deferred = Some((guide.clone(), Vec2::new(f64::from(start_px[0]) / 62.5, f64::from(start_px[1]) / 62.5)));
+        Some(d)
+    }
+
     fn spawn_inner(world: &mut World, guide: &Guide, start_px: [f32; 2], mower_torso: bool, ref_scale: f64, group: i16, defer: bool) -> Option<Self> {
         let start = Vec2::new(f64::from(start_px[0]) / 62.5, f64::from(start_px[1]) / 62.5);
         let b = world.b2_mut();

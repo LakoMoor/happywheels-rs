@@ -5126,7 +5126,7 @@ pub struct Girl {
 impl Girl {
     pub fn attach(world: &mut World, start_px: [f32; 2], guy_frame: BodyId, guy_chest: BodyId) -> Option<Self> {
         let guide = crate::character::subguide("c5_girl")?;
-        let doll = Ragdoll::spawn_full(world, &guide, start_px, false, 5.0, -2)?;
+        let mut doll = Ragdoll::spawn_full_deferred(world, &guide, start_px, false, 5.0, -2)?;
         let start = Vec2::new(f64::from(start_px[0]) / 62.5, f64::from(start_px[1]) / 62.5);
         let at = |name: &str| -> Option<Vec2> {
             let g = guide.get(name)?;
@@ -5139,6 +5139,7 @@ impl Girl {
             b.shape_mut(s).is_sensor = true;
         }
         let seat_shape = b.body(guy_frame).shapes.get(3).copied()?;
+        doll.finish_joints(world);
         for (limb, lo, hi) in [(Limb::Elbow1, -90.0, 0.0), (Limb::Elbow2, -90.0, 0.0), (Limb::Neck, -20.0, 0.0)] {
             doll.set_limits(world, limb, lo / deg, hi / deg);
         }
@@ -5238,7 +5239,8 @@ impl Girl {
         for (k, part) in [Part::UpperLeg1, Part::UpperLeg2].into_iter().enumerate() {
             let Some(&leg) = world.b2().body(self.doll.bodies[&part]).shapes.first() else { continue };
             for e in events {
-                if e.shape1 != leg || e.shape2 != self.seat_shape {
+                // a listener registered on a shape is called for contacts where it is shape2 too (with shape1/shape2 swapped)
+                if !((e.shape1 == leg && e.shape2 == self.seat_shape) || (e.shape2 == leg && e.shape1 == self.seat_shape)) {
                     continue;
                 }
                 match e.kind {

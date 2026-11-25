@@ -3869,7 +3869,7 @@ fn real_sessions_match_original() {
             for id in w.b2().c.contact_ids().collect::<Vec<_>>() {
                 let c = w.b2().c.contact_info(id);
                 let (s1, s2) = (&w.b2().c.shapes[c.shape1], &w.b2().c.shapes[c.shape2]);
-                eprintln!("CPRE bodies {} {} shapes {} {} n={}", s1.body, s2.body, c.shape1, c.shape2, c.manifold_count);
+                eprintln!("CPRE bodies {} {} shapes {} {} n={} flags={}", s1.body, s2.body, c.shape1, c.shape2, c.manifold_count, c.flags);
             }
             for (k, j) in w.b2().c.joints.iter().enumerate() {
                 if let box2d::joints::JointKind::Revolute(r) = &j.kind {
@@ -3891,6 +3891,15 @@ fn real_sessions_match_original() {
                 z: i == 170,
             });
             w.step();
+            if std::env::var("REALC").ok().and_then(|s| s.parse::<usize>().ok()).is_some_and(|f| f == i) {
+                for id in w.b2().c.contact_ids().collect::<Vec<_>>() {
+                    let c = w.b2().c.contact_info(id);
+                    if c.manifold_count > 0 {
+                        let (s1, s2) = (&w.b2().c.shapes[c.shape1], &w.b2().c.shapes[c.shape2]);
+                        eprintln!("TOUCH f{i} bodies {} {} flags={}", s1.body, s2.body, c.flags & 1);
+                    }
+                }
+            }
             if std::env::var("REALPRE").is_ok() && i == 0 {
                 for id in w.b2().c.contact_ids().collect::<Vec<_>>() {
                     let c = w.b2().c.contact_info(id);
@@ -3905,9 +3914,13 @@ fn real_sessions_match_original() {
             }
             heard.extend(w.take_sounds().into_iter().map(|s| (i, s.0)));
             heard.extend(w.take_scaled_sounds().into_iter().map(|s| (i, s.0)));
-            if first_bad.is_none() {
+            if first_bad.is_none() || std::env::var("REALMAX").is_ok() {
                 let mine: Vec<(f64, f64)> =
                     w.b2().c.bodies.iter().filter(|b| b.mass > 0.0).map(|b| (b.xf.position.x * 62.5, b.xf.position.y * 62.5)).collect();
+                if std::env::var("REALMAX").is_ok() && i >= 100 {
+                    let m = frame.as_array().unwrap().iter().map(|g| mine.iter().map(|m| (m.0 - g[0].as_f64().unwrap()).hypot(m.1 - g[1].as_f64().unwrap())).fold(f64::MAX, f64::min)).fold(0.0, f64::max);
+                    eprintln!("MAX {ch} {i} {m:.6}");
+                }
                 let mut bad_list = Vec::new();
                 for (gi, g) in frame.as_array().unwrap().iter().enumerate() {
                     let (gx, gy) = (g[0].as_f64().unwrap(), g[1].as_f64().unwrap());
