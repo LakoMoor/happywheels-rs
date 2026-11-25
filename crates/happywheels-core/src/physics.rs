@@ -172,6 +172,8 @@ struct TriggerState {
     shape_actions: Vec<(usize, Vec<Vec<String>>)>,
     /// Group actions use a different index ordering from individual shapes.
     group_actions: Vec<(BodyId, Vec<Vec<String>>)>,
+    /// Special targets (NPC chest body, actions).
+    special_actions: Vec<(BodyId, Vec<Vec<String>>)>,
     /// Triggers activated when this one fires (`TargetKind::Trigger` targets).
     trigger_targets: Vec<(usize, Vec<u8>)>,
     disabled: bool,
@@ -230,6 +232,7 @@ struct Npc {
     smash_limits: [f64; 3],
     chunk: [f64; 3],
     smashed: [bool; 3],
+    reversed: bool,
     /// Sound-set prefix (`tag` of the character index), queued vocals by priority, frame the current voice ends, its priority, and `dead` (no more vocals).
     tag: &'static str,
     voices: [Option<&'static str>; 6],
@@ -1424,6 +1427,11 @@ impl World {
                 } else {
                     Vec::new()
                 },
+                special_actions: if t.type_index == 1 {
+                    t.targets.iter().filter(|tg| tg.kind == crate::level::TargetKind::Special)
+                        .filter_map(|tg| Some((self.special_bodies.get(tg.index).copied().flatten()?, tg.actions.clone())))
+                        .collect()
+                } else { Vec::new() },
                 group_actions: if t.type_index == 1 {
                     t.targets.iter().filter(|tg| tg.kind == crate::level::TargetKind::Group)
                         .filter_map(|tg| Some((*self.group_bodies.get(tg.index)?, tg.actions.clone())))
@@ -1487,6 +1495,11 @@ impl World {
                         self.shape_action(body, a);
                     }
                 }
+            }
+        }
+        for (chest, actions) in self.triggers[trigger].special_actions.clone() {
+            for a in &actions {
+                self.npc_trigger_action(chest, a);
             }
         }
         for (body, actions) in self.triggers[trigger].group_actions.clone() {
@@ -2895,8 +2908,70 @@ impl World {
         let lim = |k: &str| f(&g["limits"][k]);
         let smash_shapes = [bodies[1], bodies[0], bodies[2]].map(|b| self.b.body(b).shapes[0]);
         let chunk = [f(&g["chunk"][0]), f(&g["chunk"][1]), f(&g["chunk"][2])];
-        self.npcs.push(Npc { bodies, joints, smash_shapes, smash_limits: [lim("head"), lim("chest"), lim("pelvis")], chunk, smashed: [false; 3], tag: npc_tag(sp.num("charIndex").unwrap_or(1.0) as i32), voices: [None; 6], voice_until: 0, voice_prio: -1, dead: false, pieces: Vec::new() });
+        self.npcs.push(Npc { bodies, joints, smash_shapes, smash_limits: [lim("head"), lim("chest"), lim("pelvis")], chunk, smashed: [false; 3], reversed: reverse, tag: npc_tag(sp.num("charIndex").unwrap_or(1.0) as i32), voices: [None; 6], voice_until: 0, voice_prio: -1, dead: false, pieces: Vec::new() });
         Some(chest)
+    }
+
+    /// `NPCharacter.triggerSingleActivation`: action list wake from sleep / apply impulse (x, y, spin) / hold pose / release pose (index or name in the XML).
+    fn npc_trigger_action(&mut self, chest: BodyId, a: &[String]) {
+        let Some(ni) = self.npcs.iter().position(|n| n.bodies[0] == chest) else { return };
+        let action = match a.first().map(String::as_str) {
+            Some("0" | "wake from sleep") => 0,
+            Some("1" | "apply impulse") => 1,
+            Some("2" | "hold pose") => 2,
+            Some("3" | "release pose") => 3,
+            _ => return,
+        };
+        let bodies = self.npcs[ni].bodies;
+        let joints = self.npcs[ni].joints.clone();
+        match action {
+            0 => self.b.body_mut(chest).wake_up(),
+            1 => {
+                let param = |k: usize| a.get(1 + k).and_then(|v| v.parse::<f64>().ok()).unwrap_or(0.0);
+                // chest, head, pelvis, then each limb whose joints are still intact, in the original's order arm1, arm2, leg1, leg2 (joints: neck waist sh1 sh2 el1 el2 hip1 hip2 knee1 knee2)
+                let mut ordered = vec![bodies[0], bodies[1], bodies[2]];
+                for (sh, el, up, low) in [(2usize, 4usize, 3usize, 5usize), (3, 5, 4, 6), (6, 8, 7, 9), (7, 9, 8, 10)] {
+                    if !joints[sh].3 {
+                        ordered.push(bodies[up]);
+                        if !joints[el].3 { ordered.push(bodies[low]); }
+                    }
+                }
+                for b in ordered {
+                    let bd = self.b.body_mut(b);
+                    let m = bd.mass;
+                    let c = bd.sweep.c;
+                    bd.apply_impulse(Vec2::new(param(0) * m, param(1) * m), c);
+                }
+                if param(2) != 0.0 {
+                    self.b.body_mut(chest).angular_velocity += 10.0 * param(2);
+                }
+            }
+            2 => {
+                for (id, _, _, _) in &joints {
+                    if let Some(angle) = self.b.revolute_angle(*id) {
+                        if let box2d::joints::JointKind::Revolute(r) = &mut self.b.joint_mut(*id).kind {
+                            r.lower_angle = angle;
+                            r.upper_angle = angle;
+                        }
+                    }
+                }
+            }
+            _ => {
+                let d = if self.npcs[ni].reversed { 1.0 } else { 0.0 };
+                // (lower, upper) in degrees per joint, mirrored for `reverse`
+                let ranges: [(f64, f64); 10] = if d > 0.0 {
+                    [(-20.0, 20.0), (-5.0, 5.0), (-60.0, 180.0), (-60.0, 180.0), (0.0, 160.0), (0.0, 160.0), (-10.0, 150.0), (-10.0, 150.0), (-150.0, 0.0), (-150.0, 0.0)]
+                } else {
+                    [(-20.0, 20.0), (-5.0, 5.0), (-180.0, 60.0), (-180.0, 60.0), (-160.0, 0.0), (-160.0, 0.0), (-150.0, 10.0), (-150.0, 10.0), (0.0, 150.0), (0.0, 150.0)]
+                };
+                for ((id, _, _, _), (lo, hi)) in joints.iter().zip(ranges) {
+                    if let box2d::joints::JointKind::Revolute(r) = &mut self.b.joint_mut(*id).kind {
+                        r.lower_angle = lo.to_radians() - r.reference_angle;
+                        r.upper_angle = hi.to_radians() - r.reference_angle;
+                    }
+                }
+            }
+        }
     }
 
     /// `NPCharacter.checkJoints`: reaction force² above the limb's limit, or a stretched anchor, breaks the joint and clears the limb's collision group.
@@ -7228,6 +7303,34 @@ mod tests {
             check(&w, "start", 1e-6);
             for _ in 0..30 { w.step(); }
             check(&w, "after", 1e-3);
+        }
+    }
+
+    #[test]
+    fn npc_trigger_actions_match_original() {
+        let gold: serde_json::Value = serde_json::from_str(include_str!("../../../tests/golden/npc_trigger.json")).unwrap();
+        let names = ["neck", "shoulder1", "shoulder2", "elbow1", "elbow2", "hip1", "hip2", "knee1", "knee2"];
+        for case in gold.as_array().unwrap() {
+            let mut attrs = String::new();
+            for (i, n) in names.iter().enumerate() {
+                attrs += &format!(" p{}='{}'", 8 + i, case["p"].get(n).and_then(|v| v.as_f64()).unwrap_or(0.0));
+            }
+            let rev = if case["reverse"].as_bool().unwrap() { 't' } else { 'f' };
+            let xml = format!("<levelXML><info v='1.99'/><shapes><sh t='0' p0='1000' p1='725' p2='4000' p3='50' p4='0' p5='t' p6='f' p7='1' p8='0' p9='-1' p10='100' p11='1'/></shapes><specials><sp t='17' p0='1000' p1='300' p2='0' p3='1' p4='f' p5='{rev}' p6='f' p7='t'{attrs}/></specials></levelXML>");
+            let mut w = World::from_level(&crate::level::parse(&xml).unwrap());
+            let chest = w.npcs[0].bodies[0];
+            let mut action = vec![case["act"].as_str().unwrap().to_string()];
+            action.extend(case["props"].as_array().unwrap().iter().map(|v| v.to_string()));
+            for f in 0..40 {
+                if f == case["actAt"].as_u64().unwrap() { w.npc_trigger_action(chest, &action); }
+                w.step();
+            }
+            for (i, &b) in w.npcs[0].bodies.iter().enumerate() {
+                let g = &case["after"][i];
+                let body = w.b.body(b);
+                let err = (body.sweep.c.x * PS - g[0].as_f64().unwrap()).abs().max((body.sweep.c.y * PS - g[1].as_f64().unwrap()).abs()).max((body.sweep.a - g[2].as_f64().unwrap()).abs() * 100.0);
+                assert!(err < 1e-3, "{} body {i} off by {err}", case["act"]);
+            }
         }
     }
 
