@@ -718,7 +718,48 @@ fn solve_position_constraints(cs: &mut [ContactConstraint], bodies: &mut [Body],
     min_sep >= -1.5 * LINEAR_SLOP
 }
 
+/// Render pose of a body (`m_xf`, `m_sweep.c/a`), for display interpolation.
+#[derive(Debug, Clone, Copy)]
+pub struct Pose {
+    pub position: Vec2,
+    pub r: Mat22,
+    pub c: Vec2,
+    pub a: f64,
+}
+
 impl World {
+    /// Poses of all bodies in id order (destroyed ones included, so indices stay stable).
+    pub fn pose_snapshot(&self) -> Vec<Pose> {
+        self.c.bodies.iter().map(|b| Pose { position: b.xf.position, r: b.xf.r, c: b.sweep.c, a: b.sweep.a }).collect()
+    }
+
+    /// Display interpolation of the original's 60 fps mode (`b2Body.UpdateInterpolation`): every living non-static body that existed in `from`
+    /// is moved to `from + (now − from)·t` (matrix columns, position, centre of mass and angle). Returns the true poses for `restore_poses`.
+    pub fn blend_poses(&mut self, from: &[Pose], t: f64) -> Vec<Pose> {
+        let saved = self.pose_snapshot();
+        let lerp = |a: f64, b: f64| a + (b - a) * t;
+        for (b, f) in self.c.bodies.iter_mut().zip(from) {
+            if !b.alive || b.is_static {
+                continue;
+            }
+            b.xf.position = Vec2::new(lerp(f.position.x, b.xf.position.x), lerp(f.position.y, b.xf.position.y));
+            b.xf.r.col1 = Vec2::new(lerp(f.r.col1.x, b.xf.r.col1.x), lerp(f.r.col1.y, b.xf.r.col1.y));
+            b.xf.r.col2 = Vec2::new(lerp(f.r.col2.x, b.xf.r.col2.x), lerp(f.r.col2.y, b.xf.r.col2.y));
+            b.sweep.c = Vec2::new(lerp(f.c.x, b.sweep.c.x), lerp(f.c.y, b.sweep.c.y));
+            b.sweep.a = lerp(f.a, b.sweep.a);
+        }
+        saved
+    }
+
+    pub fn restore_poses(&mut self, saved: &[Pose]) {
+        for (b, s) in self.c.bodies.iter_mut().zip(saved) {
+            b.xf.position = s.position;
+            b.xf.r = s.r;
+            b.sweep.c = s.c;
+            b.sweep.a = s.a;
+        }
+    }
+
     pub fn new(lower: Vec2, upper: Vec2, gravity: Vec2, allow_sleep: bool) -> Self {
         let mut w = World {
             bp: BroadPhase::new(lower, upper),
@@ -1674,5 +1715,32 @@ mod tests {
         }
         assert!((w.body(b).xf.position.y - 3.5).abs() < 0.02);
         assert!(w.body(b).is_sleeping());
+    }
+}
+
+#[cfg(test)]
+mod pose_tests {
+    use super::*;
+
+    #[test]
+    fn blend_moves_dynamic_bodies_and_restore_is_exact() {
+        let mut w = World::new(Vec2::new(-100.0, -100.0), Vec2::new(100.0, 100.0), Vec2::new(0.0, 10.0), true);
+        let b = w.create_body(&BodyDef { position: Vec2::new(1.0, 2.0), ..Default::default() });
+        let mut d = ShapeDef::new(Geometry::Circle { local_position: Vec2::default(), radius: 0.5 });
+        d.density = 1.0;
+        w.create_shape(b, &d);
+        w.set_mass_from_shapes(b);
+        let before = w.pose_snapshot();
+        w.step(1.0 / 30.0, 10);
+        let now = w.pose_snapshot();
+        assert!(now[b].position.y > before[b].position.y);
+        let saved = w.blend_poses(&before, 0.5);
+        let mid = w.body(b).xf.position.y;
+        assert!((mid - (before[b].position.y + now[b].position.y) / 2.0).abs() < 1e-12);
+        w.restore_poses(&saved);
+        assert_eq!(w.body(b).xf.position.y, now[b].position.y);
+        let same = w.blend_poses(&now, 0.3);
+        assert_eq!(w.body(b).xf.position.y, now[b].position.y);
+        w.restore_poses(&same);
     }
 }

@@ -1,3 +1,4 @@
+pub use box2d::world::Pose;
 pub mod assets;
 pub mod blood;
 pub mod atlas;

@@ -91,6 +91,9 @@ mod browser {
         keys: [bool; 8],
         last_time: Option<f64>,
         accumulator: f64,
+        /// The original's "60 fps" option (`maxFPS = 60`, `update60fps`): the simulation still runs at 30 Hz, bodies are drawn between the last two steps.
+        interpolate: bool,
+        prev_poses: Vec<happywheels_core::Pose>,
         character: usize,
         assets: Option<SpriteAssets>,
         sprites: Option<Sprites>,
@@ -134,6 +137,8 @@ mod browser {
                 keys: [false; 8],
                 last_time: None,
                 accumulator: 0.0,
+                interpolate: false,
+                prev_poses: Vec::new(),
                 character: 3,
                 assets: None,
                 sprites: None,
@@ -204,6 +209,7 @@ mod browser {
             let world = world_for(&level, character);
             self.level = level;
             self.world = world;
+            self.prev_poses.clear();
             self.character = character;
             self.sprites = self.assets.as_ref().and_then(|assets| {
                 let mut sprites = Sprites::open_from(assets, character as u32)?;
@@ -252,6 +258,11 @@ mod browser {
         }
 
         /// Mouse triggers are transparent, unrotated rectangles in the original session's 900×500 screen space.
+        /// `use60FPS` option: draw the simulation interpolated between its 30 Hz steps (the physics itself is unchanged).
+        pub fn set_interpolation(&mut self, on: bool) {
+            self.interpolate = on;
+        }
+
         /// `bloodSetting` (0 off, 1 bitmap particles, 2 lines, 3/4 metaball) for worlds created from now on; call `restart` to apply it.
         pub fn set_blood_setting(&mut self, setting: u8) {
             happywheels_core::blood::set_blood_setting(setting.min(4));
@@ -310,6 +321,7 @@ mod browser {
                     shift: k[6],
                     ctrl: k[7],
                 });
+                self.prev_poses = self.world.b2().pose_snapshot();
                 self.world.step();
                 sounds.extend(self.world.take_sounds());
                 trigger_sounds.extend(self.world.take_trigger_sounds());
@@ -317,6 +329,8 @@ mod browser {
                 self.accumulator -= 1000.0 / 30.0;
             }
             let (w, h) = (self.canvas.width().max(1), self.canvas.height().max(1));
+            let blend = (self.interpolate && !self.paused && !self.prev_poses.is_empty()).then(|| (self.accumulator / (1000.0 / 30.0)).clamp(0.0, 1.0));
+            let saved = blend.map(|b| self.world.b2_mut().blend_poses(&self.prev_poses, b));
             let camera = self.world.camera_focus_px().unwrap_or(self.level.info.start);
             let frame = render::render_level_scene(
                 &self.level,
@@ -327,6 +341,9 @@ mod browser {
                 self.sprites.as_ref(),
                 self.backdrop.as_ref(),
             );
+            if let Some(saved) = saved {
+                self.world.b2_mut().restore_poses(&saved);
+            }
             self.renderer.resize(w, h);
             self.renderer.upload(&frame).map_err(js_error)?;
             self.renderer.render();

@@ -22,6 +22,13 @@ try {
     audio.setVolume(Number(volume.value));
     try { localStorage.setItem('hw-volume', volume.value); } catch {}
   });
+  const fps60 = document.querySelector('#fps60');
+  try { fps60.checked = localStorage.getItem('hw-fps60') === '1'; } catch {}
+  game.set_interpolation(fps60.checked);
+  fps60.addEventListener('change', () => {
+    game.set_interpolation(fps60.checked);
+    try { localStorage.setItem('hw-fps60', fps60.checked ? '1' : '0'); } catch {}
+  });
   const particles = document.querySelector('#particles');
   try { const saved = localStorage.getItem('hw-particles'); if (saved !== null) particles.value = saved; } catch {}
   game.set_max_particles(Number(particles.value));
