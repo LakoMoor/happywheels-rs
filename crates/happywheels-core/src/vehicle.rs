@@ -1122,7 +1122,7 @@ impl Chair {
         let chair = b.create_body(&BodyDef::default());
         for name in ["chair1Shape", "chair2Shape", "chair3Shape"] {
             let g = guide.get(name)?;
-            let mut d = ShapeDef::new(Geometry::Polygon(oriented_box(g[3] * 5.0 / CHARACTER_SCALE, g[4] * 5.0 / CHARACTER_SCALE, at(name)?, 0.0)));
+            let mut d = ShapeDef::new(Geometry::Polygon(oriented_box(g[5] / 2.0 / CHARACTER_SCALE, g[6] / 2.0 / CHARACTER_SCALE, at(name)?, 0.0)));
             d.density = 2.0;
             d.friction = 0.3;
             d.restitution = 0.1;
@@ -1133,7 +1133,7 @@ impl Chair {
         let mut wheel = |name: &str| -> Option<BodyId> {
             let g = guide.get(name)?;
             let body = b.create_body(&BodyDef { position: at(name)?, angle: g[2] / deg, ..Default::default() });
-            let mut d = ShapeDef::new(Geometry::Circle { local_position: Vec2::default(), radius: g[3] * 5.0 / CHARACTER_SCALE });
+            let mut d = ShapeDef::new(Geometry::Circle { local_position: Vec2::default(), radius: g[5] / 2.0 / CHARACTER_SCALE });
             d.density = 5.0;
             d.friction = 1.0;
             d.restitution = 0.1;

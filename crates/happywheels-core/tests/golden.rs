@@ -251,6 +251,7 @@ fn segway_rider_matches_original() {
 /// Jet wheelchair (drive, tilt, jet with angle changes, eject at 120, wheel poses afterwards) against the
 /// original's logic in the oracle (analysis/golden-chair.js).
 #[test]
+#[ignore = "hand-built oracle scene (wheel/box sizes from scale*5; the real chair class uses width/2): superseded by real_sessions_match_original"]
 fn chair_rider_matches_original() {
     use happywheels_core::character::PART_ORDER;
     use happywheels_core::vehicle::{Keys, Vehicle};
@@ -3993,7 +3994,6 @@ fn real_sessions_match_original() {
         // First frame at which a sign-of-noise branch (motor-at-zero speed test, see docs/PORT.md 2026-11-25) separates the port from the
         // original; everything before it is asserted exactly.
         let known = match ch {
-            1 => Some(127),
             4 => Some(121),
             7 => Some(122),
             8 => Some(111),
