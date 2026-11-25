@@ -2357,8 +2357,8 @@ impl Mower {
                 let (angle, av) = (b.body(self.body).sweep.a, b.body(self.body).angular_velocity);
                 let scale = if left { (av + Self::MAX_SPIN) / Self::MAX_SPIN } else { (av - Self::MAX_SPIN) / -Self::MAX_SPIN };
                 let scale = scale.clamp(0.0, 1.0);
-                let mag = if left { 2.4 } else { 2.8 } * scale;
-                let (c, s) = (box2d::fdlibm::cos(angle) * mag, box2d::fdlibm::sin(angle) * mag);
+                let imp = if left { 2.4 } else { 2.8 };
+                let (c, s) = (box2d::fdlibm::cos(angle) * imp * scale, box2d::fdlibm::sin(angle) * imp * scale);
                 let lc = b.body(self.body).sweep.local_center;
                 let near = b.body(self.body).world_point(Vec2::new(lc.x + 1.0, lc.y));
                 let far = b.body(self.body).world_point(Vec2::new(lc.x - 1.0, lc.y));
@@ -2720,8 +2720,8 @@ impl Pogo {
                 let b = world.b2_mut();
                 let (angle, av) = (b.body(self.frame).sweep.a, b.body(self.frame).angular_velocity);
                 let f = if left { (av + Self::MAX_SPIN) / Self::MAX_SPIN } else { (av - Self::MAX_SPIN) / -Self::MAX_SPIN };
-                let mag = 0.5 * f.clamp(0.0, 1.0);
-                let (c, s) = (box2d::fdlibm::cos(angle) * mag, box2d::fdlibm::sin(angle) * mag);
+                let f = f.clamp(0.0, 1.0);
+                let (c, s) = (box2d::fdlibm::cos(angle) * 0.5 * f, box2d::fdlibm::sin(angle) * 0.5 * f);
                 let lc = b.body(self.frame).sweep.local_center;
                 let top = b.body(self.frame).world_point(Vec2::new(lc.x, lc.y - 1.0));
                 let bottom = b.body(self.frame).world_point(Vec2::new(lc.x, lc.y + 1.0));
@@ -3218,8 +3218,9 @@ impl Cart {
                 let b = world.b2_mut();
                 let (angle, av) = (b.body(self.body).sweep.a, b.body(self.body).angular_velocity);
                 let f = if left { (av + Self::MAX_SPIN) / Self::MAX_SPIN } else { (av - Self::MAX_SPIN) / -Self::MAX_SPIN };
-                let mag = 1.25 * f.clamp(0.0, 1.0);
-                let (c, s) = (box2d::fdlibm::cos(angle) * mag, box2d::fdlibm::sin(angle) * mag);
+                let f = f.clamp(0.0, 1.0);
+                // original: `Math.cos(a) * impulseMagnitude * f` (left to right)
+                let (c, s) = (box2d::fdlibm::cos(angle) * 1.25 * f, box2d::fdlibm::sin(angle) * 1.25 * f);
                 let lc = b.body(self.body).sweep.local_center;
                 let off = if left { 1.0 } else { -1.0 };
                 let point = b.body(self.body).world_point(Vec2::new(lc.x + off, lc.y));
@@ -4331,8 +4332,8 @@ impl Grinder {
                 let b = world.b2_mut();
                 let (angle, av) = (b.body(self.frame).sweep.a, b.body(self.frame).angular_velocity);
                 let f = if left { (av + Self::MAX_SPIN) / Self::MAX_SPIN } else { (av - Self::MAX_SPIN) / -Self::MAX_SPIN };
-                let mag = Self::IMPULSE * f.clamp(0.0, 1.0);
-                let (c, s) = (box2d::fdlibm::cos(angle) * mag, box2d::fdlibm::sin(angle) * mag);
+                let f = f.clamp(0.0, 1.0);
+                let (c, s) = (box2d::fdlibm::cos(angle) * Self::IMPULSE * f, box2d::fdlibm::sin(angle) * Self::IMPULSE * f);
                 let lc = b.body(self.frame).sweep.local_center;
                 let off = if left { Self::OFFSET } else { -Self::OFFSET };
                 let point = b.body(self.frame).world_point(Vec2::new(lc.x + off, lc.y));

@@ -3924,6 +3924,18 @@ fn real_sessions_match_original() {
                     }
                 }
             }
+            if std::env::var("REALMAN").ok().and_then(|s| s.parse::<usize>().ok()).is_some_and(|f| f == i) {
+                let idx: std::collections::HashMap<usize, usize> = w.b2().c.bodies.iter().enumerate().filter(|(_, b)| b.mass > 0.0 && b.alive).map(|(k, _)| k).enumerate().map(|(n, k)| (k, n)).collect();
+                for id in w.b2().c.contact_ids().collect::<Vec<_>>() {
+                    let c = w.b2().c.contact_info(id);
+                    if c.manifold_count > 0 {
+                        let (s1, s2) = (&w.b2().c.shapes[c.shape1], &w.b2().c.shapes[c.shape2]);
+                        let mut l = format!("MANF {} {} {:.17e} {:.17e}", idx.get(&s1.body).map_or(-1, |&x| x as i64), idx.get(&s2.body).map_or(-1, |&x| x as i64), c.manifold.normal.x, c.manifold.normal.y);
+                        for p in c.manifold.points.iter().take(c.manifold.point_count) { l += &format!(" | {:.17e} {:.17e} {:.17e} {:.17e} {:.17e} {:.17e} {:.17e}", p.separation, p.normal_impulse, p.tangent_impulse, p.local_point1.x, p.local_point1.y, p.local_point2.x, p.local_point2.y); }
+                        eprintln!("{l}");
+                    }
+                }
+            }
             if std::env::var("REALRC").is_ok() {
                 for (k, b) in w.b2().c.bodies.iter().enumerate().filter(|(_, b)| b.mass > 0.0 && b.alive) {
                     let (c, s) = (box2d::fdlibm::cos(b.sweep.a), box2d::fdlibm::sin(b.sweep.a));
@@ -4012,7 +4024,7 @@ fn real_sessions_match_original() {
         // First frame at which a sign-of-noise branch (motor-at-zero speed test, see docs/PORT.md 2026-11-25) separates the port from the
         // original; everything before it is asserted exactly.
         let known = match ch {
-            4 => Some(121),
+            4 => Some(170),
             7 => Some(150),
             _ => None,
         };
