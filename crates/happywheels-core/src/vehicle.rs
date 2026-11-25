@@ -210,12 +210,12 @@ impl Bike {
         let Keys { left, right, up, down, space, z, .. } = k;
         if self.ejected {
             doll.keys(left, right, up, down);
+            // `upAndDownActions` switches the wheel motors off even when ejected (it is the "neither up nor down" branch)
+            if up == down && self.motor_enabled(world) {
+                self.set_motors(world, false, None);
+            }
             doll.apply_pose(world);
             doll.set_grab(world, space);
-            return;
-        }
-        if z {
-            self.eject(world, doll);
             return;
         }
         match (left, right) {
@@ -237,6 +237,10 @@ impl Bike {
                 self.set_motors(world, true, None);
             }
             self.set_motors(world, true, Some(0.0));
+        }
+        // `zPressedActions` is the last key handler of `checkKeyStates`: the actions above still ran this frame
+        if z {
+            self.eject(world, doll);
         }
     }
 

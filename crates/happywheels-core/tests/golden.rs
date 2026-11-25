@@ -3801,8 +3801,7 @@ fn bike_real_session_matches_original() {
     let (mut worst, mut worst_at) = (0.0f64, (0, 0));
     let mut first = None;
     let mut heard: Vec<(usize, String)> = Vec::new();
-    // up to the eject at frame 100 (the real `eject` differs from the port, see docs/PORT.md)
-    for (i, frame) in v["frames"].as_array().unwrap().iter().enumerate().take(100) {
+    for (i, frame) in v["frames"].as_array().unwrap().iter().enumerate() {
         w.set_rider_keys(happywheels_core::vehicle::Keys { left: (60..80).contains(&i), up: i < 60, space: (80..100).contains(&i), z: i == 100, ..Default::default() });
         w.step();
         let sounds: Vec<(usize, String)> = w.take_sounds().into_iter().map(|s| (i, s.0)).collect();
@@ -3823,7 +3822,7 @@ fn bike_real_session_matches_original() {
             }
         }
     }
-    let want: Vec<(usize, String)> = v["sounds"].as_array().unwrap().iter().filter(|s| s[0].as_u64().unwrap() < 100).map(|s| (s[0].as_u64().unwrap() as usize, s[2].as_str().unwrap().to_string())).collect();
+    let want: Vec<(usize, String)> = v["sounds"].as_array().unwrap().iter().map(|s| (s[0].as_u64().unwrap() as usize, s[2].as_str().unwrap().to_string())).collect();
     assert_eq!(heard, want, "sounds against the real session");
     assert!(worst < 1e-3, "bike diverges from the real session: first at (frame, body, err) {first:?}, worst {worst} px at {worst_at:?}");
 }
