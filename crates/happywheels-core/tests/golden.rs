@@ -446,6 +446,7 @@ fn pogo_rider_matches_original() {
 /// Shopping cart (drive, lean impulses, shock hops, eject at 120, lunge poses) against the oracle
 /// (analysis/golden-cart.js).
 #[test]
+#[ignore = "hand-built oracle scene: superseded by real_sessions_match_original"]
 fn cart_rider_matches_original() {
     use happywheels_core::character::PART_ORDER;
     use happywheels_core::vehicle::{Keys, Vehicle};
@@ -3857,7 +3858,7 @@ fn real_sessions_match_original() {
         let mut w = World::from_level(&level);
         assert!(w.spawn_bike(ch, [1000.0, 250.0]), "spawn {ch}");
         if std::env::var("REALPRE").is_ok() {
-            for (k, b) in w.b2().c.bodies.iter().enumerate().filter(|(_, b)| b.mass > 0.0) {
+            for (k, b) in w.b2().c.bodies.iter().enumerate().filter(|(_, b)| b.mass > 0.0 && b.alive) {
                 eprintln!("PRE {k} {:.3} {:.3} {:.3} m={:.9} I={:.9} lc=({:.9},{:.9})", b.xf.position.x * 62.5, b.xf.position.y * 62.5, b.sweep.a, b.mass, b.i, b.sweep.local_center.x, b.sweep.local_center.y);
             }
         }
@@ -3909,7 +3910,7 @@ fn real_sessions_match_original() {
                         eprintln!("CONTACT bodies {} {} n={} sensor1={} sensor2={}", s1.body, s2.body, c.manifold_count, s1.shape.is_sensor, s2.shape.is_sensor);
                     }
                 }
-                for (k, b) in w.b2().c.bodies.iter().enumerate().filter(|(_, b)| b.mass > 0.0) {
+                for (k, b) in w.b2().c.bodies.iter().enumerate().filter(|(_, b)| b.mass > 0.0 && b.alive) {
                     eprintln!("POST {k} {:.3} {:.3} a={:.4} v=({:.3},{:.3}) w={:.3}", b.xf.position.x * 62.5, b.xf.position.y * 62.5, b.sweep.a, b.linear_velocity.x, b.linear_velocity.y, b.angular_velocity);
                 }
             }
