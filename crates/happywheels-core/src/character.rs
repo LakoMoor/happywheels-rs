@@ -425,7 +425,7 @@ impl Ragdoll {
             body
         };
         for _ in 0..4 {
-            let at = Vec2::new(pos.x + a.sin() * ring, pos.y + a.cos() * ring);
+            let at = Vec2::new(pos.x + box2d::fdlibm::sin(a) * ring, pos.y + box2d::fdlibm::cos(a) * ring);
             let chunk = circle(b, at, 0.0, self.head_chunk_radius);
             let v = b.body(head).linear_velocity_from_world_point(at);
             let w = b.body(head).angular_velocity;
@@ -489,7 +489,7 @@ impl Ragdoll {
         let (pos, angle) = (world.b2().body(src).xf.position, world.b2().body(src).sweep.a);
         let mut a = angle + start;
         for _ in 0..count {
-            let at = Vec2::new(pos.x + a.sin() * ring, pos.y + a.cos() * ring);
+            let at = Vec2::new(pos.x + box2d::fdlibm::sin(a) * ring, pos.y + box2d::fdlibm::cos(a) * ring);
             let chunk = Self::debris_ball(world, at, angle, radius);
             let b = world.b2_mut();
             let v = b.body(src).linear_velocity_from_world_point(at);
@@ -780,7 +780,7 @@ impl Ragdoll {
             let at = |b: &box2d::world::World, id: BodyId, y: f64| {
                 let ang = b.body(id).sweep.a + std::f64::consts::FRAC_PI_2;
                 let p = b.body(id).xf.position;
-                Vec2::new(p.x + ang.cos() * y, p.y + ang.sin() * y)
+                Vec2::new(p.x + box2d::fdlibm::cos(ang) * y, p.y + box2d::fdlibm::sin(ang) * y)
             };
             let (ya, yb) = (vy(pelvis, 0), vy(chest, 2));
             (at(b, pelvis, ya), at(b, chest, yb), chest, pelvis, chest)
@@ -834,7 +834,7 @@ impl Ragdoll {
         let edge = |b: &box2d::world::World, id: BodyId, y: f64| {
             let ang = b.body(id).sweep.a + std::f64::consts::FRAC_PI_2;
             let p = b.body(id).xf.position;
-            Vec2::new(p.x + ang.cos() * y, p.y + ang.sin() * y)
+            Vec2::new(p.x + box2d::fdlibm::cos(ang) * y, p.y + box2d::fdlibm::sin(ang) * y)
         };
         let (ya, yb) = (vy(b, ub, 2), vy(b, lb, 0));
         let (a, c) = (edge(b, ub, ya), edge(b, lb, yb));

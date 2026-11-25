@@ -266,7 +266,7 @@ impl Bike {
         let (angle, av) = (b.body(self.frame).sweep.a, b.body(self.frame).angular_velocity);
         let s = self.max_spin_av;
         let q = if back { (av + s) / s } else { (av - s) / -s }.clamp(0.0, 1.0);
-        let (a, w) = (angle.cos() * self.impulse_magnitude * q, angle.sin() * self.impulse_magnitude * q);
+        let (a, w) = (box2d::fdlibm::cos(angle) * self.impulse_magnitude * q, box2d::fdlibm::sin(angle) * self.impulse_magnitude * q);
         let c = b.body(self.frame).sweep.local_center;
         let off = if back { self.impulse_offset } else { -self.impulse_offset };
         let p = b.body(self.frame).world_point(Vec2::new(c.x + off, c.y));
@@ -1010,7 +1010,7 @@ impl Chair {
             let d = Vec2::new(wc.x - c.x, wc.y - c.y);
             let t = 1.0 - d.length().min(2.0) / 2.0;
             let a = d.y.atan2(d.x);
-            b.body_mut(body).apply_impulse(Vec2::new(a.cos() * t * 10.0, a.sin() * t * 10.0), wc);
+            b.body_mut(body).apply_impulse(Vec2::new(box2d::fdlibm::cos(a) * t * 10.0, box2d::fdlibm::sin(a) * t * 10.0), wc);
         }
         b.destroy_body(tank);
         world.shard_burst(crate::blood::ShardKind::Metal, c, 5.0, 50.0, 50);
@@ -1219,7 +1219,7 @@ impl Chair {
         let (angle, av) = (b.body(self.chair).sweep.a, b.body(self.chair).angular_velocity);
         let s = self.max_spin_av;
         let q = if left { (av + s) / s } else { (av - s) / -s }.clamp(0.0, 1.0);
-        let (a, w) = (angle.cos() * self.impulse_magnitude * q, angle.sin() * self.impulse_magnitude * q);
+        let (a, w) = (box2d::fdlibm::cos(angle) * self.impulse_magnitude * q, box2d::fdlibm::sin(angle) * self.impulse_magnitude * q);
         let c = b.body(self.chair).sweep.local_center;
         let off = if left { self.impulse_offset } else { -self.impulse_offset };
         let p = b.body(self.chair).world_point(Vec2::new(c.x + off, c.y));
@@ -1308,7 +1308,7 @@ impl Chair {
             let b = world.b2_mut();
             let a = b.body(self.chair).sweep.a + self.jet_angle;
             let p = b.body(self.chair).sweep.c;
-            b.body_mut(self.big_wheel).apply_impulse(Vec2::new(a.cos() * self.jet_impulse, a.sin() * self.jet_impulse), p);
+            b.body_mut(self.big_wheel).apply_impulse(Vec2::new(box2d::fdlibm::cos(a) * self.jet_impulse, box2d::fdlibm::sin(a) * self.jet_impulse), p);
         }
         doll.apply_pose(world);
     }
@@ -1688,7 +1688,7 @@ impl DirtBike {
                 let left = k.left;
                 let b = world.b2_mut();
                 let angle = b.body(self.frame).sweep.a;
-                let (a, w) = (angle.cos() * self.impulse_magnitude, angle.sin() * self.impulse_magnitude);
+                let (a, w) = (box2d::fdlibm::cos(angle) * self.impulse_magnitude, box2d::fdlibm::sin(angle) * self.impulse_magnitude);
                 let c = b.body(self.frame).sweep.local_center;
                 let off = if left { self.impulse_offset } else { -self.impulse_offset };
                 let p = b.body(self.frame).world_point(Vec2::new(c.x + off, c.y));
@@ -1734,7 +1734,7 @@ impl DirtBike {
                     let b = world.b2_mut();
                     let a = b.body(self.frame).sweep.a;
                     let p = b.body(self.frame).sweep.c;
-                    b.body_mut(self.frame).apply_impulse(Vec2::new(a.cos() * 4.0, a.sin() * 4.0), p);
+                    b.body_mut(self.frame).apply_impulse(Vec2::new(box2d::fdlibm::cos(a) * 4.0, box2d::fdlibm::sin(a) * 4.0), p);
                 }
             }
         } else {
@@ -1853,7 +1853,7 @@ impl Mower {
                 let ang = m.sweep.a + rot + spread;
                 let v = m.linear_velocity_from_local_point(p);
                 let w = m.world_point(p);
-                world.blood.spawn([w.x * 62.5, w.y * 62.5], [ang.cos() * speed + v.x, ang.sin() * speed + v.y]);
+                world.blood.spawn([w.x * 62.5, w.y * 62.5], [box2d::fdlibm::cos(ang) * speed + v.x, box2d::fdlibm::sin(ang) * speed + v.y]);
             }
         }
         for e in events {
@@ -1907,12 +1907,12 @@ impl Mower {
                 // spark burst vector: the second impulse (on the other body) × 5, or the negated mower impulse × 5 against static shapes
                 let spark_vel = if mass > 0.0 {
                     let share = mass / (mass + self.mower_mass);
-                    b.body_mut(self.body).apply_impulse(Vec2::new(a1.cos() * 3.0 * share, a1.sin() * 3.0 * share), at);
-                    let (yy, yf) = (a2.cos() * 3.0 * (1.0 - share), a2.sin() * 3.0 * (1.0 - share));
+                    b.body_mut(self.body).apply_impulse(Vec2::new(box2d::fdlibm::cos(a1) * 3.0 * share, box2d::fdlibm::sin(a1) * 3.0 * share), at);
+                    let (yy, yf) = (box2d::fdlibm::cos(a2) * 3.0 * (1.0 - share), box2d::fdlibm::sin(a2) * 3.0 * (1.0 - share));
                     b.body_mut(body).apply_impulse(Vec2::new(yy, yf), at);
                     Vec2::new(yy * 5.0, yf * 5.0)
                 } else {
-                    let (yy, yf) = (a1.cos() * 3.0, a1.sin() * 3.0);
+                    let (yy, yf) = (box2d::fdlibm::cos(a1) * 3.0, box2d::fdlibm::sin(a1) * 3.0);
                     b.body_mut(self.body).apply_impulse(Vec2::new(yy, yf), at);
                     Vec2::new(-yy * 5.0, -yf * 5.0)
                 };
@@ -1988,7 +1988,7 @@ impl Mower {
         d.is_sensor = true;
         b.create_shape(rising, &d);
         b.set_mass_from_shapes(rising);
-        let mut pd = PrismaticJointDef::initialize(b.body(self.body), self.body, b.body(rising), rising, at, Vec2::new(-angle.sin(), angle.cos()));
+        let mut pd = PrismaticJointDef::initialize(b.body(self.body), self.body, b.body(rising), rising, at, Vec2::new(-box2d::fdlibm::sin(angle), box2d::fdlibm::cos(angle)));
         pd.enable_limit = true;
         pd.upper_translation = 0.0;
         pd.lower_translation = -10.0;
@@ -2358,7 +2358,7 @@ impl Mower {
                 let scale = if left { (av + Self::MAX_SPIN) / Self::MAX_SPIN } else { (av - Self::MAX_SPIN) / -Self::MAX_SPIN };
                 let scale = scale.clamp(0.0, 1.0);
                 let mag = if left { 2.4 } else { 2.8 } * scale;
-                let (c, s) = (angle.cos() * mag, angle.sin() * mag);
+                let (c, s) = (box2d::fdlibm::cos(angle) * mag, box2d::fdlibm::sin(angle) * mag);
                 let lc = b.body(self.body).sweep.local_center;
                 let near = b.body(self.body).world_point(Vec2::new(lc.x + 1.0, lc.y));
                 let far = b.body(self.body).world_point(Vec2::new(lc.x - 1.0, lc.y));
@@ -2455,7 +2455,7 @@ impl Mower {
         self.both_shocks(world, Some(false), Some((0.0, 0.0)), 0.0);
         let b = world.b2_mut();
         let a = b.body(self.body).sweep.a - std::f64::consts::FRAC_PI_2;
-        let imp = Vec2::new(a.cos() * 5.0, a.sin() * 5.0);
+        let imp = Vec2::new(box2d::fdlibm::cos(a) * 5.0, box2d::fdlibm::sin(a) * 5.0);
         for part in [Part::Chest, Part::Pelvis] {
             let id = doll.bodies[&part];
             let c = b.body(id).sweep.c;
@@ -2606,7 +2606,7 @@ impl Pogo {
         }
         let b = world.b2_mut();
         let frame_angle = b.body(frame).sweep.a;
-        let mut pd = box2d::joints::PrismaticJointDef::initialize(b.body(frame), frame, b.body(rod), rod, at("frameShape")?, Vec2::new(-frame_angle.sin(), frame_angle.cos()));
+        let mut pd = box2d::joints::PrismaticJointDef::initialize(b.body(frame), frame, b.body(rod), rod, at("frameShape")?, Vec2::new(-box2d::fdlibm::sin(frame_angle), box2d::fdlibm::cos(frame_angle)));
         pd.max_motor_force = 10000.0;
         pd.enable_limit = true;
         pd.lower_translation = 0.0;
@@ -2721,7 +2721,7 @@ impl Pogo {
                 let (angle, av) = (b.body(self.frame).sweep.a, b.body(self.frame).angular_velocity);
                 let f = if left { (av + Self::MAX_SPIN) / Self::MAX_SPIN } else { (av - Self::MAX_SPIN) / -Self::MAX_SPIN };
                 let mag = 0.5 * f.clamp(0.0, 1.0);
-                let (c, s) = (angle.cos() * mag, angle.sin() * mag);
+                let (c, s) = (box2d::fdlibm::cos(angle) * mag, box2d::fdlibm::sin(angle) * mag);
                 let lc = b.body(self.frame).sweep.local_center;
                 let top = b.body(self.frame).world_point(Vec2::new(lc.x, lc.y - 1.0));
                 let bottom = b.body(self.frame).world_point(Vec2::new(lc.x, lc.y + 1.0));
@@ -3219,7 +3219,7 @@ impl Cart {
                 let (angle, av) = (b.body(self.body).sweep.a, b.body(self.body).angular_velocity);
                 let f = if left { (av + Self::MAX_SPIN) / Self::MAX_SPIN } else { (av - Self::MAX_SPIN) / -Self::MAX_SPIN };
                 let mag = 1.25 * f.clamp(0.0, 1.0);
-                let (c, s) = (angle.cos() * mag, angle.sin() * mag);
+                let (c, s) = (box2d::fdlibm::cos(angle) * mag, box2d::fdlibm::sin(angle) * mag);
                 let lc = b.body(self.body).sweep.local_center;
                 let off = if left { 1.0 } else { -1.0 };
                 let point = b.body(self.body).world_point(Vec2::new(lc.x + off, lc.y));
@@ -3705,14 +3705,14 @@ impl Heli {
         while a < -PI {
             a += PI * 2.0;
         }
-        let d = av - -(a - self.target_ang).sin() * 3.0;
+        let d = av + box2d::fdlibm::sin(a - self.target_ang) * 3.0;
         b.body_mut(self.copter).angular_velocity -= d;
     }
 
     fn hover(&mut self, world: &mut World) {
         let b = world.b2_mut();
         let angle = b.body(self.copter).sweep.a;
-        let up = Vec2::new(angle.sin(), -angle.cos());
+        let up = Vec2::new(box2d::fdlibm::sin(angle), -box2d::fdlibm::cos(angle));
         let body = b.body(self.copter);
         let (rx, ry) = (self.curr_com.x - body.sweep.c.x, self.curr_com.y - body.sweep.c.y);
         // NB: this Box2D build's GetLinearVelocityFromWorldPoint has the opposite sign of the textbook formula.
@@ -3988,7 +3988,7 @@ impl Heli {
             }
         }
         let a = b.body(self.copter).sweep.a;
-        let imp = Vec2::new(a.cos() * 2.0, a.sin() * 2.0);
+        let imp = Vec2::new(box2d::fdlibm::cos(a) * 2.0, box2d::fdlibm::sin(a) * 2.0);
         for part in [Part::Chest, Part::Pelvis] {
             let id = doll.bodies[&part];
             let c = b.body(id).sweep.c;
@@ -4253,7 +4253,7 @@ impl Grinder {
         };
         // getPrisJointSpeed: the dongle takes the wheel's velocity component along the rail
         let ang = b.body(rail).sweep.a;
-        let dir = Vec2::new(ang.cos(), ang.sin());
+        let dir = Vec2::new(box2d::fdlibm::cos(ang), box2d::fdlibm::sin(ang));
         let v = b.body(wheel).linear_velocity;
         let dot = v.x * dir.x + v.y * dir.y;
         b.body_mut(body).linear_velocity = Vec2::new(dir.x * dot, dir.y * dot);
@@ -4262,7 +4262,7 @@ impl Grinder {
         let mut local = b.body(rail).local_point(attach_world);
         local.y = -23.0 / 62.5;
         let anchor = b.body(rail).world_point(local);
-        let mut pd = PrismaticJointDef::initialize(b.body(body), body, b.body(rail), rail, anchor, Vec2::new(-rot.sin(), rot.cos()));
+        let mut pd = PrismaticJointDef::initialize(b.body(body), body, b.body(rail), rail, anchor, Vec2::new(-box2d::fdlibm::sin(rot), box2d::fdlibm::cos(rot)));
         pd.max_motor_force = 1000.0;
         pd.motor_speed = dot;
         pd.enable_motor = false;
@@ -4332,7 +4332,7 @@ impl Grinder {
                 let (angle, av) = (b.body(self.frame).sweep.a, b.body(self.frame).angular_velocity);
                 let f = if left { (av + Self::MAX_SPIN) / Self::MAX_SPIN } else { (av - Self::MAX_SPIN) / -Self::MAX_SPIN };
                 let mag = Self::IMPULSE * f.clamp(0.0, 1.0);
-                let (c, s) = (angle.cos() * mag, angle.sin() * mag);
+                let (c, s) = (box2d::fdlibm::cos(angle) * mag, box2d::fdlibm::sin(angle) * mag);
                 let lc = b.body(self.frame).sweep.local_center;
                 let off = if left { Self::OFFSET } else { -Self::OFFSET };
                 let point = b.body(self.frame).world_point(Vec2::new(lc.x + off, lc.y));
@@ -4791,7 +4791,7 @@ impl Son {
         let pelvis_body = doll.bodies[&Part::Pelvis];
         let c = b.body(pelvis_body).sweep.c;
         let a = 25.0 / deg;
-        let mut pd = box2d::joints::PrismaticJointDef::initialize(b.body(basket), basket, b.body(pelvis_body), pelvis_body, c, Vec2::new(a.sin(), -a.cos()));
+        let mut pd = box2d::joints::PrismaticJointDef::initialize(b.body(basket), basket, b.body(pelvis_body), pelvis_body, c, Vec2::new(box2d::fdlibm::sin(a), -box2d::fdlibm::cos(a)));
         pd.enable_limit = true;
         pd.lower_translation = 0.0;
         pd.upper_translation = 0.25;
@@ -4917,7 +4917,7 @@ impl Son {
         }
         let b = world.b2_mut();
         let a = b.body(self.basket).sweep.a - std::f64::consts::FRAC_PI_2;
-        let imp = Vec2::new(a.cos() * Self::EJECT_IMPULSE, a.sin() * Self::EJECT_IMPULSE);
+        let imp = Vec2::new(box2d::fdlibm::cos(a) * Self::EJECT_IMPULSE, box2d::fdlibm::sin(a) * Self::EJECT_IMPULSE);
         for part in [Part::Chest, Part::Pelvis] {
             let id = self.doll.bodies[&part];
             let wc = b.body(id).sweep.c;
@@ -6010,7 +6010,7 @@ impl Santa {
                     };
                     self.wheel_speed(world, new);
                     if self.sleigh_reigns.is_some() {
-                        self.set_reigns_motor(world, None, Some(self.pump.sin() * 6.0));
+                        self.set_reigns_motor(world, None, Some(box2d::fdlibm::sin(self.pump) * 6.0));
                         self.pump += 0.6;
                     }
                 }
@@ -6111,7 +6111,7 @@ impl Santa {
         let body = b.body(self.sleigh);
         let (ang, av) = (body.sweep.a, body.angular_velocity);
         let (imp, f) = if left { (Self::IMPULSE_LEFT, ((av + Self::MAX_SPIN) / Self::MAX_SPIN).clamp(0.0, 1.0)) } else { (Self::IMPULSE_RIGHT, ((av - Self::MAX_SPIN) / -Self::MAX_SPIN).clamp(0.0, 1.0)) };
-        let (a, w) = (ang.cos() * imp * f, ang.sin() * imp * f);
+        let (a, w) = (box2d::fdlibm::cos(ang) * imp * f, box2d::fdlibm::sin(ang) * imp * f);
         let lc = body.sweep.local_center;
         let p1 = body.world_point(Vec2::new(lc.x + Self::OFFSET, lc.y));
         let p2 = body.world_point(Vec2::new(lc.x - Self::OFFSET, lc.y));
@@ -6321,7 +6321,7 @@ impl Santa {
             b.set_shape_filter(mid2, f);
         }
         let a = b.body(self.sleigh).sweep.a - std::f64::consts::FRAC_PI_2;
-        let imp = Vec2::new(a.cos() * self.eject_impulse, a.sin() * self.eject_impulse);
+        let imp = Vec2::new(box2d::fdlibm::cos(a) * self.eject_impulse, box2d::fdlibm::sin(a) * self.eject_impulse);
         for part in [Part::Chest, Part::Pelvis] {
             let id = doll.bodies[&part];
             let c = b.body(id).sweep.c;
@@ -6494,7 +6494,7 @@ impl Santa {
             if elf.wheel_contacts <= 0 || world.b2().body(wheel).angular_velocity.abs() <= 5.0 {
                 continue;
             }
-            let cos = world.b2().body(wheel).sweep.a.cos();
+            let cos = box2d::fdlibm::cos(world.b2().body(wheel).sweep.a);
             let at = world.b2().body(wheel).sweep.c;
             let pick = (frame % 5) as usize + 1;
             if elf.step_sign {

@@ -6,6 +6,7 @@
 pub mod broadphase;
 pub mod collision;
 pub mod distance;
+pub mod fdlibm;
 pub mod joints;
 pub mod math;
 pub mod settings;

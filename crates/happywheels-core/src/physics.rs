@@ -23,7 +23,7 @@ fn num(s: &Shape, k: &str) -> Option<f64> {
 }
 
 fn rot(a: f64, x: f64, y: f64) -> (f64, f64) {
-    (a.cos() * x - a.sin() * y, a.cos() * y + a.sin() * x)
+    (box2d::fdlibm::cos(a) * x - box2d::fdlibm::sin(a) * y, box2d::fdlibm::cos(a) * y + box2d::fdlibm::sin(a) * x)
 }
 
 fn polygon_area(pts: &[Vec2]) -> f64 {
@@ -886,7 +886,7 @@ impl World {
         let sensor_verts = [p0[1], p1[0], p1[3], p0[2]];
         let sensor = self.b.create_shape(muzzle, &mk(Geometry::Polygon(sensor_verts.iter().map(|&(a, b)| pt(a, b)).collect()), 1e-7, true));
         self.b.set_mass_from_shapes(muzzle);
-        let (s, c) = rot.sin_cos();
+        let (s, c) = (box2d::fdlibm::sin(rot), box2d::fdlibm::cos(rot));
         let base: Vec<Vec2> = [(-37.0, 20.0), (37.0, 20.0), (49.0, 55.0), (-49.0, 55.0)]
             .iter()
             .map(|&(a, b)| {
@@ -959,7 +959,7 @@ impl World {
                         let at = self.b.body(self.cannons[ci].muzzle).sweep.c;
                         self.play("Cannon1", 1, at);
                         let a = self.b.body(self.cannons[ci].muzzle).sweep.a;
-                        let (sn, cs, power) = (a.sin(), a.cos(), self.cannons[ci].power);
+                        let (sn, cs, power) = (box2d::fdlibm::sin(a), box2d::fdlibm::cos(a), self.cannons[ci].power);
                         for (body, _) in self.cannons[ci].inside.clone() {
                             let b = self.b.body_mut(body);
                             let (m, c) = (b.mass, b.sweep.c);
@@ -1043,7 +1043,7 @@ impl World {
         let mut first_mass = 0.0;
         for i in 0..count {
             let h = 90.0 / deg + ((i + 1) as f64 * f - 0.5 * f);
-            let (bx, by) = (h.cos() * len, h.sin() * len);
+            let (bx, by) = (box2d::fdlibm::cos(h) * len, box2d::fdlibm::sin(h) * len);
             let (clip_w, clip_h) = if i % 2 == 0 { (9.0, 15.0) } else { (3.0, 15.0) };
             let (hx, hy) = (scale * clip_w * 0.5 / PS, scale * clip_h * 0.5 / PS);
             let pos = self.b.body(reference).world_point(Vec2::new((point[0] + bx / 2.0) / PS, (point[1] + by / 2.0) / PS));
@@ -1120,10 +1120,10 @@ impl World {
                 d.filter = Filter { category_bits: 8, mask_bits: 0xFFFF, group_index: st.filter.group_index };
                 let id = self.b.create_shape(self.level_body, &d);
                 if let (true, Some(bs)) = (d.is_sensor, sb.boost) {
-                    self.boosts.push(Boost { sensor: id, power: bs.power, sin: bs.angle.sin(), cos: bs.angle.cos(), bodies: Vec::new() });
+                    self.boosts.push(Boost { sensor: id, power: bs.power, sin: box2d::fdlibm::sin(bs.angle), cos: box2d::fdlibm::cos(bs.angle), bodies: Vec::new() });
                 }
                 if let (true, Some(f)) = (d.is_sensor, sb.fan) {
-                    self.fans.push(Fan { sensor: id, center: Vec2::new(f.center[0], f.center[1]), sin: f.angle.sin(), cos: f.angle.cos(), bodies: Vec::new() });
+                    self.fans.push(Fan { sensor: id, center: Vec2::new(f.center[0], f.center[1]), sin: box2d::fdlibm::sin(f.angle), cos: box2d::fdlibm::cos(f.angle), bodies: Vec::new() });
                 }
             }
             return None;
@@ -1335,7 +1335,7 @@ impl World {
             let (upper, lower) = (f64::from(j.upper), f64::from(j.lower));
             if j.sliding {
                 let ang = f64::from(j.axis_angle).to_radians();
-                let mut d = PrismaticJointDef::initialize(self.b.body(a), a, self.b.body(b), b, anchor, Vec2::new(ang.cos(), ang.sin()));
+                let mut d = PrismaticJointDef::initialize(self.b.body(a), a, self.b.body(b), b, anchor, Vec2::new(box2d::fdlibm::cos(ang), box2d::fdlibm::sin(ang)));
                 d.enable_limit = j.limit;
                 d.upper_translation = upper / PS;
                 d.lower_translation = lower / PS;
@@ -1559,7 +1559,7 @@ impl World {
             B2Kind::Circle(circle) => (circle.local_position, Geometry::Circle { local_position: Vec2::default(), radius: circle.radius }),
             B2Kind::Polygon { poly, .. } => {
                 let origin = poly.centroid;
-                let (sin, cos) = angle.sin_cos();
+                let (sin, cos) = (box2d::fdlibm::sin(angle), box2d::fdlibm::cos(angle));
                 let verts = poly.vertices.iter().map(|v| {
                     let x = v.x - origin.x;
                     let y = v.y - origin.y;
@@ -1572,7 +1572,7 @@ impl World {
         let original = self.shape_initial_position[index];
         let dx = original[0] - origin.x * PS;
         let dy = original[1] - origin.y * PS;
-        let (sin, cos) = angle.sin_cos();
+        let (sin, cos) = (box2d::fdlibm::sin(angle), box2d::fdlibm::cos(angle));
         self.shape_render_offset[index] = [(cos * dx + sin * dy) as f32, (-sin * dx + cos * dy) as f32];
         def.density = if shape.density > 0.0 { shape.density } else { 1.0 };
         def.filter = shape.filter;
@@ -1617,7 +1617,7 @@ impl World {
             B2Kind::Polygon { poly, .. } => Geometry::Polygon(poly.vertices.iter().map(|&v| bd.world_point(v)).collect()),
         };
         let [ox, oy] = self.shape_render_offset[index];
-        let (sin, cos) = angle.sin_cos();
+        let (sin, cos) = (box2d::fdlibm::sin(angle), box2d::fdlibm::cos(angle));
         self.shape_initial_position[index] = [f64::from(position[0]) + f64::from(ox) * cos - f64::from(oy) * sin, f64::from(position[1]) + f64::from(ox) * sin + f64::from(oy) * cos];
         self.shape_initial_angle[index] = angle;
         self.shape_frozen_pose[index] = Some((position, angle as f32));
@@ -2761,12 +2761,12 @@ impl World {
         d.restitution = 0.1;
         d.filter = Filter { category_bits: 8, mask_bits: 0xFFFF, group_index: -20 };
         self.b.create_shape(self.level_body, &d);
-        let mut r = ShapeDef::oriented_box(400.0 / PS, 200.0 / PS, Vec2::new((x + 200.0 * t.sin()) / PS, (y - 200.0 * t.cos()) / PS), t);
+        let mut r = ShapeDef::oriented_box(400.0 / PS, 200.0 / PS, Vec2::new((x + 200.0 * box2d::fdlibm::sin(t)) / PS, (y - 200.0 * box2d::fdlibm::cos(t)) / PS), t);
         r.is_sensor = true;
         r.filter = d.filter;
         let range = self.b.create_shape(self.level_body, &r);
         self.arrow_guns.push(ArrowGun {
-            pos: Vec2::new((x + off * t.sin()) / PS, (y - off * t.cos()) / PS),
+            pos: Vec2::new((x + off * box2d::fdlibm::sin(t)) / PS, (y - off * box2d::fdlibm::cos(t)) / PS),
             angle: t,
             range,
             targets: Vec::new(),
@@ -2808,7 +2808,7 @@ impl World {
         let f = |v: &serde_json::Value| v.as_f64().unwrap_or(0.0);
         let (x, y) = (f64::from(sp.num("x")?), f64::from(sp.num("y")?));
         let rot = f64::from(sp.num("angle").unwrap_or(0.0)).to_radians();
-        let (sn, cs) = rot.sin_cos();
+        let (sn, cs) = (box2d::fdlibm::sin(rot), box2d::fdlibm::cos(rot));
         let group = self.npc_groups;
         self.npc_groups -= 2;
         let sleeping = sp.flag("sleeping").unwrap_or(false);
@@ -2838,11 +2838,11 @@ impl World {
                 return;
             }
             let a1 = &g["joints"][joint]["a1"];
-            let (c, s) = (lang[parent].cos(), lang[parent].sin());
+            let (c, s) = (box2d::fdlibm::cos(lang[parent]), box2d::fdlibm::sin(lang[parent]));
             // the sprite part turns about the joint anchor (guide anchors/offsets are the stand-in session's, twice the size of a level NPC's: measured with `analysis/npc-pivots.js`)
             let (ax, ay) = (f(&a1[0]) * 0.5, f(&a1[1]) * 0.5);
             let anchor = Vec2::new(lpos[parent].x + c * ax - s * ay, lpos[parent].y + s * ax + c * ay);
-            let (dc, ds) = (d.cos(), d.sin());
+            let (dc, ds) = (box2d::fdlibm::cos(d), box2d::fdlibm::sin(d));
             for &i in group {
                 let (rx, ry) = (lpos[i].x - anchor.x, lpos[i].y - anchor.y);
                 lpos[i] = Vec2::new(anchor.x + dc * rx - ds * ry, anchor.y + ds * rx + dc * ry);
@@ -3080,7 +3080,7 @@ impl World {
     /// Aim angle (rad) of the arrow gun / harpoon gun placed at special position (`x`, `y`) px with base angle `base` (rad), if it is modelled.
     pub fn gun_turret_angle(&self, x: f64, y: f64, base: f64, harpoon: bool) -> Option<f64> {
         let off = if harpoon { 35.0 } else { 27.0 };
-        let (px, py) = ((x + off * base.sin()) / PS, (y - off * base.cos()) / PS);
+        let (px, py) = ((x + off * box2d::fdlibm::sin(base)) / PS, (y - off * box2d::fdlibm::cos(base)) / PS);
         self.arrow_guns.iter().find(|g| g.harpoon == harpoon && (g.pos.x - px).abs() < 1e-9 && (g.pos.y - py).abs() < 1e-9).map(|g| g.angle)
     }
 
@@ -3399,7 +3399,7 @@ impl World {
             let old_xf = self.b.body(old_body).clone();
             if crush {
                 let x = normal.y.atan2(normal.x) - ang0;
-                let horizontal = x.sin().round().abs() != 1.0;
+                let horizontal = box2d::fdlibm::sin(x).round().abs() != 1.0;
                 self.cans[k].crush_frame = if horizontal { 2 } else { 3 };
                 let dims = if horizontal { CAN_CRUSH_H } else { CAN_CRUSH_V };
                 self.can_rebuild(k, Some(dims));
@@ -3534,7 +3534,7 @@ impl World {
             let a = b.sweep.a + angle;
             let v = b.linear_velocity_from_local_point(offset);
             let at = b.world_point(offset);
-            let vel = [a.cos() * speed + v.x, a.sin() * speed + v.y];
+            let vel = [box2d::fdlibm::cos(a) * speed + v.x, box2d::fdlibm::sin(a) * speed + v.y];
             match sprite {
                 Some(kind) => self.blood.spawn_sprite(kind, [at.x * PS, at.y * PS], vel),
                 None => self.blood.spawn([at.x * PS, at.y * PS], vel),
@@ -3572,7 +3572,7 @@ impl World {
                 let a = b.sweep.a + rot + angle_range * self.blood.rand();
                 let v = b.linear_velocity_from_local_point(local);
                 let at = b.world_point(local);
-                self.blood.spawn_sprite(kind, [at.x * PS, at.y * PS], [a.cos() * speed + v.x, a.sin() * speed + v.y]);
+                self.blood.spawn_sprite(kind, [at.x * PS, at.y * PS], [box2d::fdlibm::cos(a) * speed + v.x, box2d::fdlibm::sin(a) * speed + v.y]);
             }
         }
         self.sprays.retain(|s| s.count <= s.total && self.b.c.bodies[s.body].alive);
@@ -3753,7 +3753,7 @@ impl World {
                     0 => {
                         let (d, mut l) = (4.0 / cs, ang);
                         for _ in 0..4 {
-                            let at = Vec2::new(pos.x + l.sin() * d, pos.y + l.cos() * d);
+                            let at = Vec2::new(pos.x + box2d::fdlibm::sin(l) * d, pos.y + box2d::fdlibm::cos(l) * d);
                             ball(self, at, 0.0, chunk[0] / cs, vel(at), w);
                             l += FRAC_PI_2;
                         }
@@ -3762,7 +3762,7 @@ impl World {
                     1 => {
                         let (a, mut sa) = (5.0 / cs, ang + FRAC_PI_4);
                         for _ in 0..4 {
-                            let at = Vec2::new(pos.x + sa.sin() * a, pos.y + sa.cos() * a);
+                            let at = Vec2::new(pos.x + box2d::fdlibm::sin(sa) * a, pos.y + box2d::fdlibm::cos(sa) * a);
                             ball(self, at, ang, chunk[1] / cs, vel(at), w);
                             sa += FRAC_PI_2;
                         }
@@ -3771,7 +3771,7 @@ impl World {
                     _ => {
                         let (a, mut sa) = (3.0 / cs, ang);
                         for _ in 0..3 {
-                            let at = Vec2::new(pos.x + sa.sin() * a, pos.y + sa.cos() * a);
+                            let at = Vec2::new(pos.x + box2d::fdlibm::sin(sa) * a, pos.y + box2d::fdlibm::cos(sa) * a);
                             ball(self, at, ang, chunk[2] / cs, vel(at), w);
                             sa += 2.0 * PI / 3.0;
                         }
@@ -3915,7 +3915,7 @@ impl World {
                         } else {
                             self.play("ArrowFire", 2, pos);
                         }
-                        self.spawn_arrow(pos, ang, Vec2::new(e * ang.cos(), e * ang.sin()), harpoon);
+                        self.spawn_arrow(pos, ang, Vec2::new(e * box2d::fdlibm::cos(ang), e * box2d::fdlibm::sin(ang)), harpoon);
                     }
                     self.arrow_guns[gi].arrows_left -= 1;
                     self.arrow_guns[gi].frame_count = self.arrow_guns[gi].frames_per_shot;
@@ -3966,11 +3966,11 @@ impl World {
                 let (anchor, axis) = match self.arrows[ai].blade {
                     Some(blade_angle) => {
                         let u = self.b.body(body).sweep.a - blade_angle + std::f64::consts::FRAC_PI_2;
-                        (self.b.body(body).sweep.c, Vec2::new(u.cos(), u.sin()))
+                        (self.b.body(body).sweep.c, Vec2::new(box2d::fdlibm::cos(u), box2d::fdlibm::sin(u)))
                     }
                     None => {
                         let a = self.b.body(body).sweep.a;
-                        (self.b.body(body).world_point(Vec2::new(if self.arrows[ai].harpoon { 26.25 } else { 13.25 } / PS, 0.0)), Vec2::new(a.cos(), a.sin()))
+                        (self.b.body(body).world_point(Vec2::new(if self.arrows[ai].harpoon { 26.25 } else { 13.25 } / PS, 0.0)), Vec2::new(box2d::fdlibm::cos(a), box2d::fdlibm::sin(a)))
                     }
                 };
                 let mut jd = PrismaticJointDef::initialize(self.b.body(body), body, self.b.body(other), other, anchor, axis);
@@ -4068,7 +4068,7 @@ impl World {
                 self.shape_impale(other, true, None, 0.0);
                 let (body, angle) = (self.spikes[si].body, self.spikes[si].angle);
                 let at = self.b.body(other).sweep.c;
-                let mut jd = PrismaticJointDef::initialize(self.b.body(body), body, self.b.body(other), other, at, Vec2::new(-angle.sin(), angle.cos()));
+                let mut jd = PrismaticJointDef::initialize(self.b.body(body), body, self.b.body(other), other, at, Vec2::new(-box2d::fdlibm::sin(angle), box2d::fdlibm::cos(angle)));
                 jd.collide_connected = true;
                 jd.enable_motor = true;
                 jd.max_motor_force = 30.0;
@@ -4289,7 +4289,7 @@ impl World {
             let (dx, dy) = (v.x - c.x, v.y - c.y);
             let w = 1.0 - dx.hypot(dy).min(l) / l;
             let a = dy.atan2(dx);
-            self.b.body_mut(other).apply_impulse(Vec2::new(a.cos() * w * 5.0, a.sin() * w * 5.0), v);
+            self.b.body_mut(other).apply_impulse(Vec2::new(box2d::fdlibm::cos(a) * w * 5.0, box2d::fdlibm::sin(a) * w * 5.0), v);
         }
     }
 
@@ -4536,7 +4536,7 @@ impl World {
                 let (dx, dy) = (v.x - c.x, v.y - c.y);
                 let f = 1.0 - dx.hypot(dy).min(2.0) / 2.0;
                 let a = dy.atan2(dx);
-                self.b.body_mut(other).apply_impulse(Vec2::new(a.cos() * f * 10.0, a.sin() * f * 10.0), v);
+                self.b.body_mut(other).apply_impulse(Vec2::new(box2d::fdlibm::cos(a) * f * 10.0, box2d::fdlibm::sin(a) * f * 10.0), v);
             }
             self.play("MineExplosion", 1, c);
         }
@@ -5295,7 +5295,7 @@ impl World {
                     let (dx, dy) = (v.x - c.x, v.y - c.y);
                     let w = 1.0 - dx.hypot(dy).min(l) / l;
                     let a = dy.atan2(dx);
-                    self.b.body_mut(other).apply_impulse(Vec2::new(a.cos() * w * 5.0, a.sin() * w * 5.0), v);
+                    self.b.body_mut(other).apply_impulse(Vec2::new(box2d::fdlibm::cos(a) * w * 5.0, box2d::fdlibm::sin(a) * w * 5.0), v);
                 }
                 continue;
             }
@@ -5317,7 +5317,7 @@ impl World {
             let angle = self.b.c.bodies[body].sweep.a;
             let t = j.spec.power * j.accel;
             let c = self.b.c.bodies[body].sweep.c;
-            self.b.body_mut(body).apply_impulse(Vec2::new(angle.sin() * t, -angle.cos() * t), c);
+            self.b.body_mut(body).apply_impulse(Vec2::new(box2d::fdlibm::sin(angle) * t, -box2d::fdlibm::cos(angle) * t), c);
             j.fired += 1.0;
             if j.fired > j.spec.fire_total {
                 j.done = true;

@@ -219,7 +219,7 @@ fn composite(s: &Special) -> Option<SimpleBody> {
         // at body-local (0,4); prismatic to the level along (sin a, -cos a), locked (limits 0..0) — the
         // launching motor is runtime behaviour, not modelled.
         5 => {
-            let (sin, cos) = angle.sin_cos();
+            let (sin, cos) = (box2d::fdlibm::sin(angle), box2d::fdlibm::cos(angle));
             Some(SimpleBody {
                 shape: boxes(&[(175.0, 11.0, 0.0, -9.0), (13.0, 9.0, -120.0, 11.0), (13.0, 9.0, 120.0, 11.0)]),
                 pos: None,
@@ -283,7 +283,7 @@ fn composite(s: &Special) -> Option<SimpleBody> {
         // The swinging behaviour (timer/spring) is runtime and not modelled.
         35 => {
             let dir = if s.flag("reverse").unwrap_or(false) { -1.0 } else { 1.0 };
-            let (sin, cos) = angle.sin_cos();
+            let (sin, cos) = (box2d::fdlibm::sin(angle), box2d::fdlibm::cos(angle));
             let world = |lx: f64, ly: f64| [x + lx * cos - ly * sin, y + lx * sin + ly * cos];
             let mut blocker = fixed_box(131.25, 5.0, world(0.0, 15.0), angle);
             blocker.filter.group_index = 15;
@@ -387,7 +387,7 @@ fn composite(s: &Special) -> Option<SimpleBody> {
         // Fan: wind sensor box 300×500 centred 300 px along the fan's up axis (group -20), floor box 300×50 at
         // 25 px below it, and a 7-vertex half-disc (r 150) on top, all static.
         8 => {
-            let (sin, cos) = angle.sin_cos();
+            let (sin, cos) = (box2d::fdlibm::sin(angle), box2d::fdlibm::cos(angle));
             let mut sensor = fixed_box(150.0, 250.0, [x + 300.0 * sin, y - 300.0 * cos], angle);
             sensor.is_sensor = true;
             sensor.filter.group_index = -20;

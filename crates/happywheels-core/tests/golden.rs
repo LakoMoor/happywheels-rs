@@ -3883,7 +3883,7 @@ fn real_sessions_match_original() {
         assert!(w.spawn_bike(ch, [1000.0, 250.0]), "spawn {ch}");
         if std::env::var("REALPRE").is_ok() {
             for (k, b) in w.b2().c.bodies.iter().enumerate().filter(|(_, b)| b.mass > 0.0 && b.alive) {
-                eprintln!("PRE {k} {:.3} {:.3} {:.3} m={:.17e} I={:.17e} lc=({:.17e},{:.17e})", b.xf.position.x * 62.5, b.xf.position.y * 62.5, b.sweep.a, b.mass, b.i, b.sweep.local_center.x, b.sweep.local_center.y);
+                eprintln!("PRE {k} {:.17e} {:.17e} {:.17e} m={:.17e} I={:.17e} lc=({:.17e},{:.17e})", b.xf.position.x * 62.5, b.xf.position.y * 62.5, b.sweep.a, b.mass, b.i, b.sweep.local_center.x, b.sweep.local_center.y);
             }
         }
         if std::env::var("REALPRE").is_ok() {
@@ -3917,6 +3917,24 @@ fn real_sessions_match_original() {
                 z: i == 170,
             });
             w.step();
+            if std::env::var("REALJT").is_ok() && i == 0 {
+                for (k, j) in w.b2().c.joints.iter().enumerate() {
+                    if let box2d::joints::JointKind::Revolute(r) = &j.kind {
+                        eprintln!("JT {k} {:.17e} {:.17e} {:.17e} {:.17e}", r.pivot_force.x, r.pivot_force.y, r.motor_force, r.limit_force);
+                    }
+                }
+            }
+            if std::env::var("REALRC").is_ok() {
+                for (k, b) in w.b2().c.bodies.iter().enumerate().filter(|(_, b)| b.mass > 0.0 && b.alive) {
+                    let (c, s) = (box2d::fdlibm::cos(b.sweep.a), box2d::fdlibm::sin(b.sweep.a));
+                    if c != b.xf.r.col1.x || s != b.xf.r.col1.y { eprintln!("RC frame {i} body {k} a={:.17e} dcos={:.2e} dsin={:.2e}", b.sweep.a, b.xf.r.col1.x - c, b.xf.r.col1.y - s); }
+                }
+            }
+            if std::env::var("REALVELALL").is_ok() {
+                for (k, b) in w.b2().c.bodies.iter().enumerate().filter(|(_, b)| b.mass > 0.0 && b.alive) {
+                    eprintln!("VELA {i} {k} {:.17e} {:.17e} {:.17e} {:.17e} {:.17e} {:.17e}", b.linear_velocity.x, b.linear_velocity.y, b.angular_velocity, b.sweep.c.x, b.sweep.c.y, b.sweep.a);
+                }
+            }
             if std::env::var("REALC").ok().and_then(|s| s.parse::<usize>().ok()).is_some_and(|f| f == i) {
                 for id in w.b2().c.contact_ids().collect::<Vec<_>>() {
                     let c = w.b2().c.contact_info(id);
@@ -3995,8 +4013,7 @@ fn real_sessions_match_original() {
         // original; everything before it is asserted exactly.
         let known = match ch {
             4 => Some(121),
-            7 => Some(122),
-            8 => Some(147),
+            7 => Some(150),
             _ => None,
         };
         if let Some(k) = known {
