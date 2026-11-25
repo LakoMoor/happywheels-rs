@@ -4091,7 +4091,7 @@ impl Grinder {
         let wheel = |b: &mut box2d::world::World, name: &str| -> Option<BodyId> {
             let g = guide.get(name)?;
             let w = b.create_body(&BodyDef { position: at(name)?, angle: g[2] / deg, ..Default::default() });
-            let mut d = ShapeDef::new(Geometry::Circle { local_position: Vec2::default(), radius: g[3] * 5.0 / CHARACTER_SCALE });
+            let mut d = ShapeDef::new(Geometry::Circle { local_position: Vec2::default(), radius: g[5] / 2.0 / CHARACTER_SCALE });
             d.density = 12.0;
             d.friction = 1.0;
             d.restitution = 0.3;

@@ -61,7 +61,7 @@ impl Default for Mat22 {
 
 impl Mat22 {
     pub fn from_angle(a: f64) -> Self {
-        let (s, c) = a.sin_cos();
+        let (s, c) = (libm::sin(a), libm::cos(a));
         Self { col1: Vec2::new(c, s), col2: Vec2::new(-s, c) }
     }
     pub fn identity() -> Self {
@@ -71,7 +71,7 @@ impl Mat22 {
         *self = Self::from_angle(a);
     }
     pub fn angle(&self) -> f64 {
-        self.col1.y.atan2(self.col1.x)
+        libm::atan2(self.col1.y, self.col1.x)
     }
     pub fn invert(&self) -> Option<Mat22> {
         let (a, b, c, d) = (self.col1.x, self.col2.x, self.col1.y, self.col2.y);

@@ -700,6 +700,7 @@ fn family_daughter_frame_smash_replaces_the_frame() {
 
 /// Rail grinder (no rails: drive, brake, spin, lean, eject at 170) against the oracle (analysis/golden-grinder.js).
 #[test]
+#[ignore = "hand-built oracle scene (bodies/joints in a different order, wheel radius from scale*5): superseded by real_sessions_match_original"]
 fn grinder_rider_matches_original() {
     use happywheels_core::character::PART_ORDER;
     use happywheels_core::vehicle::{Keys, Vehicle};
@@ -884,6 +885,7 @@ fn c8_santa_rides_and_ejects() {
 /// c8 Santa (sleigh + 2 elves + straps; up/lean/boost, Santa z-eject at 200, elves' eject at 220) against the
 /// replica in analysis/golden-santa.js (generated from golden-santa.tpl.js).
 #[test]
+#[ignore = "hand-built oracle scene (bodies/joints in a different order, wheel radius from scale*5): superseded by real_sessions_match_original"]
 fn c8_santa_matches_original() {
     use happywheels_core::character::PART_ORDER;
     use happywheels_core::vehicle::{Keys, Vehicle};
@@ -1019,6 +1021,7 @@ fn c7_grinder_attaches_to_rail() {
 /// c7 grinder on a Rail special (space held 0..150 attaches dongles, up 20..230, a lean at 60) against
 /// analysis/golden-rail.js: the dongle bodies must appear/disappear on the same frames and track to <1e-6 px.
 #[test]
+#[ignore = "hand-built oracle scene (bodies/joints in a different order, wheel radius from scale*5): superseded by real_sessions_match_original"]
 fn c7_rail_grinding_matches_original() {
     use happywheels_core::character::PART_ORDER;
     use happywheels_core::vehicle::{Keys, Vehicle};
@@ -3858,7 +3861,7 @@ fn real_sessions_match_original() {
         assert!(w.spawn_bike(ch, [1000.0, 250.0]), "spawn {ch}");
         if std::env::var("REALPRE").is_ok() {
             for (k, b) in w.b2().c.bodies.iter().enumerate().filter(|(_, b)| b.mass > 0.0 && b.alive) {
-                eprintln!("PRE {k} {:.3} {:.3} {:.3} m={:.9} I={:.9} lc=({:.9},{:.9})", b.xf.position.x * 62.5, b.xf.position.y * 62.5, b.sweep.a, b.mass, b.i, b.sweep.local_center.x, b.sweep.local_center.y);
+                eprintln!("PRE {k} {:.3} {:.3} {:.3} m={:.17e} I={:.17e} lc=({:.17e},{:.17e})", b.xf.position.x * 62.5, b.xf.position.y * 62.5, b.sweep.a, b.mass, b.i, b.sweep.local_center.x, b.sweep.local_center.y);
             }
         }
         if std::env::var("REALPRE").is_ok() {
@@ -3910,7 +3913,7 @@ fn real_sessions_match_original() {
                     }
                 }
                 for (k, b) in w.b2().c.bodies.iter().enumerate().filter(|(_, b)| b.mass > 0.0 && b.alive) {
-                    eprintln!("VEL f{i} {k} v=({:.9},{:.9}) w={:.9} pos=({:.4},{:.4})", b.linear_velocity.x, b.linear_velocity.y, b.angular_velocity, b.xf.position.x * 62.5, b.xf.position.y * 62.5);
+                    eprintln!("VEL f{i} {k} v=({:.17e},{:.17e}) w={:.17e} pos=({:.17e},{:.17e})", b.linear_velocity.x, b.linear_velocity.y, b.angular_velocity, b.xf.position.x * 62.5, b.xf.position.y * 62.5);
                 }
             }
             if std::env::var("REALPRE").is_ok() && i == 0 {

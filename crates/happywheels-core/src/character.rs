@@ -1175,7 +1175,7 @@ impl Ragdoll {
         if let box2d::joints::JointKind::Revolute(r) = &mut b.joint_mut(id).kind {
             r.enable_motor = true;
             let err = angle - (r.lower_angle + offset);
-            let speed = (gain * err * err).min(10.0);
+            let speed = (gain * (err * err)).min(10.0);
             r.motor_speed = if err < 0.0 { speed } else { -speed };
         }
     }
@@ -1197,7 +1197,7 @@ impl Ragdoll {
             if let box2d::joints::JointKind::Revolute(r) = &mut b.joint_mut(id).kind {
                 r.enable_motor = true;
                 let err = angle - (r.lower_angle + offset);
-                let speed = (gain * err * err).min(10.0);
+                let speed = (gain * (err * err)).min(10.0);
                 r.motor_speed = if err < 0.0 { speed } else { -speed };
             }
         }
@@ -1327,7 +1327,7 @@ impl Ragdoll {
             if let box2d::joints::JointKind::Revolute(r) = &mut b.joint_mut(id).kind {
                 r.enable_motor = true;
                 let err = angle - (r.lower_angle + offset);
-                let speed = (gain * err * err).min(10.0);
+                let speed = (gain * (err * err)).min(10.0);
                 r.motor_speed = if err < 0.0 { speed } else { -speed };
             }
         }
