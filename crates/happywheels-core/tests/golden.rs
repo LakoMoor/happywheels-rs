@@ -3996,7 +3996,7 @@ fn real_sessions_match_original() {
         let known = match ch {
             4 => Some(121),
             7 => Some(122),
-            8 => Some(111),
+            8 => Some(147),
             _ => None,
         };
         if let Some(k) = known {

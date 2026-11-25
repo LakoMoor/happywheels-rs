@@ -946,8 +946,12 @@ impl Segway {
 
 /// Polygon vertices of an oriented box (Box2D 2.0.1 `SetAsOrientedBox`).
 fn oriented_box(hx: f64, hy: f64, center: Vec2, angle: f64) -> Vec<Vec2> {
-    let (s, c) = angle.sin_cos();
-    [(-hx, -hy), (hx, -hy), (hx, hy), (-hx, hy)].iter().map(|&(x, y)| Vec2::new(center.x + c * x - s * y, center.y + s * x + c * y)).collect()
+    // `b2PolygonDef.SetAsOrientedBox`: fdlibm sin/cos (V8's Math) and center + (col1.x * x + col2.x * y)
+    let m = box2d::math::Mat22::from_angle(angle);
+    [(-hx, -hy), (hx, -hy), (hx, hy), (-hx, hy)]
+        .iter()
+        .map(|&(x, y)| Vec2::new(center.x + (m.col1.x * x + m.col2.x * y), center.y + (m.col1.y * x + m.col2.y * y)))
+        .collect()
 }
 
 /// Jet wheelchair (guide `c1`): a chair body (three boxes) on a big drive wheel and a small wheel, the rider
@@ -5406,10 +5410,6 @@ impl Family {
 
 // ───────────────────────────── c8: Santa's sleigh + two elves ─────────────────────────────
 
-/// Flash clip → pixels: a guide clip of `scale` 1 is 102 px wide (oracle: sleigh wheels scale 0.5 → width 51,
-/// bumper 0.32 → 32.64, elf wheels 0.6 → 61.2).
-const WIDTH_UNIT: f64 = 102.0;
-
 fn strap_ball(world: &mut World, pos: Vec2) -> BodyId {
     let b = world.b2_mut();
     let body = b.create_body(&BodyDef { position: pos, ..Default::default() });
@@ -5483,7 +5483,8 @@ impl Elf {
         b.set_mass_from_shapes(stem);
         let gw = guide.get("wheel")?;
         let wheel = b.create_body(&BodyDef { position: at("wheel")?, angle: gw[2] / deg, ..Default::default() });
-        let width = gw[3] * WIDTH_UNIT;
+        // the sub-guide dump has no usable width (6.0); the oracle's wheel mass gives the real clip width, 61.20001220703125 (not 0.6 * 102 = 61.2)
+        let width = 61.200_012_207_031_25;
         let mut d = ShapeDef::new(Geometry::Circle { local_position: Vec2::default(), radius: width / 2.0 / CHARACTER_SCALE });
         d.density = 6.0;
         d.friction = 1.0;
@@ -5754,7 +5755,7 @@ impl Santa {
         b.create_shape(reigns, &rd);
         b.set_mass_from_shapes(reigns);
         let gb = guide.get("bumper")?;
-        let mut bd = ShapeDef::new(Geometry::Circle { local_position: at("bumper")?, radius: gb[3] * WIDTH_UNIT / 2.0 / CHARACTER_SCALE });
+        let mut bd = ShapeDef::new(Geometry::Circle { local_position: at("bumper")?, radius: gb[5] / 2.0 / CHARACTER_SCALE });
         bd.density = 3.0;
         bd.friction = 1.0;
         bd.restitution = 0.1;
@@ -5779,7 +5780,7 @@ impl Santa {
         let mut wheels = Vec::new();
         for (name, grp) in [("backWheel", 0i16), ("midWheel1", 0), ("midWheel2", -1), ("frontWheel", 0)] {
             let g = guide.get(name)?;
-            let width = g[3] * WIDTH_UNIT;
+            let width = g[5];
             if name == "backWheel" {
                 wheel_radius_px = width * 0.5;
             }
