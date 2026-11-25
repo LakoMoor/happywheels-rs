@@ -21,7 +21,7 @@ const SUBGUIDES: &str = include_str!("../data/character-subguides.json");
 const CHARACTER_SCALE: f64 = 62.5 * 2.0;
 const REF_SCALE: f64 = 5.0;
 
-pub type Guide = HashMap<String, [f64; 5]>;
+pub type Guide = HashMap<String, [f64; 7]>;
 
 /// Guide of character `index` (1-based), if it exists.
 pub fn guide(index: usize) -> Option<Guide> {
@@ -174,6 +174,9 @@ pub enum PoseSet {
 }
 
 pub struct Ragdoll {
+    /// Joints not created yet (`spawn_scaled`): the original creates every body of the character AND its vehicle before any joint, and a joint's
+    /// `RefilterProxy` reorders the contact list, so the vehicle calls `finish_joints` after its own bodies.
+    deferred: Option<(Guide, Vec2)>,
     pub poses: PoseSet,
     pub bodies: HashMap<Part, BodyId>,
     pub joints: HashMap<Limb, usize>,
@@ -193,7 +196,7 @@ pub struct Ragdoll {
     head_chunk_radius: f64,
     chest_chunk_radius: f64,
     pelvis_chunk_radius: f64,
-    foot_guide: [f64; 5],
+    foot_guide: [f64; 7],
     ref_scale: f64,
     pub chunks: Vec<BodyId>,
     /// Sprite clip name of each entry of `chunks` (`headChunk1`…, `chestChunk1`…, `pelvisChunk1`…).
@@ -216,7 +219,7 @@ pub struct Ragdoll {
     pub ground: Vec<Part>,
     /// `pelvisSmash` happened (stump thighs then show frame 8).
     pelvis_smashed: bool,
-    sev_guides: [[f64; 5]; 3],
+    sev_guides: [[f64; 7]; 3],
     /// Exposed intestines (torso break below `intestineLimit`) and spinal cord (neck break below `spineLimit`).
     pub intestines: Option<Chain>,
     /// Running blood flows `(kind, flow index)`: 0 head, 1 neck→chest, 2 shoulder→chest, 3 arm/thigh stump, 4 stomach, 5 hip→pelvis.
@@ -281,21 +284,58 @@ impl Ragdoll {
     /// `mower_torso`: the lawnmower class destroys the base chest/pelvis boxes and recreates them as polygons
     /// (`chestVert0..5`, `pelvisVert0..4`, local coordinates) before the joints are made.
     pub fn spawn_with(world: &mut World, guide: &Guide, start_px: [f32; 2], mower_torso: bool) -> Option<Self> {
-        Self::spawn_scaled(world, guide, start_px, mower_torso, REF_SCALE)
+        let mut d = Self::spawn_scaled(world, guide, start_px, mower_torso, REF_SCALE)?;
+        d.finish_joints(world);
+        Some(d)
     }
 
     /// `ref_scale` is the class's `shapeRefScale` (5 for most characters, 50 for the pogo whose guide scales are 1/10).
     pub fn spawn_scaled(world: &mut World, guide: &Guide, start_px: [f32; 2], mower_torso: bool, ref_scale: f64) -> Option<Self> {
-        Self::spawn_full(world, guide, start_px, mower_torso, ref_scale, -1)
+        let mut d = Self::spawn_inner(world, guide, start_px, mower_torso, ref_scale, -1, true)?;
+        d.deferred = Some((guide.clone(), Vec2::new(f64::from(start_px[0]) / 62.5, f64::from(start_px[1]) / 62.5)));
+        Some(d)
+    }
+
+    /// Creates the joints left out by `spawn_scaled` (no-op when already created).
+    pub fn finish_joints(&mut self, world: &mut World) {
+        let Some((guide, start)) = self.deferred.take() else { return };
+        let b = world.b2_mut();
+        let ids = Self::make_joints(b, &guide, start, &self.bodies);
+        if let Some(ids) = ids {
+            self.joints = LIMB_ORDER.iter().copied().zip(ids).collect();
+        }
+    }
+
+    fn make_joints(b: &mut box2d::world::World, guide: &Guide, start: Vec2, bodies: &HashMap<Part, BodyId>) -> Option<Vec<usize>> {
+        let deg = 180.0 / std::f64::consts::PI;
+        let mut joint_ids = Vec::new();
+        for (anchor, parent, child, lo, hi) in JOINTS {
+            let [x, y, ..] = *guide.get(anchor)?;
+            let pt = Vec2::new(start.x + x / CHARACTER_SCALE, start.y + y / CHARACTER_SCALE);
+            let (p, c) = (bodies[&parent], bodies[&child]);
+            let mut d = RevoluteJointDef::initialize(b.body(p), p, b.body(c), c, pt);
+            // Limits are absolute relative angles; Box2D measures from the creation pose.
+            let rel = b.body(c).sweep.a - b.body(p).sweep.a;
+            d.enable_limit = true;
+            d.max_motor_torque = 4.0;
+            d.lower_angle = lo / deg - rel;
+            d.upper_angle = hi / deg - rel;
+            joint_ids.push(b.create_revolute_joint(&d));
+        }
+        Some(joint_ids)
     }
 
     /// Full constructor: `group` is the character's `groupID` (limbs of one group never collide with each other).
     pub fn spawn_full(world: &mut World, guide: &Guide, start_px: [f32; 2], mower_torso: bool, ref_scale: f64, group: i16) -> Option<Self> {
+        Self::spawn_inner(world, guide, start_px, mower_torso, ref_scale, group, false)
+    }
+
+    fn spawn_inner(world: &mut World, guide: &Guide, start_px: [f32; 2], mower_torso: bool, ref_scale: f64, group: i16, defer: bool) -> Option<Self> {
         let start = Vec2::new(f64::from(start_px[0]) / 62.5, f64::from(start_px[1]) / 62.5);
         let b = world.b2_mut();
         let mut bodies = HashMap::new();
         for (part, name) in PARTS {
-            let [x, y, rot, sx, sy] = *guide.get(name)?;
+            let [x, y, rot, sx, sy, ..] = *guide.get(name)?;
             let body = b.create_body(&BodyDef {
                 position: Vec2::new(start.x + x / CHARACTER_SCALE, start.y + y / CHARACTER_SCALE),
                 angle: rot / (180.0 / std::f64::consts::PI),
@@ -342,22 +382,9 @@ impl Ragdoll {
                 bodies.insert(part, body);
             }
         }
-        let mut joint_ids = Vec::new();
-        for (anchor, parent, child, lo, hi) in JOINTS {
-            let [x, y, ..] = *guide.get(anchor)?;
-            let pt = Vec2::new(start.x + x / CHARACTER_SCALE, start.y + y / CHARACTER_SCALE);
-            let (p, c) = (bodies[&parent], bodies[&child]);
-            let mut d = RevoluteJointDef::initialize(b.body(p), p, b.body(c), c, pt);
-            // Limits are absolute relative angles; Box2D measures from the creation pose.
-            let rel = b.body(c).sweep.a - b.body(p).sweep.a;
-            d.enable_limit = true;
-            d.max_motor_torque = 4.0;
-            d.lower_angle = lo / deg - rel;
-            d.upper_angle = hi / deg - rel;
-            joint_ids.push(b.create_revolute_joint(&d));
-        }
+        let joint_ids = if defer { Vec::new() } else { Self::make_joints(b, guide, start, &bodies)? };
         let joints = LIMB_ORDER.iter().copied().zip(joint_ids).collect();
-        Some(Self { poses: PoseSet::Base, bodies, joints, pose: 0, cancel: false, broken: Vec::new(), grabbing: false, grips: [None; 2], group, head_chunk_radius: guide.get("headChunkShape").map_or(0.0, |g| g[3] * 5.0 / CHARACTER_SCALE), chest_chunk_radius: guide.get("chestChunkShape").map_or(0.0, |g| g[3] * 5.0 / CHARACTER_SCALE), pelvis_chunk_radius: guide.get("pelvisChunkShape").map_or(0.0, |g| g[3] * 5.0 / CHARACTER_SCALE), foot_guide: guide.get("footShape").copied().unwrap_or_default(), ref_scale, chunks: Vec::new(), chunk_names: Vec::new(), brain: None, heart: None, feet: [None; 2], dead: false, helmet_geo: (1..=4).map(|k| guide.get(&format!("helmetVert{k}")).map(|g| Vec2::new(g[0] / CHARACTER_SCALE, g[1] / CHARACTER_SCALE))).collect::<Option<Vec<_>>>().unwrap_or_default(), helmet_on: guide.get("helmetVert1").is_some(), helmet: None, sev: Vec::new(), sev_limbs: Vec::new(), ground: Vec::new(), pelvis_smashed: false, blood_flows: Vec::new(), tag: "Char3", voices: [None; 6], voice_until: 0, voice_prio: -1, intestines: None, spine: None, ligaments: [None, None, None, None], chain_len: [guide.get("intestineShape").map_or(0.0, |g| 2.0 * g[3] * ref_scale / CHARACTER_SCALE), guide.get("ligamentShape").map_or(0.0, |g| 2.0 * g[3] * ref_scale / CHARACTER_SCALE)], spine_anchor: guide.get("spineAnchor").map_or([0.0; 2], |g| [g[0], g[1]]), sev_guides: ["sevArm1Shape", "sevLeg1Shape", "sevLeg2Shape"].map(|n| guide.get(n).copied().unwrap_or_default()) })
+        Some(Self { deferred: None, poses: PoseSet::Base, bodies, joints, pose: 0, cancel: false, broken: Vec::new(), grabbing: false, grips: [None; 2], group, head_chunk_radius: guide.get("headChunkShape").map_or(0.0, |g| g[3] * 5.0 / CHARACTER_SCALE), chest_chunk_radius: guide.get("chestChunkShape").map_or(0.0, |g| g[3] * 5.0 / CHARACTER_SCALE), pelvis_chunk_radius: guide.get("pelvisChunkShape").map_or(0.0, |g| g[3] * 5.0 / CHARACTER_SCALE), foot_guide: guide.get("footShape").copied().unwrap_or_default(), ref_scale, chunks: Vec::new(), chunk_names: Vec::new(), brain: None, heart: None, feet: [None; 2], dead: false, helmet_geo: (1..=4).map(|k| guide.get(&format!("helmetVert{k}")).map(|g| Vec2::new(g[0] / CHARACTER_SCALE, g[1] / CHARACTER_SCALE))).collect::<Option<Vec<_>>>().unwrap_or_default(), helmet_on: guide.get("helmetVert1").is_some(), helmet: None, sev: Vec::new(), sev_limbs: Vec::new(), ground: Vec::new(), pelvis_smashed: false, blood_flows: Vec::new(), tag: "Char3", voices: [None; 6], voice_until: 0, voice_prio: -1, intestines: None, spine: None, ligaments: [None, None, None, None], chain_len: [guide.get("intestineShape").map_or(0.0, |g| 2.0 * g[3] * ref_scale / CHARACTER_SCALE), guide.get("ligamentShape").map_or(0.0, |g| 2.0 * g[3] * ref_scale / CHARACTER_SCALE)], spine_anchor: guide.get("spineAnchor").map_or([0.0; 2], |g| [g[0], g[1]]), sev_guides: ["sevArm1Shape", "sevLeg1Shape", "sevLeg2Shape"].map(|n| guide.get(n).copied().unwrap_or_default()) })
     }
 
     /// `headSmash1`: the head body is destroyed (taking the neck joint with it) and replaced by four chunk balls on a
@@ -676,7 +703,7 @@ impl Ragdoll {
         let deg = 180.0 / std::f64::consts::PI;
         let (lo, hi) = if shoulder { (-180.0, 60.0) } else { (-150.0, 10.0) };
         let b = world.b2_mut();
-        let box_verts = |g: [f64; 5], rs: f64| {
+        let box_verts = |g: [f64; 7], rs: f64| {
             let (hx, hy, cy) = (g[3] * rs / CHARACTER_SCALE, g[4] * rs / CHARACTER_SCALE, g[1] / CHARACTER_SCALE);
             vec![Vec2::new(-hx, cy - hy), Vec2::new(hx, cy - hy), Vec2::new(hx, cy + hy), Vec2::new(-hx, cy + hy)]
         };

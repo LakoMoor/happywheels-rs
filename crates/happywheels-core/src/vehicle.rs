@@ -102,6 +102,8 @@ impl Bike {
             // VERIFIED against the game's real session (analysis/golden-session-sounds.js): all four leg/frame contacts are non-solid there
             b.c.make_contacts_non_solid(s);
         }
+        doll.finish_joints(world);
+        let b = world.b2_mut();
         // Joints: lean-friendly limits first (`SetLimits` after the base joints), then the vehicle joints.
         let limits = [
             (Limb::Hip1, -110.0, 10.0),
@@ -702,7 +704,7 @@ impl Segway {
         b.set_mass_from_shapes(shock);
         let wheel_g = guide.get("wheelShape")?;
         let wheel = b.create_body(&BodyDef { position: at("wheelShape")?, angle: wheel_g[2] / deg, ..Default::default() });
-        let mut wd = ShapeDef::new(Geometry::Circle { local_position: Vec2::default(), radius: wheel_g[3] * 5.0 / CHARACTER_SCALE });
+        let mut wd = ShapeDef::new(Geometry::Circle { local_position: Vec2::default(), radius: wheel_g[5] / 2.0 / CHARACTER_SCALE });
         wd.density = 5.0;
         wd.friction = 1.0;
         wd.restitution = 0.3;
@@ -710,6 +712,7 @@ impl Segway {
         b.create_shape(wheel, &wd);
         b.set_mass_from_shapes(wheel);
         // Rider limits for this vehicle (SetLimits after the base joints).
+        doll.finish_joints(world);
         for (limb, lo, hi) in [(Limb::Hip1, -50.0, 10.0), (Limb::Hip2, -50.0, 10.0), (Limb::Elbow1, -60.0, 0.0), (Limb::Elbow2, -60.0, 0.0), (Limb::Neck, 0.0, 20.0)] {
             doll.set_limits(world, limb, lo / deg, hi / deg);
         }
@@ -1145,6 +1148,7 @@ impl Chair {
             let s = b.body(doll.bodies[&part]).shapes[0];
             b.set_shape_filter(s, Filter { category_bits: 516, mask_bits: 520, group_index: -1 });
         }
+        doll.finish_joints(world);
         for limb in [Limb::Hip1, Limb::Hip2] {
             doll.set_limits(world, limb, -110.0 / deg, -90.0 / deg);
         }
@@ -1593,6 +1597,7 @@ impl DirtBike {
             let s = b.body(doll.bodies[&part]).shapes[0];
             b.shape_mut(s).is_sensor = true;
         }
+        doll.finish_joints(world);
         for (limb, lo, hi) in [(Limb::Elbow1, -90.0, 0.0), (Limb::Elbow2, -90.0, 0.0), (Limb::Neck, -20.0, 0.0)] {
             doll.set_limits(world, limb, lo / deg, hi / deg);
         }
@@ -2217,6 +2222,7 @@ impl Mower {
         };
         let front_shock = shock(b, "frontWheelShape")?;
         let back_shock = shock(b, "backWheelShape")?;
+        doll.finish_joints(world);
         doll.set_limits(world, Limb::Neck, -10.0 / deg, 10.0 / deg);
         let b = world.b2_mut();
         let prismatic = |b: &mut box2d::world::World, shock: BodyId, name: &str| -> Option<usize> {
@@ -2582,6 +2588,7 @@ impl Pogo {
         nub.restitution = 0.3;
         nub.filter = default_filter;
         let nub_shape = b.create_shape(rod, &nub);
+        doll.finish_joints(world);
         for (limb, lo, hi) in [
             (Limb::Hip1, -100.0, 0.0),
             (Limb::Hip2, -100.0, 0.0),
@@ -3093,6 +3100,7 @@ impl Cart {
             b.set_mass_from_shapes(gb);
             groceries.push(gb);
         }
+        doll.finish_joints(world);
         doll.set_limits(world, Limb::Neck, -10.0 / deg, 10.0 / deg);
         let b = world.b2_mut();
         let prismatic = |b: &mut box2d::world::World, sb: BodyId, name: &str| -> Option<usize> {
@@ -3472,6 +3480,7 @@ impl Heli {
         b.set_mass_from_shapes(magnet);
         b.destroy_shape(range_shape);
         let magnet_shape = b.body(magnet).shapes[0];
+        doll.finish_joints(world);
         doll.set_limits(world, Limb::Neck, -10.0 / deg, 10.0 / deg);
         let b = world.b2_mut();
         let rev = |b: &mut box2d::world::World, b2: BodyId, p: Vec2| {
@@ -4093,6 +4102,7 @@ impl Grinder {
         };
         let front_wheel = wheel(b, "frontWheelShape")?;
         let back_wheel = wheel(b, "backWheelShape")?;
+        doll.finish_joints(world);
         doll.set_limits(world, Limb::Hip1, -50.0 / deg, 10.0 / deg);
         doll.set_limits(world, Limb::Hip2, -50.0 / deg, 10.0 / deg);
         doll.set_limits(world, Limb::Elbow1, -60.0 / deg, 0.0);
@@ -5774,6 +5784,7 @@ impl Santa {
             wheels.push(body);
         }
         let wheels: [BodyId; 4] = wheels.try_into().ok()?;
+        doll.finish_joints(world);
         doll.set_limits(world, Limb::Neck, -5.0 / deg, 5.0 / deg);
         let b = world.b2_mut();
         let hand = at("handAnchor")?;

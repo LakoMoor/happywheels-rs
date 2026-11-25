@@ -233,6 +233,17 @@ impl BroadPhase {
         (li, ui)
     }
 
+    /// Debug: raw quantised bounds `[x lower, x upper, y lower, y upper]` of every live proxy id (index into the bound arrays included).
+    pub fn debug_proxy(&self, id: u16) -> [(usize, u16); 4] {
+        let p = &self.proxies[id as usize];
+        [
+            (p.lower[0], self.bounds[0][p.lower[0]].value),
+            (p.upper[0], self.bounds[0][p.upper[0]].value),
+            (p.lower[1], self.bounds[1][p.lower[1]].value),
+            (p.upper[1], self.bounds[1][p.upper[1]].value),
+        ]
+    }
+
     fn add_buffered_pair(&mut self, id1: u16, id2: u16) {
         let (a, b) = if id1 > id2 { (id2, id1) } else { (id1, id2) };
         let pair = self.pairs.entry((a, b)).or_insert(Pair { id1: a, id2: b, status: 0, user_data: None });

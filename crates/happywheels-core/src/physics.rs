@@ -5241,6 +5241,7 @@ impl World {
             }),
         };
         let Some(vehicle) = vehicle else { return false };
+        doll.finish_joints(self);
         self.b.c.report_results = true;
         self.character = Some(doll);
         self.bike = Some(vehicle);
