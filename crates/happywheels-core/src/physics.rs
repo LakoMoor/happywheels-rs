@@ -2077,6 +2077,10 @@ impl World {
                 dolls.push((&g.doll, false));
             }
         }
+        if let Some(crate::vehicle::Vehicle::Family(f)) = self.bike.as_ref() {
+            dolls.push((&f.daughter.doll, false));
+            dolls.push((&f.son.doll, false));
+        }
         let mut thuds: Vec<(ShapeId, &'static str, Vec2)> = Vec::new();
         for ev in events.iter().filter(|e| e.kind == ContactEventKind::Add) {
             for (mine, other) in [(ev.shape1, ev.shape2), (ev.shape2, ev.shape1)] {

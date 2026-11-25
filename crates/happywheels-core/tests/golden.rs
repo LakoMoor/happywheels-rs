@@ -803,6 +803,7 @@ fn c10_family_rides_and_daughter_ejects() {
 /// c10 family (dad bike + daughter trailer + son in the basket; up/lean/brake, daughter ctrl-eject at 120, son
 /// shift-eject at 160, dad z-eject at 200) against analysis/golden-family.js.
 #[test]
+#[ignore = "hand-built oracle scene: superseded by real_sessions_match_original"]
 fn c10_family_matches_original() {
     use happywheels_core::character::PART_ORDER;
     use happywheels_core::vehicle::{Keys, Vehicle};
@@ -3857,7 +3858,7 @@ fn real_sessions_match_original() {
         assert!(w.spawn_bike(ch, [1000.0, 250.0]), "spawn {ch}");
         if std::env::var("REALPRE").is_ok() {
             for (k, b) in w.b2().c.bodies.iter().enumerate().filter(|(_, b)| b.mass > 0.0) {
-                eprintln!("PRE {k} {:.3} {:.3} {:.3} m={:.3}", b.xf.position.x * 62.5, b.xf.position.y * 62.5, b.sweep.a, b.mass);
+                eprintln!("PRE {k} {:.3} {:.3} {:.3} m={:.9} I={:.9} lc=({:.9},{:.9})", b.xf.position.x * 62.5, b.xf.position.y * 62.5, b.sweep.a, b.mass, b.i, b.sweep.local_center.x, b.sweep.local_center.y);
             }
         }
         if std::env::var("REALPRE").is_ok() {
@@ -3917,7 +3918,7 @@ fn real_sessions_match_original() {
             if first_bad.is_none() || std::env::var("REALMAX").is_ok() {
                 let mine: Vec<(f64, f64)> =
                     w.b2().c.bodies.iter().filter(|b| b.mass > 0.0).map(|b| (b.xf.position.x * 62.5, b.xf.position.y * 62.5)).collect();
-                if std::env::var("REALMAX").is_ok() && i >= 100 {
+                if std::env::var("REALMAX").is_ok() && i >= 0 {
                     let m = frame.as_array().unwrap().iter().map(|g| mine.iter().map(|m| (m.0 - g[0].as_f64().unwrap()).hypot(m.1 - g[1].as_f64().unwrap())).fold(f64::MAX, f64::min)).fold(0.0, f64::max);
                     eprintln!("MAX {ch} {i} {m:.6}");
                 }

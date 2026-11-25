@@ -88,7 +88,7 @@ impl Bike {
             let g = guide.get(rotation_of)?;
             let pos = at(name)?;
             let body = b.create_body(&BodyDef { position: pos, angle: g[2] / deg, ..Default::default() });
-            b.create_shape(body, &shape(Geometry::Circle { local_position: Vec2::default(), radius: g[3] * 5.0 / CHARACTER_SCALE }, 5.0, 1.0, 0.3, seat_filter));
+            b.create_shape(body, &shape(Geometry::Circle { local_position: Vec2::default(), radius: g[5] / 2.0 / CHARACTER_SCALE }, 5.0, 1.0, 0.3, seat_filter));
             b.set_mass_from_shapes(body);
             Some(body)
         };
@@ -2198,7 +2198,7 @@ impl Mower {
         let wheel = |b: &mut box2d::world::World, name: &str| -> Option<BodyId> {
             let g = guide.get(name)?;
             let w = b.create_body(&BodyDef { position: at(name)?, angle: g[2] / deg, ..Default::default() });
-            let mut d = ShapeDef::new(Geometry::Circle { local_position: Vec2::default(), radius: g[3] * 5.0 / CHARACTER_SCALE });
+            let mut d = ShapeDef::new(Geometry::Circle { local_position: Vec2::default(), radius: g[5] / 2.0 / CHARACTER_SCALE });
             d.density = 5.0;
             d.friction = 1.0;
             d.restitution = 0.3;
@@ -4442,7 +4442,7 @@ impl Daughter {
     pub fn attach(world: &mut World, start_px: [f32; 2], dad_frame: BodyId) -> Option<Self> {
         let guide = crate::character::subguide("c10_daughter")?;
         // The kid's guide has no chest/foot extras the base needs beyond the standard parts.
-        let doll = Ragdoll::spawn_full(world, &guide, start_px, false, 50.0, -2)?;
+        let mut doll = Ragdoll::spawn_full_deferred(world, &guide, start_px, false, 50.0, -2)?;
         let start = Vec2::new(f64::from(start_px[0]) / 62.5, f64::from(start_px[1]) / 62.5);
         let at = |name: &str| -> Option<Vec2> {
             let g = guide.get(name)?;
@@ -4473,7 +4473,7 @@ impl Daughter {
         let mut round = |name: &str| -> Option<BodyId> {
             let g = guide.get(name)?;
             let body = b.create_body(&BodyDef { position: at(name)?, angle: g[2] / deg, ..Default::default() });
-            let mut d = ShapeDef::new(Geometry::Circle { local_position: Vec2::default(), radius: g[3] * 5.0 / CHARACTER_SCALE });
+            let mut d = ShapeDef::new(Geometry::Circle { local_position: Vec2::default(), radius: g[5] / 2.0 / CHARACTER_SCALE });
             d.density = 5.0;
             d.friction = 1.0;
             d.restitution = 0.3;
@@ -4489,6 +4489,7 @@ impl Daughter {
             b.shape_mut(s).is_sensor = true;
         }
         b.shape_mut(sensors[4]).is_sensor = true;
+        doll.finish_joints(world);
         for (limb, lo, hi) in [(Limb::Hip1, -110.0, 10.0), (Limb::Hip2, -110.0, 10.0), (Limb::Elbow1, -60.0, 0.0), (Limb::Elbow2, -60.0, 0.0), (Limb::Neck, -20.0, 0.0)] {
             doll.set_limits(world, limb, lo / deg, hi / deg);
         }
@@ -4744,7 +4745,7 @@ impl Son {
 
     pub fn attach(world: &mut World, start_px: [f32; 2], dad_frame: BodyId) -> Option<Self> {
         let guide = crate::character::subguide("c10_son")?;
-        let doll = Ragdoll::spawn_full(world, &guide, start_px, false, 50.0, -3)?;
+        let mut doll = Ragdoll::spawn_full_deferred(world, &guide, start_px, false, 50.0, -3)?;
         let start = Vec2::new(f64::from(start_px[0]) / 62.5, f64::from(start_px[1]) / 62.5);
         let at = |name: &str| -> Option<Vec2> {
             let g = guide.get(name)?;
@@ -4764,6 +4765,7 @@ impl Son {
             shapes.push(b.create_shape(basket, &d));
         }
         b.set_mass_from_shapes(basket);
+        doll.finish_joints(world);
         for (limb, lo, hi) in [(Limb::Knee1, 50.0, 150.0), (Limb::Knee2, 50.0, 150.0), (Limb::Elbow1, -160.0, -20.0), (Limb::Elbow2, -160.0, -20.0), (Limb::Neck, -10.0, 10.0)] {
             doll.set_limits(world, limb, lo / deg, hi / deg);
         }
@@ -4941,7 +4943,7 @@ impl Kid {
 
     pub fn attach(world: &mut World, start_px: [f32; 2], dad_frame: BodyId) -> Option<Self> {
         let guide = crate::character::subguide("c3_kid")?;
-        let doll = Ragdoll::spawn_full(world, &guide, start_px, false, 5.0, -2)?;
+        let mut doll = Ragdoll::spawn_full_deferred(world, &guide, start_px, false, 5.0, -2)?;
         let start = Vec2::new(f64::from(start_px[0]) / 62.5, f64::from(start_px[1]) / 62.5);
         let at = |name: &str| -> Option<Vec2> {
             let g = guide.get(name)?;
@@ -4960,6 +4962,8 @@ impl Kid {
             b.create_shape(seat, &d);
         }
         b.set_mass_from_shapes(seat);
+        doll.finish_joints(world);
+        let b = world.b2_mut();
         let anchor = at("frameSeatAnchor")?;
         let mut d = RevoluteJointDef::initialize(b.body(dad_frame), dad_frame, b.body(seat), seat, anchor);
         d.enable_limit = true;
@@ -5458,7 +5462,7 @@ pub struct Elf {
 impl Elf {
     fn attach(world: &mut World, name: &str, group: i16, start_px: [f32; 2], sleigh: BodyId, vertical_offset: f64, santa_wheel_radius: f64) -> Option<Self> {
         let guide = crate::character::subguide(name)?;
-        let doll = Ragdoll::spawn_full(world, &guide, start_px, false, 50.0, group)?;
+        let mut doll = Ragdoll::spawn_full_deferred(world, &guide, start_px, false, 50.0, group)?;
         let start = Vec2::new(f64::from(start_px[0]) / 62.5, f64::from(start_px[1]) / 62.5);
         let at = |n: &str| -> Option<Vec2> {
             let g = guide.get(n)?;
@@ -5492,6 +5496,7 @@ impl Elf {
             .collect();
         anti_grav.push(stem);
         anti_grav.push(wheel);
+        doll.finish_joints(world);
         for (limb, lo, hi) in [(Limb::Elbow1, -90.0, 0.0), (Limb::Elbow2, -90.0, 0.0), (Limb::Shoulder1, -170.0, 0.0), (Limb::Shoulder2, -170.0, 0.0), (Limb::Neck, -10.0, 0.0)] {
             doll.set_limits(world, limb, lo / deg, hi / deg);
         }
