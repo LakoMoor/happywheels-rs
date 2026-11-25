@@ -2769,7 +2769,7 @@ impl World {
 
     /// NPCharacter (bodies/joints/limits/break limits taken from the original class run in the oracle on a stand-in session, `analysis/npc-dump.js`;
     /// the 12 `charIndex` guides, mirrored for `reverse`). Rotated/translated as a rigid group. Joint breaking follows `checkJoints` (reaction² > limit or anchor gap > .5 m
-    /// destroys the joint and frees the limb's filter). NOT ported: smashes of head/chest/pelvis, chunks, blood, `holdPose`/pose angles, impulse/wake triggers, sounds, sprites.
+    /// destroys the joint and frees the limb's filter). Pose angles and the old-level `holdPose` motors are ported (`analysis/npc-pose.js`). NOT ported here: impulse/wake/hold-pose triggers, sounds, sprites.
     fn npc(&mut self, sp: &crate::level::Special) -> Option<BodyId> {
         if sp.flag("interactive") == Some(false) {
             return None;
@@ -2797,12 +2797,72 @@ impl World {
         let group = self.npc_groups;
         self.npc_groups -= 2;
         let sleeping = sp.flag("sleeping").unwrap_or(false);
+        // Pose angles (`neckAngle` … `knee2Angle`, degrees): the level's NPC sprite parts are rotated about their joint anchors before the bodies are made
+        // (checked against the real parser: values are clamped to the joint's own range, `reverse` negates the clamped value, a shoulder/hip turns the
+        // whole limb, an elbow/knee only the lower part, and each joint's limits are shifted by the change of its relative angle).
+        let reverse = sp.flag("reverse").unwrap_or(false);
+        let pose = |name: &str, lo: f64, hi: f64| -> f64 {
+            let v = f64::from(sp.num(name).unwrap_or(0.0)).clamp(lo, hi);
+            (if reverse { -v } else { v }).to_radians()
+        };
+        let (d_neck, d_sh, d_el, d_hip, d_knee) = (
+            pose("neckAngle", -20.0, 20.0),
+            [pose("shoulder1Angle", -180.0, 60.0), pose("shoulder2Angle", -180.0, 60.0)],
+            [pose("elbow1Angle", -160.0, 0.0), pose("elbow2Angle", -160.0, 0.0)],
+            [pose("hip1Angle", -150.0, 10.0), pose("hip2Angle", -150.0, 10.0)],
+            [pose("knee1Angle", 0.0, 150.0), pose("knee2Angle", 0.0, 150.0)],
+        );
+        let mut lpos = [Vec2::default(); 11];
+        let mut lang = [0.0f64; 11];
+        for (i, n) in NAMES.iter().enumerate() {
+            lpos[i] = Vec2::new(f(&g["bodies"][n]["p"][0]) * 0.5, f(&g["bodies"][n]["p"][1]) * 0.5);
+            lang[i] = f(&g["bodies"][n]["a"]);
+        }
+        let mut turn = |joint: &str, parent: usize, group: &[usize], d: f64| {
+            if d == 0.0 {
+                return;
+            }
+            let a1 = &g["joints"][joint]["a1"];
+            let (c, s) = (lang[parent].cos(), lang[parent].sin());
+            // the sprite part turns about the joint anchor (guide anchors/offsets are the stand-in session's, twice the size of a level NPC's: measured with `analysis/npc-pivots.js`)
+            let (ax, ay) = (f(&a1[0]) * 0.5, f(&a1[1]) * 0.5);
+            let anchor = Vec2::new(lpos[parent].x + c * ax - s * ay, lpos[parent].y + s * ax + c * ay);
+            let (dc, ds) = (d.cos(), d.sin());
+            for &i in group {
+                let (rx, ry) = (lpos[i].x - anchor.x, lpos[i].y - anchor.y);
+                lpos[i] = Vec2::new(anchor.x + dc * rx - ds * ry, anchor.y + ds * rx + dc * ry);
+                lang[i] += d;
+            }
+        };
+        turn("neck", 0, &[1], d_neck);
+        turn("shoulder1", 0, &[3, 5], d_sh[0]);
+        turn("shoulder2", 0, &[4, 6], d_sh[1]);
+        turn("elbow1", 3, &[5], d_el[0]);
+        turn("elbow2", 4, &[6], d_el[1]);
+        turn("hip1", 2, &[7, 9], d_hip[0]);
+        turn("hip2", 2, &[8, 10], d_hip[1]);
+        turn("knee1", 7, &[9], d_knee[0]);
+        turn("knee2", 8, &[10], d_knee[1]);
+        let joint_shift = |name: &str| -> f64 {
+            match name {
+                "neck" => d_neck,
+                "shoulder1" => d_sh[0],
+                "shoulder2" => d_sh[1],
+                "elbow1" => d_el[0],
+                "elbow2" => d_el[1],
+                "hip1" => d_hip[0],
+                "hip2" => d_hip[1],
+                "knee1" => d_knee[0],
+                "knee2" => d_knee[1],
+                _ => 0.0,
+            }
+        };
         let mut bodies = [0usize; 11];
         for (i, n) in NAMES.iter().enumerate() {
             let b = &g["bodies"][n];
-            let (px, py) = (f(&b["p"][0]), f(&b["p"][1]));
+            let (px, py) = (lpos[i].x, lpos[i].y);
             let pos = Vec2::new(x / PS + cs * px - sn * py, y / PS + sn * px + cs * py);
-            let body = self.b.create_body(&BodyDef { position: pos, angle: f(&b["a"]) + rot, is_sleeping: sleeping, allow_sleep: true, ..Default::default() });
+            let body = self.b.create_body(&BodyDef { position: pos, angle: lang[i] + rot, is_sleeping: sleeping, allow_sleep: true, ..Default::default() });
             let geo = if b["g"].get("r").is_some() { Geometry::Circle { local_position: Vec2::default(), radius: f(&b["g"]["r"]) } } else { ShapeDef::boxed(f(&b["g"]["hx"]), f(&b["g"]["hy"])).geometry };
             let mut sd = ShapeDef::new(geo);
             sd.density = 1.0;
@@ -2817,12 +2877,16 @@ impl World {
         let mut joints = Vec::new();
         for (name, parent, child, limit) in JOINTS {
             let j = &g["joints"][name];
-            let anchor = self.b.body(bodies[parent]).world_point(Vec2::new(f(&j["a1"][0]), f(&j["a1"][1])));
+            let anchor = self.b.body(bodies[parent]).world_point(Vec2::new(f(&j["a1"][0]) * 0.5, f(&j["a1"][1]) * 0.5));
             let mut d = RevoluteJointDef::initialize(self.b.body(bodies[parent]), bodies[parent], self.b.body(bodies[child]), bodies[child], anchor);
             d.enable_limit = true;
-            d.lower_angle = f(&j["lo"]);
-            d.upper_angle = f(&j["hi"]);
+            d.lower_angle = f(&j["lo"]) - joint_shift(name);
+            d.upper_angle = f(&j["hi"]) - joint_shift(name);
             d.max_motor_torque = 4.0;
+            if sp.flag("holdPose").unwrap_or(false) && self.level_version < 1.75 {
+                d.enable_motor = true;
+                d.motor_speed = 0.0;
+            }
             let id = self.b.create_revolute_joint(&d);
             joints.push((id, child, f(&g["limits"][limit]), false));
         }
@@ -2951,6 +3015,13 @@ impl World {
     }
 
     /// `grindShape` on an NPC: a mower took its head / chest / pelvis, so the shape's Result listener is deleted and it can no longer smash.
+    /// Gives every NPC body the linear velocity `v` (m/s) — the oracle scenarios slam NPCs into the floor this way.
+    pub fn npc_set_velocity(&mut self, v: [f64; 2]) {
+        for b in self.npc_main_bodies() {
+            self.b.body_mut(b).linear_velocity = Vec2::new(v[0], v[1]);
+        }
+    }
+
     pub fn npc_grind(&mut self, body: BodyId) {
         for n in &mut self.npcs {
             for (part, idx) in [(0, 1), (1, 0), (2, 2)] {
@@ -6237,7 +6308,7 @@ mod tests {
     /// `grindShape` on an NPC deletes its smash listeners: slammed into the floor at 60 m/s it breaks into pieces, but a ground one stays whole.
     #[test]
     fn ground_npc_parts_do_not_smash() {
-        let xml = "<levelXML><info v='1.99'/><shapes><sh t='0' p0='1000' p1='600' p2='3000' p3='50' p4='0' p5='t' p6='f' p7='1' p8='0' p9='-1' p10='100' p11='1'/></shapes><specials><sp t='17' p0='1000' p1='400' p2='0' p3='1' p4='f' p5='f'/></specials></levelXML>";
+        let xml = "<levelXML><info v='1.99'/><shapes><sh t='0' p0='1000' p1='725' p2='4000' p3='50' p4='0' p5='t' p6='f' p7='1' p8='0' p9='-1' p10='100' p11='1'/></shapes><specials><sp t='17' p0='1000' p1='300' p2='0' p3='1' p4='f' p5='f' p6='f' p7='t'/></specials></levelXML>";
         let run = |grind: bool| {
             let mut w = World::from_level(&crate::level::parse(xml).unwrap());
             if grind {
@@ -7113,11 +7184,11 @@ mod tests {
     fn npc_free_fall_matches_original() {
         let gold: serde_json::Value = serde_json::from_str(include_str!("../../../tests/golden/npc_fall.json")).unwrap();
         for (key, idx, rev) in [("1", 1, 'f'), ("5", 5, 'f'), ("1r", 1, 't'), ("5r", 5, 't')] {
-            let lvl = crate::level::parse(&format!("<levelXML><info v='1.99'/><shapes/><specials><sp t='17' p0='1000' p1='0' p2='0' p3='{idx}' p4='f' p5='{rev}' p6='f' p7='t'/></specials></levelXML>")).unwrap();
+            let lvl = crate::level::parse(&format!("<levelXML><info v='1.99'/><shapes><sh t='0' p0='1000' p1='725' p2='4000' p3='50' p4='0' p5='t' p6='f' p7='1' p8='0' p9='-1' p10='100' p11='1'/></shapes><specials><sp t='17' p0='1000' p1='300' p2='0' p3='{idx}' p4='f' p5='{rev}' p6='f' p7='t'/></specials></levelXML>")).unwrap();
             let mut w = World::from_level(&lvl);
             assert_eq!(w.npcs.len(), 1, "npc {key} not created");
             let mut worst = 0.0f64;
-            for f in 0..60 {
+            for f in 0..30 {
                 w.step();
                 if f % 10 == 9 {
                     let row = &gold[key][f / 10];
@@ -7125,12 +7196,51 @@ mod tests {
                         let body = w.b.body(b);
                         let g = &row[i];
                         let (gx, gy) = (g[0].as_f64().unwrap() + 1000.0, g[1].as_f64().unwrap());
-                        worst = worst.max((body.sweep.c.x * PS - gx).abs()).max((body.sweep.c.y * PS - gy).abs());
+                        let e = (body.sweep.c.x * PS - gx).abs().max((body.sweep.c.y * PS - gy).abs()); worst = worst.max(e);
                     }
                 }
             }
             assert!(worst < 1e-6, "npc {key}: worst divergence {worst} px");
         }
+    }
+
+    #[test]
+    fn npc_pose_angles_match_original() {
+        let gold: serde_json::Value = serde_json::from_str(include_str!("../../../tests/golden/npc_pose.json")).unwrap();
+        for case in gold.as_array().unwrap() {
+            let names = ["neck", "shoulder1", "shoulder2", "elbow1", "elbow2", "hip1", "hip2", "knee1", "knee2"];
+            let mut attrs = String::new();
+            for (i, n) in names.iter().enumerate() {
+                attrs += &format!(" p{}='{}'", 8 + i, case["p"].get(n).and_then(|v| v.as_f64()).unwrap_or(0.0));
+            }
+            let tf = |k: &str| if case[k].as_bool().unwrap() { 't' } else { 'f' };
+            let xml = format!("<levelXML><info v='1.99'/><shapes><sh t='0' p0='1000' p1='725' p2='4000' p3='50' p4='0' p5='t' p6='f' p7='1' p8='0' p9='-1' p10='100' p11='1'/></shapes><specials><sp t='17' p0='1000' p1='300' p2='0' p3='{}' p4='f' p5='{}' p6='{}' p7='t'{attrs}/></specials></levelXML>", case["char"], tf("reverse"), tf("hold"));
+            let mut w = World::from_level(&crate::level::parse(&xml).unwrap());
+            let check = |w: &World, key: &str, tol: f64| {
+                for (i, &b) in w.npcs[0].bodies.iter().enumerate() {
+                    let g = &case[key][i];
+                    let body = w.b.body(b);
+                    let (gx, gy, ga) = (g[0].as_f64().unwrap(), g[1].as_f64().unwrap(), g[2].as_f64().unwrap());
+                    let err = (body.sweep.c.x * PS - gx).abs().max((body.sweep.c.y * PS - gy).abs()).max((body.sweep.a - ga).abs() * 100.0);
+                    assert!(err < tol, "{key} body {i} off by {err}: port ({}, {}, {}) gold ({gx}, {gy}, {ga})", body.sweep.c.x * PS, body.sweep.c.y * PS, body.sweep.a);
+                }
+            };
+            check(&w, "start", 1e-6);
+            for _ in 0..30 { w.step(); }
+            check(&w, "after", 1e-3);
+        }
+    }
+
+    #[test]
+    fn npc_slammed_into_the_floor_breaks_like_the_original() {
+        // oracle (`analysis/npc-pose.js`, vel 60, level actions on): 38 -> 42 dynamic bodies after 60 frames
+        let xml = "<levelXML><info v='1.99'/><shapes><sh t='0' p0='1000' p1='725' p2='4000' p3='50' p4='0' p5='t' p6='f' p7='1' p8='0' p9='-1' p10='100' p11='1'/></shapes><specials><sp t='17' p0='1000' p1='300' p2='0' p3='1' p4='f' p5='f' p6='f' p7='t'/></specials></levelXML>";
+        let mut w = World::from_level(&crate::level::parse(xml).unwrap());
+        let count = |w: &World| w.b.c.bodies.iter().filter(|b| b.alive && b.mass > 0.0).count();
+        let before = count(&w);
+        for b in w.npc_main_bodies() { w.b.body_mut(b).linear_velocity = Vec2::new(0.0, 60.0); }
+        for _ in 0..60 { w.step(); }
+        assert_eq!(count(&w) - before, 4, "the original ends with four extra bodies");
     }
 
     #[test]

@@ -1749,7 +1749,7 @@ fn dump_break_screenshots() {
     shot(&w, "break_family_dad_frame");
 }
 
-/// NPC smashes (behaviour only): an NPC dropped from 85 m loses head / chest / pelvis to chunk circles (sounds HeadSmash/ChestSmash/PelvisSmash),
+/// NPC smashes (behaviour only): an NPC slammed into the floor at 60 m/s loses head / chest / pelvis to chunk circles (sounds HeadSmash/ChestSmash/PelvisSmash),
 /// the simulation stays finite, and `screenshots/npc_smash.png` shows the pile.
 #[test]
 fn npc_dropped_from_height_smashes_into_chunks() {
@@ -1758,10 +1758,12 @@ fn npc_dropped_from_height_smashes_into_chunks() {
     let level = level::parse(
         "<levelXML><info v='1.99' x='1000' y='-5000'/><shapes>\
          <sh t='0' p0='1000' p1='425' p2='2000' p3='50' p4='0' p5='t' p6='f' p7='1' p8='0' p9='-1' p10='100' p11='1'/></shapes>\
-         <specials><sp t='17' p0='900' p1='-5000' p2='90' p3='1' p4='f' p5='f' p6='f' p7='t'/><sp t='17' p0='1100' p1='-5000' p2='180' p3='5' p4='f' p5='t' p6='f' p7='t'/></specials></levelXML>",
+         <specials><sp t='17' p0='900' p1='100' p2='90' p3='1' p4='f' p5='f' p6='f' p7='t'/><sp t='17' p0='1100' p1='100' p2='180' p3='5' p4='f' p5='t' p6='f' p7='t'/></specials></levelXML>",
     )
     .unwrap();
     let mut w = World::from_level(&level);
+    // the original does not smash a plain free fall from 85 m (checked in the oracle); a 60 m/s slam does
+    w.npc_set_velocity([0.0, 60.0]);
     let mut heard = std::collections::HashSet::new();
     for _ in 0..500 {
         w.step();
@@ -1771,6 +1773,25 @@ fn npc_dropped_from_height_smashes_into_chunks() {
     }
     assert!(heard.iter().any(|n| n.ends_with("Smash")), "nothing smashed: {heard:?}");
     happywheels_core::render::render_level_at(&level, &w, 800, 500, [1000.0, 330.0]).save(format!("{dir}/npc_smash.png")).unwrap();
+}
+
+/// NPC pose angles (`shoulder1Angle` … `knee2Angle`): three NPCs hung in the air (sleeping) with different poses, `screenshots/npc_poses.png`.
+#[test]
+fn npc_poses_screenshot() {
+    let dir = std::env::var("HW_SHOTS").unwrap_or_else(|_| format!("{}/../../screenshots", env!("CARGO_MANIFEST_DIR")));
+    std::fs::create_dir_all(&dir).unwrap();
+    let level = level::parse(
+        "<levelXML><info v='1.99' x='1000' y='250'/><shapes>\
+         <sh t='0' p0='1000' p1='425' p2='2000' p3='50' p4='0' p5='t' p6='f' p7='1' p8='0' p9='-1' p10='100' p11='1'/></shapes>\
+         <specials>\
+         <sp t='17' p0='900' p1='280' p2='0' p3='1' p4='t' p5='f' p6='f' p7='t' p8='0' p9='0' p10='0' p11='0' p12='0' p13='0' p14='0' p15='0' p16='0'/>\
+         <sp t='17' p0='1000' p1='280' p2='0' p3='1' p4='t' p5='f' p6='f' p7='t' p8='10' p9='-90' p10='-150' p11='-60' p12='-100' p13='-80' p14='-20' p15='90' p16='40'/>\
+         <sp t='17' p0='1100' p1='280' p2='0' p3='5' p4='t' p5='t' p6='f' p7='t' p8='-15' p9='30' p10='-120' p11='-20' p12='-140' p13='-100' p14='0' p15='20' p16='120'/>\
+         </specials></levelXML>",
+    )
+    .unwrap();
+    let w = World::from_level(&level);
+    happywheels_core::render::render_level_at(&level, &w, 800, 500, [1000.0, 330.0]).save(format!("{dir}/npc_poses.png")).unwrap();
 }
 
 /// TrashCan spill / crush (behaviour only): a can dropped 13 m spills into a hollow can + 10 trash bodies, one dropped from 80 m is crushed, an
