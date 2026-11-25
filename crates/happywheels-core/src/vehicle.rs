@@ -5454,6 +5454,8 @@ pub struct Elf {
     pub strapped_in: bool,
     /// `sign`: which half of the wheel's turn the last step sound was played in.
     step_sign: bool,
+    /// `wheelContacts`: ADD/REMOVE contact events of the wheel's shape with non-sensor shapes (`wheelContactAdd/Remove`).
+    wheel_contacts: i32,
     wheel_max_speed: f64,
     accel_step: f64,
     anti_grav: Vec<BodyId>,
@@ -5538,7 +5540,8 @@ impl Elf {
             head_attached: true,
             chest_attached: true,
             strapped_in: true,
-            step_sign: true,
+            step_sign: false,
+            wheel_contacts: 0,
             wheel_max_speed: 30.0 * multiplier,
             accel_step: 1.25 * multiplier,
             anti_grav,
@@ -6459,11 +6462,35 @@ impl Santa {
 
     /// Elf `actions`: while the wheel touches something and spins above 5 rad/s, `Step{odd}` plays when the wheel's cosine falls below −0.9396 (first foot on)
     /// and `Step{even}` when it rises above 0.9396 (second foot on); the number is `ceil(random·5)·2 (−1)`, taken from the frame counter here.
+    /// `wheelContactAdd` / `wheelContactRemove` of both elves.
+    pub fn elf_contact_events(&mut self, world: &World, events: &[box2d::world::ContactEvent]) {
+        for elf in [&mut self.elf1, &mut self.elf2] {
+            let Some(&shape) = world.b2().body(elf.wheel_id).shapes.first() else { continue };
+            for e in events {
+                let other = if e.shape1 == shape {
+                    e.shape2
+                } else if e.shape2 == shape {
+                    e.shape1
+                } else {
+                    continue;
+                };
+                if world.b2().c.shapes[other].shape.is_sensor {
+                    continue;
+                }
+                match e.kind {
+                    box2d::world::ContactEventKind::Add => elf.wheel_contacts += 1,
+                    box2d::world::ContactEventKind::Remove => elf.wheel_contacts -= 1,
+                    _ => {}
+                }
+            }
+        }
+    }
+
     pub fn elf_steps(&mut self, world: &mut World) {
         let frame = world.frame();
         for elf in [&mut self.elf1, &mut self.elf2] {
             let wheel = elf.wheel_id;
-            if world.b2().touching_non_sensor_contacts(wheel) == 0 || world.b2().body(wheel).angular_velocity.abs() <= 5.0 {
+            if elf.wheel_contacts <= 0 || world.b2().body(wheel).angular_velocity.abs() <= 5.0 {
                 continue;
             }
             let cos = world.b2().body(wheel).sweep.a.cos();

@@ -2673,6 +2673,10 @@ impl World {
                 self.bike = Some(crate::vehicle::Vehicle::Heli(h));
             }
         }
+        if let Some(crate::vehicle::Vehicle::Santa(mut s)) = self.bike.take_if(|v| matches!(v, crate::vehicle::Vehicle::Santa(_))) {
+            s.elf_contact_events(self, &events);
+            self.bike = Some(crate::vehicle::Vehicle::Santa(s));
+        }
         if matches!(self.bike, Some(crate::vehicle::Vehicle::Dirt(ref d)) if d.girl.is_some()) {
             if let Some(crate::vehicle::Vehicle::Dirt(mut d)) = self.bike.take() {
                 if let Some(mut g) = d.girl.take() {

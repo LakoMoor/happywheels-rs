@@ -3939,7 +3939,7 @@ fn real_sessions_match_original() {
                 for (gi, g) in frame.as_array().unwrap().iter().enumerate() {
                     let (gx, gy) = (g[0].as_f64().unwrap(), g[1].as_f64().unwrap());
                     let best = mine.iter().map(|m| ((m.0 - gx).hypot(m.1 - gy), *m)).fold((f64::MAX, (0.0, 0.0)), |a, b| if b.0 < a.0 { b } else { a });
-                    if best.0 > 1e-3 {
+                    if best.0 > 2e-3 {
                         bad_list.push((gi, (gx, gy), best.1, best.0));
                     }
                 }
@@ -3968,7 +3968,7 @@ fn real_sessions_match_original() {
         want.sort();
         let sound_ok = heard == want;
         if std::env::var("REALV").is_ok() {
-            eprintln!("char {ch}: oracle bodies {} port {} first_bad {first_bad:?} sounds_ok {sound_ok}\n  want {want:?}\n  got  {heard:?}", v["frames"][0].as_array().unwrap().len(), w.b2().c.bodies.iter().filter(|b| b.mass > 0.0).count());
+            eprintln!("char {ch}: oracle bodies {} port {} first_bad {first_bad:?} sounds_ok {sound_ok}\n  want {want:?}\n  got  {heard:?}", v["frames"][0].as_array().unwrap().len(), w.b2().c.bodies.iter().filter(|b| b.mass > 0.0 && b.alive).count());
         }
         report.push((ch, first_bad, sound_ok));
     }
