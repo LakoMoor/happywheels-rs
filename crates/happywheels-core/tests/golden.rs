@@ -3933,7 +3933,8 @@ fn real_sessions_match_original() {
                     w.b2().c.bodies.iter().filter(|b| b.mass > 0.0).map(|b| (b.xf.position.x * 62.5, b.xf.position.y * 62.5)).collect();
                 if std::env::var("REALMAX").is_ok() {
                     let m = frame.as_array().unwrap().iter().map(|g| mine.iter().map(|m| (m.0 - g[0].as_f64().unwrap()).hypot(m.1 - g[1].as_f64().unwrap())).fold(f64::MAX, f64::min)).fold(0.0, f64::max);
-                    eprintln!("MAX {ch} {i} {m:.6}");
+                    eprintln!("MAX {ch} {i} {m:.6e}");
+                    if i < 2 { for (k, g) in frame.as_array().unwrap().iter().enumerate() { let e = mine.iter().map(|m| (m.0 - g[0].as_f64().unwrap()).hypot(m.1 - g[1].as_f64().unwrap())).fold(f64::MAX, f64::min); eprintln!("BODYERR {ch} f{i} {k} {e:.3e} ({:.3},{:.3})", g[0].as_f64().unwrap(), g[1].as_f64().unwrap()); } }
                 }
                 let mut bad_list = Vec::new();
                 for (gi, g) in frame.as_array().unwrap().iter().enumerate() {
