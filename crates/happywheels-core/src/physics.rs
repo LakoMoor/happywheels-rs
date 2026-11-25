@@ -2063,26 +2063,46 @@ impl World {
     /// above 4, plays Thud1 (head) / Thud2 (chest, pelvis) unless that part smashes this step (the smash clears the buffered thud).
     fn collect_thuds(&mut self, events: &[box2d::world::ContactEvent]) {
         use crate::character::Part;
-        let Some(doll) = self.character.as_ref() else { return };
-        let mut thuds: Vec<(&'static str, Vec2)> = Vec::new();
+        let mut dolls: Vec<(&crate::character::Ragdoll, bool)> = Vec::new();
+        if let Some(d) = self.character.as_ref() {
+            dolls.push((d, true));
+        }
+        if let Some(crate::vehicle::Vehicle::Bike(b)) = self.bike.as_ref() {
+            if let Some(k) = b.kid.as_ref() {
+                dolls.push((&k.doll, false));
+            }
+        }
+        let mut thuds: Vec<(ShapeId, &'static str, Vec2)> = Vec::new();
         for ev in events.iter().filter(|e| e.kind == ContactEventKind::Add) {
             for (mine, other) in [(ev.shape1, ev.shape2), (ev.shape2, ev.shape1)] {
                 let body = self.b.c.shapes[mine].body;
-                let Some((&part, _)) = doll.bodies.iter().find(|(_, &b)| b == body) else { continue };
-                if !matches!(part, Part::Head | Part::Chest | Part::Pelvis) || self.smashes.iter().any(|(p, _)| *p == part) {
-                    continue;
-                }
-                let o = &self.b.c.shapes[other];
-                let (om, mm) = (self.b.body(o.body).mass, self.b.body(body).mass);
-                if o.shape.is_sensor || (om != 0.0 && om < mm) {
-                    continue;
-                }
-                if (ev.velocity.x * ev.normal.x + ev.velocity.y * ev.normal.y).abs() > 4.0 {
-                    thuds.push((if part == Part::Head { "Thud1" } else { "Thud2" }, self.b.body(body).sweep.c));
+                for &(doll, is_rider) in &dolls {
+                    let Some((&part, _)) = doll.bodies.iter().find(|(_, &b)| b == body) else { continue };
+                    if !matches!(part, Part::Head | Part::Chest | Part::Pelvis) || (is_rider && self.smashes.iter().any(|(p, _)| *p == part)) {
+                        continue;
+                    }
+                    // `contactAddBuffer.get(shape)`: only the first qualifying event of a step is kept per shape
+                    if thuds.iter().any(|t| t.0 == mine) {
+                        continue;
+                    }
+                    let o = &self.b.c.shapes[other];
+                    // the rider's `contactAddHandler` ignores other shapes whose group is a character group in (-10, 0); the kid's does not
+                    // (VERIFIED against the real session: the kid's pelvis buffers a Thud2 against the dad's group -1 pelvis)
+                    let g = o.shape.filter.group_index;
+                    if is_rider && g < 0 && g > -10 {
+                        continue;
+                    }
+                    let (om, mm) = (self.b.body(o.body).mass, self.b.body(body).mass);
+                    if o.shape.is_sensor || (om != 0.0 && om < mm) {
+                        continue;
+                    }
+                    if (ev.velocity.x * ev.normal.x + ev.velocity.y * ev.normal.y).abs() > 4.0 {
+                        thuds.push((mine, if part == Part::Head { "Thud1" } else { "Thud2" }, self.b.body(body).sweep.c));
+                    }
                 }
             }
         }
-        for (n, at) in thuds {
+        for (_, n, at) in thuds {
             self.play(n, 1, at);
         }
     }
@@ -2161,6 +2181,9 @@ impl World {
             }
             out.extend(first(v.back_wheel, 0).map(|s| (s, "TireHit1")));
             out.extend(first(v.front_wheel, 0).map(|s| (s, "TireHit2")));
+            if let Some(k) = v.kid.as_ref() {
+                out.extend(first(k.seat, 0).map(|s| (s, "BikeHit3")));
+            }
         }
         if let Some(crate::vehicle::Vehicle::Dirt(v)) = self.bike.as_ref() {
             if !v.frame_smashed {

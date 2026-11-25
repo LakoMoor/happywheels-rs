@@ -501,6 +501,20 @@ impl Core {
     pub fn contact_info(&self, id: ContactId) -> &Contact {
         self.contact(id)
     }
+
+    /// Marks every existing contact of `shape` as non-solid, as if the shape had already been a sensor when the contact was created
+    /// (`b2Contact` decides `e_nonSolidFlag` in its constructor, so flipping `m_isSensor` afterwards leaves old contacts solid).
+    pub fn make_contacts_non_solid(&mut self, shape: ShapeId) {
+        let ids: Vec<ContactId> = self.contact_order.to_vec();
+        for id in ids {
+            let c = self.contact(id);
+            if c.shape1 == shape || c.shape2 == shape {
+                if let Some(c) = self.contacts[id].as_mut() {
+                    c.flags |= C_NONSOLID;
+                }
+            }
+        }
+    }
 }
 
 struct ContactConstraintPoint {

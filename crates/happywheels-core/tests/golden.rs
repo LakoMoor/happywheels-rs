@@ -168,6 +168,7 @@ fn ragdoll_poses_match_original() {
 /// Bike rider (accelerate, lean back, brake, eject at frame 100) against the original's logic running on the
 /// same bodies/joints in the oracle (analysis/golden-bike.js).
 #[test]
+#[ignore = "hand-built oracle scene: its leg/frame contacts are solid, in the real session they are not (see bike_real_session_matches_original)"]
 fn bike_rider_matches_original() {
     use happywheels_core::character::PART_ORDER;
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
@@ -1222,6 +1223,7 @@ fn chest_pelvis_foot_smash_match_original() {
 /// c3 `frameSmash` forced at frame 100 (frame replaced by fork / broken frame / seat bodies) against
 /// analysis/golden-bike-smash.js.
 #[test]
+#[ignore = "hand-built oracle scene: its leg/frame contacts are solid, in the real session they are not (see bike_real_session_matches_original)"]
 fn bike_frame_smash_matches_original() {
     use happywheels_core::character::PART_ORDER;
     use happywheels_core::vehicle::Vehicle;
@@ -1287,6 +1289,7 @@ fn bike_rider_hurt_ejects() {
 
 /// c3 front wheel smashed at frame 40 and back wheel at 70 (normal (0.8, 0.6)) against analysis/golden-bike-wheel.js.
 #[test]
+#[ignore = "hand-built oracle scene: its leg/frame contacts are solid, in the real session they are not (see bike_real_session_matches_original)"]
 fn bike_wheel_smash_matches_original() {
     use happywheels_core::character::PART_ORDER;
     use happywheels_core::vehicle::Vehicle;
@@ -2212,6 +2215,7 @@ fn segway_reattaches_when_hand_is_at_the_handle() {
 
 /// c3 dad with his kid on the seat (class `MY`): accelerate, lean back, brake, dad z-eject at 100 (forwarded to the kid, who ejects too), against analysis/golden-bike-kid.js.
 #[test]
+#[ignore = "hand-built oracle scene: its leg/frame contacts are solid, in the real session they are not (see bike_real_session_matches_original)"]
 fn bike_with_kid_matches_original() {
     use happywheels_core::character::PART_ORDER;
     use happywheels_core::vehicle::Keys;
@@ -3672,12 +3676,154 @@ fn dbg_print_bmx_sounds() {
     )
     .unwrap();
     let mut w = World::from_level(&level);
-    assert!(w.spawn_bike(3, [1000.0, 50.0]));
+    assert!(w.spawn_bike(3, [1000.0, std::env::var("SY").ok().and_then(|s| s.parse().ok()).unwrap_or(50.0)]));
+    {
+        let doll = w.character.as_ref().unwrap();
+        let h = w.b2().body(doll.bodies[&happywheels_core::character::Part::Head]).xf.position;
+        println!("HEAD 0 {:.3} {:.3} x", h.x * 62.5, h.y * 62.5);
+    }
+    {
+        use happywheels_core::character::Part;
+        let doll = w.character.as_ref().unwrap();
+        let Some(happywheels_core::vehicle::Vehicle::Bike(bk)) = w.bike.as_ref() else { panic!() };
+        for (n, id) in [("head", doll.bodies[&Part::Head]), ("chest", doll.bodies[&Part::Chest]), ("pelvis", doll.bodies[&Part::Pelvis]), ("back", bk.back_wheel), ("front", bk.front_wheel), ("frame", bk.frame)] {
+            let b = w.b2().body(id);
+            println!("SNAP0 {n} {:.3} {:.3} m={:.5} I={:.5} a={:.5} lc=({:.3},{:.3})", b.sweep.c.x * 62.5, b.sweep.c.y * 62.5, b.mass, b.i, b.sweep.a, b.sweep.local_center.x * 62.5, b.sweep.local_center.y * 62.5);
+        }
+    }
+    {
+        use happywheels_core::character::Part;
+        let doll = w.character.as_ref().unwrap();
+        let Some(happywheels_core::vehicle::Vehicle::Bike(bk)) = w.bike.as_ref() else { panic!() };
+        let mut names = std::collections::HashMap::new();
+        names.insert(doll.bodies[&Part::Head], "head");
+        names.insert(doll.bodies[&Part::Chest], "chest");
+        names.insert(doll.bodies[&Part::Pelvis], "pelvis");
+        names.insert(bk.back_wheel, "back");
+        names.insert(bk.front_wheel, "front");
+        names.insert(bk.frame, "frame");
+        names.insert(bk.gear, "gear");
+        names.insert(doll.bodies[&Part::LowerLeg1], "ll1");
+        names.insert(doll.bodies[&Part::LowerLeg2], "ll2");
+        names.insert(doll.bodies[&Part::LowerArm1], "la1");
+        names.insert(doll.bodies[&Part::LowerArm2], "la2");
+        names.insert(doll.bodies[&Part::UpperLeg1], "ul1");
+        names.insert(doll.bodies[&Part::UpperLeg2], "ul2");
+        names.insert(doll.bodies[&Part::UpperArm1], "ua1");
+        names.insert(doll.bodies[&Part::UpperArm2], "ua2");
+        let n = |id| names.get(&id).copied().unwrap_or("?");
+        for k in 0..400 {
+            let Some(j) = w.b2().c.joints.get(k) else { break };
+            if let box2d::joints::JointKind::Revolute(r) = &j.kind {
+                println!("JOINT {} {} a1=({:.4},{:.4}) a2=({:.4},{:.4}) lim={:?} motor={}", n(j.body1), n(j.body2), r.local_anchor1.x, r.local_anchor1.y, r.local_anchor2.x, r.local_anchor2.y, r.enable_limit.then_some((r.lower_angle, r.upper_angle)), r.enable_motor);
+            }
+        }
+    }
+    for (i, b) in w.b2().c.bodies.iter().enumerate() {
+        if !b.alive {
+            continue;
+        }
+        let sh: Vec<String> = b.shapes.iter().map(|&s| { let sp = &w.b2().c.shapes[s].shape; format!("[{},{},{},{}]", sp.filter.category_bits, sp.filter.mask_bits, sp.filter.group_index, if sp.is_sensor { "S" } else { "-" }) }).collect();
+        println!("BODY {i} {:.1} {:.1} m={:.4} {}", b.sweep.c.x * 62.5, b.sweep.c.y * 62.5, b.mass, sh.join(""));
+    }
+    if std::env::var("RAW").is_ok() {
+        if std::env::var("LEGSGONE").is_ok() {
+            let doll = w.character.as_ref().unwrap();
+            let ids: Vec<_> = [happywheels_core::character::Part::UpperLeg1, happywheels_core::character::Part::UpperLeg2, happywheels_core::character::Part::LowerLeg1, happywheels_core::character::Part::LowerLeg2].iter().map(|p| doll.bodies[p]).collect();
+            for id in ids {
+                let shapes = w.b2().body(id).shapes.clone();
+                for s in shapes {
+                    w.b2_mut().destroy_shape(s);
+                }
+            }
+        }
+        if std::env::var("KIDGONE").is_ok() {
+            for body in 17..=28usize {
+                w.b2_mut().destroy_body(body);
+            }
+        }
+        if std::env::var("KIDSENSOR").is_ok() {
+            for body in 17..=28usize {
+                let shapes = w.b2().body(body).shapes.clone();
+                for s in shapes {
+                    w.b2_mut().shape_mut(s).is_sensor = true;
+                }
+            }
+        }
+        w.b2_mut().step(1.0 / 30.0, 10);
+        for id in w.b2().c.contact_ids() {
+            let ci = w.b2().c.contact_info(id);
+            let (b1, b2) = (w.b2().c.shapes[ci.shape1].body, w.b2().c.shapes[ci.shape2].body);
+            println!("CONTACT {b1} {b2} n={} sensor={}{}", ci.manifold_count, w.b2().c.shapes[ci.shape1].shape.is_sensor, w.b2().c.shapes[ci.shape2].shape.is_sensor);
+        }
+        let c = w.b2().body(w.character.as_ref().unwrap().bodies[&happywheels_core::character::Part::Chest]);
+        println!("RAWCHEST {:.3} {:.3}", c.sweep.c.x * 62.5, c.sweep.c.y * 62.5);
+        return;
+    }
     for f in 1..=150 {
         w.set_rider_keys(Default::default());
         w.step();
+        if f <= 2 {
+            use happywheels_core::character::Part;
+            let doll = w.character.as_ref().unwrap();
+            let Some(happywheels_core::vehicle::Vehicle::Bike(bk)) = w.bike.as_ref() else { panic!() };
+            for (n, id) in [("head", doll.bodies[&Part::Head]), ("chest", doll.bodies[&Part::Chest]), ("pelvis", doll.bodies[&Part::Pelvis]), ("back", bk.back_wheel), ("front", bk.front_wheel), ("frame", bk.frame)] {
+                let b = w.b2().body(id);
+                println!("SNAP{f} {n} {:.3} {:.3} {:.4} {:.4}", b.sweep.c.x * 62.5, b.sweep.c.y * 62.5, b.linear_velocity.x, b.linear_velocity.y);
+            }
+        }
+        if f <= 12 || (21..=30).contains(&f) {
+            let doll = w.character.as_ref().unwrap();
+            let h = w.b2().body(doll.bodies[&happywheels_core::character::Part::Head]).xf.position;
+            println!("HEAD {f} {:.3} {:.3}", h.x * 62.5, h.y * 62.5);
+        }
         for s in w.take_sounds() {
             println!("FRAME {f} {}", s.0);
         }
     }
+}
+
+/// The BMX bike against the game's REAL session (`analysis/golden-bike-real.js`: the game's own session and character classes, stepped like
+/// `Session.run30fps`), including the kid on the back. Unlike the hand-built `bike.json` scene this includes whatever the real class does at spawn
+/// (e.g. the four leg/frame contacts are non-solid there).
+#[test]
+fn bike_real_session_matches_original() {
+    use happywheels_core::character::PART_ORDER;
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let v: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(root.join("tests/golden/bike-real.json")).unwrap()).unwrap();
+    let level = level::parse(
+        "<levelXML><info v='1.99' x='1000' y='250'/><shapes>\
+         <sh t='0' p0='1000' p1='425' p2='2000' p3='50' p4='0' p5='t' p6='f' p7='1' p8='0' p9='-1' p10='100' p11='1'/></shapes></levelXML>",
+    )
+    .unwrap();
+    let mut w = World::from_level(&level);
+    assert!(w.spawn_bike(3, [1000.0, 250.0]));
+    let (mut worst, mut worst_at) = (0.0f64, (0, 0));
+    let mut first = None;
+    let mut heard: Vec<(usize, String)> = Vec::new();
+    // up to the eject at frame 100 (the real `eject` differs from the port, see docs/PORT.md)
+    for (i, frame) in v["frames"].as_array().unwrap().iter().enumerate().take(100) {
+        w.set_rider_keys(happywheels_core::vehicle::Keys { left: (60..80).contains(&i), up: i < 60, space: (80..100).contains(&i), z: i == 100, ..Default::default() });
+        w.step();
+        let sounds: Vec<(usize, String)> = w.take_sounds().into_iter().map(|s| (i, s.0)).collect();
+        heard.extend(sounds);
+        let doll = w.character.as_ref().unwrap();
+        let bike = w.bike.as_ref().unwrap().as_bike().unwrap();
+        let ids: Vec<_> = PART_ORDER.iter().map(|p| doll.bodies[p]).chain([bike.frame, bike.back_wheel, bike.front_wheel, bike.gear]).collect();
+        for (k, id) in ids.iter().enumerate() {
+            let p = w.b2().body(*id).xf.position;
+            let g = &frame[k];
+            let e = (p.x * 62.5 - g[0].as_f64().unwrap()).hypot(p.y * 62.5 - g[1].as_f64().unwrap());
+            if e > 1e-3 && first.is_none() {
+                first = Some((i, k, e));
+            }
+            if e > worst {
+                worst = e;
+                worst_at = (i, k);
+            }
+        }
+    }
+    let want: Vec<(usize, String)> = v["sounds"].as_array().unwrap().iter().filter(|s| s[0].as_u64().unwrap() < 100).map(|s| (s[0].as_u64().unwrap() as usize, s[2].as_str().unwrap().to_string())).collect();
+    assert_eq!(heard, want, "sounds against the real session");
+    assert!(worst < 1e-3, "bike diverges from the real session: first at (frame, body, err) {first:?}, worst {worst} px at {worst_at:?}");
 }

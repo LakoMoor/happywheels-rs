@@ -99,6 +99,8 @@ impl Bike {
             let body = doll.bodies[&part];
             let s = b.body(body).shapes[0];
             b.shape_mut(s).is_sensor = true;
+            // VERIFIED against the game's real session (analysis/golden-session-sounds.js): all four leg/frame contacts are non-solid there
+            b.c.make_contacts_non_solid(s);
         }
         // Joints: lean-friendly limits first (`SetLimits` after the base joints), then the vehicle joints.
         let limits = [
