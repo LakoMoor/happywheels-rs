@@ -307,6 +307,8 @@ mod browser {
             let mut sounds = Vec::new();
             let mut trigger_sounds = Vec::new();
             let mut scaled_sounds = Vec::new();
+            // 60 fps (`run60fps`): physics keeps its 30 Hz tick, the particles move every display frame by dt = 30 / maxFPS
+            self.world.set_external_particles(self.interpolate);
             while !self.paused && self.accumulator >= 1000.0 / 30.0 {
                 let k = self.keys;
                 self.world
@@ -327,6 +329,9 @@ mod browser {
                 trigger_sounds.extend(self.world.take_trigger_sounds());
                 scaled_sounds.extend(self.world.take_scaled_sounds());
                 self.accumulator -= 1000.0 / 30.0;
+            }
+            if self.interpolate && !self.paused {
+                self.world.step_particles(elapsed / (1000.0 / 30.0));
             }
             let (w, h) = (self.canvas.width().max(1), self.canvas.height().max(1));
             let blend = (self.interpolate && !self.paused && !self.prev_poses.is_empty()).then(|| (self.accumulator / (1000.0 / 30.0)).clamp(0.0, 1.0));

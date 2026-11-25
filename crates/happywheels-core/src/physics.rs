@@ -424,6 +424,7 @@ struct Spray {
     per_frame: u32,
     total: u32,
     count: u32,
+    acc: f64,
     kind: crate::blood::ShardKind,
 }
 
@@ -613,6 +614,8 @@ pub struct World {
     plain_mines: Vec<PlainMine>,
     chairs: Vec<BreakChair>,
     sprays: Vec<Spray>,
+    external_particles: bool,
+    snow_acc: f64,
     logs: Vec<Log>,
     toilets: Vec<Toilet>,
     glasses: Vec<Glass>,
@@ -711,6 +714,8 @@ impl World {
             plain_mines: Vec::new(),
             chairs: Vec::new(),
             sprays: Vec::new(),
+            external_particles: false,
+            snow_acc: 0.0,
             logs: Vec::new(),
             toilets: Vec::new(),
             glasses: Vec::new(),
@@ -2369,6 +2374,17 @@ impl World {
         }
     }
 
+    /// 60 fps mode (`run60fps`): the physics tick no longer steps the particles; the caller steps them every display frame with
+    /// [`World::step_particles`] (`dt = 30 / maxFPS`).
+    pub fn set_external_particles(&mut self, on: bool) {
+        self.external_particles = on;
+    }
+
+    /// `ParticleController.step(dt)` (dt clamped to 0..1): blood/shard/spark particles move and every emitter that is due creates its particles.
+    pub fn step_particles(&mut self, dt: f64) {
+        self.step_blood(dt.clamp(0.0, 1.0));
+    }
+
     pub fn step(&mut self) {
         if let Some(mut doll) = self.character.take() {
             doll.check_vocals(self);
@@ -2653,7 +2669,9 @@ impl World {
         self.arrow_events(&events);
         self.spike_events(&events);
         self.npc_smashes(&events);
-        self.step_blood();
+        if !self.external_particles {
+            self.step_blood(1.0);
+        }
         self.can_events(&events);
         self.hit_sound_events(&events);
         if let Some(mut doll) = self.character.take() {
@@ -3472,14 +3490,14 @@ impl World {
 
     /// `createBloodFlow(min, max, body, offset (local), angle°, total)`: one particle per step until `total` is exceeded. Returns the flow's index.
     pub fn blood_flow(&mut self, min: f64, max: f64, body: BodyId, offset: Vec2, angle_deg: f64, total: u32) -> usize {
-        self.blood.flows.push(crate::blood::Flow { body, offset, angle: angle_deg.to_radians(), min_speed: min, speed_range: max - min, total, count: 0, finished: false, sprite: None });
+        self.blood.flows.push(crate::blood::Flow { body, offset, angle: angle_deg.to_radians(), min_speed: min, speed_range: max - min, total, count: 0, finished: false, acc: 0.0, sprite: None });
         self.blood.flows.len() - 1
     }
 
     /// `createFlow(kind, min, max, body, offset, angle°, total)`: a sprite flow from a body point.
     #[allow(clippy::too_many_arguments)]
     pub fn sprite_flow(&mut self, kind: crate::blood::ShardKind, min: f64, max: f64, body: BodyId, offset: Vec2, angle_deg: f64, total: u32) {
-        self.blood.flows.push(crate::blood::Flow { body, offset, angle: angle_deg.to_radians(), min_speed: min, speed_range: max - min, total, count: 0, finished: false, sprite: Some(kind) });
+        self.blood.flows.push(crate::blood::Flow { body, offset, angle: angle_deg.to_radians(), min_speed: min, speed_range: max - min, total, count: 0, finished: false, acc: 0.0, sprite: Some(kind) });
     }
 
     /// `stopSpewing`.
@@ -3510,12 +3528,20 @@ impl World {
     }
 
     /// Per-step blood update: particles advance, then every running flow emits one particle (the original's emitter `step` order).
-    fn step_blood(&mut self) {
-        self.blood.step_particles();
-        self.blood.step_sparks();
-        self.blood.step_sprites();
-        self.snow_spray();
-        self.step_sprays();
+    fn step_blood(&mut self, dt: f64) {
+        self.blood.step_particles(dt);
+        self.blood.step_sparks(dt);
+        self.blood.step_sprites(dt);
+        // every emitter only creates particles on the step where its `_accumulatedDelta` is 0 (the sum of dt reaches 1 → reset)
+        let emit = self.snow_acc == 0.0;
+        self.snow_acc += dt;
+        if self.snow_acc >= 1.0 {
+            self.snow_acc = 0.0;
+        }
+        if emit {
+            self.snow_spray();
+        }
+        self.step_sprays(dt);
         for i in 0..self.blood.flows.len() {
             let (body, offset, angle, min, range, total, count, finished, sprite) = {
                 let f = &self.blood.flows[i];
@@ -3526,6 +3552,14 @@ impl World {
             }
             if !self.b.body(body).alive || count > total {
                 self.blood.flows[i].finished = true;
+                continue;
+            }
+            let emit = self.blood.flows[i].acc == 0.0;
+            self.blood.flows[i].acc += dt;
+            if self.blood.flows[i].acc >= 1.0 {
+                self.blood.flows[i].acc = 0.0;
+            }
+            if !emit {
                 continue;
             }
             self.blood.flows[i].count += 1;
@@ -3548,14 +3582,22 @@ impl World {
         let (start, range) = (Vec2::new(from.0 / PS, from.1 / PS), Vec2::new((to.0 - from.0) / PS, (to.1 - from.1) / PS));
         let angle_range = angle_deg.to_radians();
         let rot = range.y.atan2(range.x) + (std::f64::consts::FRAC_PI_2 - angle_range * 0.5);
-        self.sprays.push(Spray { body, start, range, min, max, angle_range, rot, per_frame, total, count: 0, kind });
+        self.sprays.push(Spray { body, start, range, min, max, angle_range, rot, per_frame, total, count: 0, acc: 0.0, kind });
     }
 
     /// `Mu.step`: each emitter creates `per_frame` particles per step, placed along its segment and thrown at `rot + angleRange·rand` plus the body's velocity there.
-    fn step_sprays(&mut self) {
+    fn step_sprays(&mut self, dt: f64) {
         for i in 0..self.sprays.len() {
             let s = &self.sprays[i];
             if s.count > s.total || !self.b.body(s.body).alive {
+                continue;
+            }
+            let emit = self.sprays[i].acc == 0.0;
+            self.sprays[i].acc += dt;
+            if self.sprays[i].acc >= 1.0 {
+                self.sprays[i].acc = 0.0;
+            }
+            if !emit {
                 continue;
             }
             for _ in 0..self.sprays[i].per_frame {

@@ -35,11 +35,12 @@ impl Particle {
     }
 
     /// `BloodParticle.step` without drawing: Verlet step, `false` once below the limit.
-    fn step(&mut self) -> bool {
+    fn step(&mut self, dt: f64) -> bool {
         let dx = self.cur[0] - self.last[0];
         let dy = self.cur[1] - self.last[1];
         self.last = self.cur;
-        self.cur = [self.cur[0] + dx, self.cur[1] + dy + GRAVITY];
+        // original: the Verlet delta is not scaled by dt, only the gravity is (`gravityIncrement * dt * dt`)
+        self.cur = [self.cur[0] + dx, self.cur[1] + dy + GRAVITY * dt * dt];
         self.last[1] <= Y_LIMIT
     }
 }
@@ -54,6 +55,8 @@ pub struct Flow {
     pub total: u32,
     pub count: u32,
     pub finished: bool,
+    /// `_accumulatedDelta`: the emitter only creates its particle on the step where this is 0 (once per 30 Hz tick, whatever dt is).
+    pub acc: f64,
     /// Sprite flow (`createFlow` of a debris clip) instead of blood.
     pub sprite: Option<ShardKind>,
 }
@@ -148,14 +151,15 @@ pub struct Spark {
 
 impl Spark {
     /// `MV.step`: draw the tail segment, move, decay; `false` once both speeds are below 1 px.
-    fn step(&mut self) -> bool {
+    fn step(&mut self, dt: f64) -> bool {
         let change = self.speed[1] + self.gravity;
         self.seg = [[self.pos[0] - self.speed[0], self.pos[1] - change], self.pos];
-        self.pos[1] += change;
-        self.pos[0] += self.speed[0];
-        self.speed[0] *= 0.65;
-        self.speed[1] *= 0.65;
-        self.gravity += 1.0 / 3.0 * 62.5 / 30.0;
+        self.pos[1] += change * dt;
+        self.pos[0] += self.speed[0] * dt;
+        // original `speed *= decayRate * dt` (so the decay is 0.325 per half step at 60 fps)
+        self.speed[0] *= 0.65 * dt;
+        self.speed[1] *= 0.65 * dt;
+        self.gravity += 1.0 / 3.0 * 62.5 / 30.0 * dt;
         self.speed[1].abs() >= 1.0 || self.speed[0].abs() >= 1.0
     }
 }
@@ -174,8 +178,8 @@ impl Blood {
         }
     }
 
-    pub fn step_sparks(&mut self) {
-        self.sparks.retain_mut(Spark::step);
+    pub fn step_sparks(&mut self, dt: f64) {
+        self.sparks.retain_mut(|s| s.step(dt));
     }
 
     pub fn rand(&mut self) -> f64 {
@@ -255,18 +259,18 @@ impl Blood {
     }
 
     /// Advances the sprite particles one step (dropped below `Y_LIMIT`).
-    pub fn step_sprites(&mut self) {
+    pub fn step_sprites(&mut self, dt: f64) {
         self.sprites.retain_mut(|p| {
-            p.pos[1] += p.vel[1];
-            p.pos[0] += p.vel[0];
-            p.vel[1] += if p.kind == ShardKind::Snow { 62.5 / 180.0 } else { 62.5 / 90.0 };
+            p.pos[1] += p.vel[1] * dt;
+            p.pos[0] += p.vel[0] * dt;
+            p.vel[1] += if p.kind == ShardKind::Snow { 62.5 / 180.0 } else { 62.5 / 90.0 } * dt;
             p.pos[1] <= Y_LIMIT
         });
     }
 
     /// Advances every particle one frame and drops the dead ones.
-    pub fn step_particles(&mut self) {
-        self.particles.retain_mut(Particle::step);
+    pub fn step_particles(&mut self, dt: f64) {
+        self.particles.retain_mut(|p| p.step(dt));
     }
 }
 
@@ -305,5 +309,24 @@ mod max_particle_tests {
         let mut c = Blood::default();
         c.burst([0.0, 0.0], Vec2::default(), 5.0, 15.0, 200);
         assert!(c.particles.len() + c.sprites.len() > 25, "default cap lets them through");
+    }
+}
+
+#[cfg(test)]
+mod dt_tests {
+    use super::*;
+
+    /// 60 fps: two half-dt steps per 30 Hz tick; the Verlet delta is not scaled (original), so the particle ends further than with one dt = 1 step, and
+    /// sparks decay by 0.65·dt per step.
+    #[test]
+    fn particle_steps_take_dt_like_the_original() {
+        let mut p = Particle::new(0.0, 0.0, 1.0, 0.0);
+        let first = p.cur;
+        assert!(p.step(0.5));
+        let dx = p.cur[0] - first[0];
+        assert!((dx - (first[0] - 0.0)).abs() < 1e-12, "x delta is not scaled by dt");
+        let mut s = Spark { pos: [0.0, 0.0], speed: [10.0, 0.0], gravity: 0.0, seg: [[0.0; 2]; 2], blue: 0 };
+        assert!(s.step(0.5));
+        assert!((s.speed[0] - 3.25).abs() < 1e-12 && (s.pos[0] - 5.0).abs() < 1e-12);
     }
 }
