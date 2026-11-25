@@ -3661,3 +3661,23 @@ fn heavy_level_shape_plays_shape_hit() {
     let hit = heard.iter().find(|s| s.0.starts_with("ShapeHit"));
     assert!(hit.is_some_and(|s| s.2 > 0.0 && s.2 <= 1.0), "a ShapeHit plays with a volume: {heard:?}");
 }
+
+/// Prints the port's sound frames for the same scenario as `analysis/golden-session-sounds.js` (BMX dropped from y=50): `--ignored --nocapture`.
+#[test]
+#[ignore]
+fn dbg_print_bmx_sounds() {
+    let level = level::parse(
+        "<levelXML><info v='1.99' x='1000' y='50'/><shapes>\
+         <sh t='0' p0='1000' p1='425' p2='2000' p3='50' p4='0' p5='t' p6='f' p7='1' p8='0' p9='-1' p10='100' p11='1'/></shapes></levelXML>",
+    )
+    .unwrap();
+    let mut w = World::from_level(&level);
+    assert!(w.spawn_bike(3, [1000.0, 50.0]));
+    for f in 1..=150 {
+        w.set_rider_keys(Default::default());
+        w.step();
+        for s in w.take_sounds() {
+            println!("FRAME {f} {}", s.0);
+        }
+    }
+}
