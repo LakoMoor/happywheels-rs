@@ -233,6 +233,8 @@ struct Npc {
     chunk: [f64; 3],
     smashed: [bool; 3],
     reversed: bool,
+    /// `destroyJointsUponDeath`: a dead NPC ignores the impulse / hold pose / release pose trigger actions.
+    destroy_on_death: bool,
     /// Sound-set prefix (`tag` of the character index), queued vocals by priority, frame the current voice ends, its priority, and `dead` (no more vocals).
     tag: &'static str,
     voices: [Option<&'static str>; 6],
@@ -2908,7 +2910,7 @@ impl World {
         let lim = |k: &str| f(&g["limits"][k]);
         let smash_shapes = [bodies[1], bodies[0], bodies[2]].map(|b| self.b.body(b).shapes[0]);
         let chunk = [f(&g["chunk"][0]), f(&g["chunk"][1]), f(&g["chunk"][2])];
-        self.npcs.push(Npc { bodies, joints, smash_shapes, smash_limits: [lim("head"), lim("chest"), lim("pelvis")], chunk, smashed: [false; 3], reversed: reverse, tag: npc_tag(sp.num("charIndex").unwrap_or(1.0) as i32), voices: [None; 6], voice_until: 0, voice_prio: -1, dead: false, pieces: Vec::new() });
+        self.npcs.push(Npc { bodies, joints, smash_shapes, smash_limits: [lim("head"), lim("chest"), lim("pelvis")], chunk, smashed: [false; 3], reversed: reverse, destroy_on_death: sp.flag("destroyJointsUponDeath").unwrap_or(false), tag: npc_tag(sp.num("charIndex").unwrap_or(1.0) as i32), voices: [None; 6], voice_until: 0, voice_prio: -1, dead: false, pieces: Vec::new() });
         Some(chest)
     }
 
@@ -2922,6 +2924,9 @@ impl World {
             Some("3" | "release pose") => 3,
             _ => return,
         };
+        if action != 0 && self.npcs[ni].destroy_on_death && self.npcs[ni].dead {
+            return;
+        }
         let bodies = self.npcs[ni].bodies;
         let joints = self.npcs[ni].joints.clone();
         match action {
