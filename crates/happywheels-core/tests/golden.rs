@@ -4014,18 +4014,18 @@ fn real_sessions_match_original() {
     assert!(bad.is_empty(), "characters that differ from the real session (char, first bad frame/err, sounds ok): {bad:?}");
 }
 
-/// c7 grinder on a Rail special in the real game session (`analysis/golden-real.js` with `rail:true`: space 0..150, up 20..230, left 60..70, ground + rail at x 1500).
+/// c7 grinder on a Rail special in the real game session (`analysis/golden-real.js` with `rail:true`: space 0..150, up 20..230, left 60..70, ground + rail at x 1500, y 340).
 /// Every oracle body must have a port body within 2e-3 px on each frame up to `RAIL_OK`; the port first diverges at frame 159 (the grinder has driven 5500 px
-/// past the rail by then and is at the ground's far end), so that frame is asserted not to move earlier. Note: at this speed the grinder only brushes the rail
-/// (no dongle bodies appear in the oracle either), so this is a regression guard, not full rail coverage.
+/// past the rail by then and is at the ground's far end), so that frame is asserted not to move earlier. The rail sits at y 340, so dongles attach on frame 1
+/// (16 dynamic bodies) and one lets go on frame 77: the port follows the real session through both.
 #[test]
 fn c7_rail_in_real_session() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let v: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(root.join("tests/golden/real-rail7.json")).unwrap()).unwrap();
+    let v: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(root.join("tests/golden/real-rail7-y340.json")).unwrap()).unwrap();
     let level = level::parse(
         "<levelXML><info v='1.99' x='1000' y='250'/><shapes>\
          <sh t='0' p0='4000' p1='425' p2='8000' p3='50' p4='0' p5='t' p6='f' p7='1' p8='0' p9='-1' p10='100' p11='1'/></shapes>\
-         <specials><sp t='27' p0='1500' p1='385' p2='1400' p3='0'/></specials></levelXML>",
+         <specials><sp t='27' p0='1500' p1='340' p2='1400' p3='0'/></specials></levelXML>",
     )
     .unwrap();
     let mut w = World::from_level(&level);
@@ -4043,5 +4043,6 @@ fn c7_rail_in_real_session() {
             first_bad = Some((i, bad, mine.len(), frame.as_array().unwrap().len()));
         }
     }
+    eprintln!("RAIL first bad {first_bad:?}");
     assert!(first_bad.is_none_or(|(i, ..)| i >= 159), "real-session rail scene diverges earlier than before: {first_bad:?}");
 }
