@@ -3899,7 +3899,19 @@ fn real_sessions_match_original() {
                     if c.manifold_count > 0 {
                         let (s1, s2) = (&w.b2().c.shapes[c.shape1], &w.b2().c.shapes[c.shape2]);
                         eprintln!("TOUCH f{i} bodies {} {} flags={}", s1.body, s2.body, c.flags & 1);
+                        for p in c.manifold.points.iter().take(c.manifold.point_count) { eprintln!("MAN f{i} n=({},{}) ni={:.12} ti={:.12} sep={:.12}", c.manifold.normal.x, c.manifold.normal.y, p.normal_impulse, p.tangent_impulse, p.separation); }
                     }
+                }
+                for j in w.b2().c.joints.iter() {
+                    if let box2d::joints::JointKind::Revolute(r) = &j.kind {
+                        if true {
+                            let ang = w.b2().c.bodies[j.body2].sweep.a - w.b2().c.bodies[j.body1].sweep.a - r.reference_angle;
+                            eprintln!("JLIM f{i} {:?} lo={:.5} hi={:.5} ang={:.6} pf=({:.6},{:.6}) mf={:.6} lf={:.6} lpi={:.3e} ms={:.6}", r.limit_state, r.lower_angle, r.upper_angle, ang, r.pivot_force.x, r.pivot_force.y, r.motor_force, r.limit_force, r.limit_position_impulse, r.motor_speed);
+                        }
+                    }
+                }
+                for (k, b) in w.b2().c.bodies.iter().enumerate().filter(|(_, b)| b.mass > 0.0 && b.alive) {
+                    eprintln!("VEL f{i} {k} v=({:.9},{:.9}) w={:.9} pos=({:.4},{:.4})", b.linear_velocity.x, b.linear_velocity.y, b.angular_velocity, b.xf.position.x * 62.5, b.xf.position.y * 62.5);
                 }
             }
             if std::env::var("REALPRE").is_ok() && i == 0 {
