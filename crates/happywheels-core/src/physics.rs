@@ -2086,12 +2086,7 @@ impl World {
                         continue;
                     }
                     let o = &self.b.c.shapes[other];
-                    // the rider's `contactAddHandler` ignores other shapes whose group is a character group in (-10, 0); the kid's does not
-                    // (VERIFIED against the real session: the kid's pelvis buffers a Thud2 against the dad's group -1 pelvis)
-                    let g = o.shape.filter.group_index;
-                    if is_rider && g < 0 && g > -10 {
-                        continue;
-                    }
+                    // (the group test of `contactAddHandler` only gates `bodyContact`, not the sound buffer: VERIFIED against the carts' real sessions)
                     let (om, mm) = (self.b.body(o.body).mass, self.b.body(body).mass);
                     if o.shape.is_sensor || (om != 0.0 && om < mm) {
                         continue;
@@ -2216,7 +2211,7 @@ impl World {
             out.extend(first(v.front_wheel, 0).map(|s| (s, "CarTire1")));
         }
         if let Some(crate::vehicle::Vehicle::Mower(v)) = self.bike.as_ref() {
-            for (k, n) in [(2, "ChairHit3"), (3, "ChairHit2"), (4, "BikeHit1"), (6, "ChairHit2"), (7, "BikeHit3")] {
+            for (k, n) in [(2, "ChairHit3"), (6, "ChairHit2"), (7, "BikeHit3")] {
                 out.extend(first(v.body, k).map(|s| (s, n)));
             }
             out.extend(first(v.back_wheel, 0).map(|s| (s, "CarTire1")));

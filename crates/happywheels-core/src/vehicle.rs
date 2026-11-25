@@ -2325,6 +2325,8 @@ impl Mower {
             }
         } else if pressed && upper != v {
             self.both_shocks(world, Some(true), Some((0.0, v)), 2.5);
+            let at = world.b2().body(self.back_wheel).sweep.c;
+            world.play("SegwayJump", 1, at);
         } else if !pressed && upper != 0.0 {
             self.both_shocks(world, Some(true), Some((0.0, v)), -1.0);
         }
@@ -3190,6 +3192,8 @@ impl Cart {
             }
         } else if pressed {
             self.shocks(world, Some(true), Some((0.0, Self::JUMP)), 5.0);
+            let at = world.b2().body(self.back_wheel).sweep.c;
+            world.play("SegwayJump", 1, at);
         }
     }
 

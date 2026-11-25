@@ -3863,6 +3863,7 @@ fn real_sessions_match_original() {
             });
             w.step();
             heard.extend(w.take_sounds().into_iter().map(|s| (i, s.0)));
+            heard.extend(w.take_scaled_sounds().into_iter().map(|s| (i, s.0)));
             if first_bad.is_none() {
                 let mine: Vec<(f64, f64)> =
                     w.b2().c.bodies.iter().filter(|b| b.mass > 0.0).map(|b| (b.xf.position.x * 62.5, b.xf.position.y * 62.5)).collect();
@@ -3876,8 +3877,11 @@ fn real_sessions_match_original() {
                 }
             }
         }
-        let want: Vec<(usize, String)> =
+        // the port keeps plain and volume-scaled sounds in two queues, so only the multiset per frame is comparable
+        heard.sort();
+        let mut want: Vec<(usize, String)> =
             v["sounds"].as_array().unwrap().iter().map(|s| (s[0].as_u64().unwrap() as usize, s[2].as_str().unwrap().to_string())).collect();
+        want.sort();
         let sound_ok = heard == want;
         if std::env::var("REALV").is_ok() {
             eprintln!("char {ch}: oracle bodies {} port {} first_bad {first_bad:?} sounds_ok {sound_ok}\n  want {want:?}\n  got  {heard:?}", v["frames"][0].as_array().unwrap().len(), w.b2().c.bodies.iter().filter(|b| b.mass > 0.0).count());
