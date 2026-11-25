@@ -330,3 +330,36 @@ mod dt_tests {
         assert!((s.speed[0] - 3.25).abs() < 1e-12 && (s.pos[0] - 5.0).abs() < 1e-12);
     }
 }
+
+#[cfg(test)]
+mod oracle_dt_tests {
+    use super::*;
+
+    /// Spark particle of the real `ParticleController` (`analysis/particle-dt.js`: `createSparkBurstPoint`, then `step(dt)` six times): position, speed and
+    /// gravity speed after each step must match bit for bit for dt 0.5 (60 fps) and dt 1 (30 fps).
+    #[test]
+    fn spark_steps_match_the_original_for_dt_half_and_one() {
+        for (dt, init, traj) in [(0.5f64, [625.001885513775, 624.7208843890112, -0.8191573294687974, -30.685581768128035, 0.0], [[624.5923068490406, 609.3780935049472, -0.2662261320773592, -9.972814074641612, 0.3472222222222222], [624.4591937830019, 604.5652975787375, -0.08652349292514173, -3.241164574258524, 0.6944444444444444], [624.4159320365393, 603.2919375138305, -0.028120135200671064, -1.0533784866340203, 1.0416666666666665], [624.401871968939, 603.2860816038468, -0.009139043940218096, -0.34234800815605665, 1.3888888888888888], [624.401871968939, 603.2860816038468, -0.009139043940218096, -0.34234800815605665, 1.3888888888888888], [624.401871968939, 603.2860816038468, -0.009139043940218096, -0.34234800815605665, 1.3888888888888888]])] {
+            let mut s = Spark { pos: [init[0], init[1]], speed: [init[2], init[3]], gravity: init[4], seg: [[0.0; 2]; 2], blue: 0 };
+            let mut alive = true;
+            for (n, want) in traj.iter().enumerate() {
+                // a spark that died is removed from its emitter, so the original stops stepping it
+                if alive {
+                    alive = s.step(dt);
+                }
+                assert_eq!([s.pos[0], s.pos[1], s.speed[0], s.speed[1], s.gravity], *want, "dt {dt} step {n}");
+            }
+        }
+        for (dt, init, traj) in [(1f64, [624.8570984005928, 624.9513147098478, -8.620726175674957, -1.064674092958912, 0.0], [[616.2363722249179, 623.8866406168888, -5.603472014188722, -0.6920381604232928, 0.6944444444444444], [610.6329002107292, 623.88904690091, -3.6422568092226695, -0.4498248042751403, 1.3888888888888888], [606.9906434015065, 624.8281109855237, -2.3674669259947354, -0.29238612277884124, 2.083333333333333], [604.6231764755117, 626.6190581960782, -1.538853501896578, -0.1900509798062468, 2.7777777777777777], [603.0843229736151, 629.2067849940497, -1.0002547762327758, -0.12353313687406042, 3.4722222222222223], [602.0840681973824, 632.5554740793979, -0.6501656045513043, -0.08029653896813928, 4.166666666666667]])] {
+            let mut s = Spark { pos: [init[0], init[1]], speed: [init[2], init[3]], gravity: init[4], seg: [[0.0; 2]; 2], blue: 0 };
+            let mut alive = true;
+            for (n, want) in traj.iter().enumerate() {
+                // a spark that died is removed from its emitter, so the original stops stepping it
+                if alive {
+                    alive = s.step(dt);
+                }
+                assert_eq!([s.pos[0], s.pos[1], s.speed[0], s.speed[1], s.gravity], *want, "dt {dt} step {n}");
+            }
+        }
+    }
+}
