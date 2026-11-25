@@ -3319,6 +3319,14 @@ impl Cart {
         for s in shapes {
             b.set_shape_filter(s, zero);
         }
+        // the cart's own `eject` (original 27746): `ejectImpulse` 4 on chest and pelvis, perpendicular to the cart body
+        let a = b.body(self.body).sweep.a - std::f64::consts::FRAC_PI_2;
+        let imp = Vec2::new(box2d::fdlibm::cos(a) * 4.0, box2d::fdlibm::sin(a) * 4.0);
+        for part in [Part::Chest, Part::Pelvis] {
+            let id = doll.bodies[&part];
+            let wc = b.body(id).sweep.c;
+            b.body_mut(id).apply_impulse(imp, wc);
+        }
     }
 }
 

@@ -1184,7 +1184,10 @@ impl Ragdoll {
     pub fn set_pose(&mut self, p: u8) {
         if p != self.pose {
             self.pose = p;
-            self.cancel = p == 0;
+            // original: setting the pose to 0 runs `cancelPose` at once, i.e. before whatever pose is set next in the same frame
+            if p == 0 {
+                self.cancel = true;
+            }
         }
     }
 
@@ -1298,6 +1301,13 @@ impl Ragdoll {
     /// speed = ±min(gain·err², 10) with err = jointAngle − (lowerAngle + offset)).
     pub fn apply_pose(&mut self, world: &mut World) {
         let b = world.b2_mut();
+        if self.pose != 0 && std::mem::take(&mut self.cancel) {
+            for &id in self.joints.values() {
+                if let box2d::joints::JointKind::Revolute(r) = &mut b.joint_mut(id).kind {
+                    r.enable_motor = false;
+                }
+            }
+        }
         if self.pose == 0 {
             if !std::mem::take(&mut self.cancel) {
                 return;

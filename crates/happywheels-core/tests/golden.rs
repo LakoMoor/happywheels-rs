@@ -4021,18 +4021,6 @@ fn real_sessions_match_original() {
             v["sounds"].as_array().unwrap().iter().map(|s| (s[0].as_u64().unwrap() as usize, s[2].as_str().unwrap().to_string())).collect();
         norm(&mut want);
         want.sort();
-        // First frame at which a sign-of-noise branch (motor-at-zero speed test, see docs/PORT.md 2026-11-25) separates the port from the
-        // original; everything before it is asserted exactly.
-        let known = match ch {
-            4 => Some(170),
-            7 => Some(150),
-            _ => None,
-        };
-        if let Some(k) = known {
-            heard.retain(|s| s.0 < k);
-            want.retain(|s| s.0 < k);
-            first_bad = first_bad.filter(|f| f.0 < k);
-        }
         let sound_ok = heard == want;
         if std::env::var("REALV").is_ok() {
             eprintln!("char {ch}: oracle bodies {} port {} first_bad {first_bad:?} sounds_ok {sound_ok}\n  want {want:?}\n  got  {heard:?}", v["frames"][0].as_array().unwrap().len(), w.b2().c.bodies.iter().filter(|b| b.mass > 0.0 && b.alive).count());
