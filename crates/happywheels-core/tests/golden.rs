@@ -3826,3 +3826,64 @@ fn bike_real_session_matches_original() {
     assert_eq!(heard, want, "sounds against the real session");
     assert!(worst < 1e-3, "bike diverges from the real session: first at (frame, body, err) {first:?}, worst {worst} px at {worst_at:?}");
 }
+
+/// Real-session goldens (`analysis/golden-real.js`: the game's own Session + character class, flat ground, fixed key schedule) for every vehicle.
+/// Bodies are matched without order (greedy nearest per frame) because the port creates them in a different order than the game; the first frame at
+/// which any oracle body has no port body within 1e-3 px, and the sound lists, are compared. Set `REAL=<char>` to run one character, `REALV=1` for details.
+#[test]
+#[ignore = "known mismatches against the real sessions of the other vehicles, listed in docs/PORT.md; run with --ignored"]
+fn real_sessions_match_original() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let only: Option<usize> = std::env::var("REAL").ok().and_then(|s| s.parse().ok());
+    let mut report = Vec::new();
+    for ch in [1usize, 2, 4, 5, 6, 7, 8, 9, 10, 11] {
+        if only.is_some_and(|o| o != ch) {
+            continue;
+        }
+        let v: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(root.join(format!("tests/golden/real-{ch}.json"))).unwrap()).unwrap();
+        let level = level::parse(
+            "<levelXML><info v='1.99' x='1000' y='250'/><shapes>\
+             <sh t='0' p0='1000' p1='425' p2='2000' p3='50' p4='0' p5='t' p6='f' p7='1' p8='0' p9='-1' p10='100' p11='1'/></shapes></levelXML>",
+        )
+        .unwrap();
+        let mut w = World::from_level(&level);
+        assert!(w.spawn_bike(ch, [1000.0, 250.0]), "spawn {ch}");
+        let mut first_bad = None;
+        let mut heard: Vec<(usize, String)> = Vec::new();
+        for (i, frame) in v["frames"].as_array().unwrap().iter().enumerate() {
+            w.set_rider_keys(happywheels_core::vehicle::Keys {
+                up: i < 60,
+                left: (60..80).contains(&i),
+                space: (80..100).contains(&i),
+                right: (100..120).contains(&i),
+                down: (120..140).contains(&i),
+                shift: (140..150).contains(&i),
+                ctrl: (150..160).contains(&i),
+                z: i == 170,
+            });
+            w.step();
+            heard.extend(w.take_sounds().into_iter().map(|s| (i, s.0)));
+            if first_bad.is_none() {
+                let mine: Vec<(f64, f64)> =
+                    w.b2().c.bodies.iter().filter(|b| b.mass > 0.0).map(|b| (b.xf.position.x * 62.5, b.xf.position.y * 62.5)).collect();
+                for g in frame.as_array().unwrap() {
+                    let (gx, gy) = (g[0].as_f64().unwrap(), g[1].as_f64().unwrap());
+                    let best = mine.iter().map(|m| (m.0 - gx).hypot(m.1 - gy)).fold(f64::MAX, f64::min);
+                    if best > 1e-3 {
+                        first_bad = Some((i, best));
+                        break;
+                    }
+                }
+            }
+        }
+        let want: Vec<(usize, String)> =
+            v["sounds"].as_array().unwrap().iter().map(|s| (s[0].as_u64().unwrap() as usize, s[2].as_str().unwrap().to_string())).collect();
+        let sound_ok = heard == want;
+        if std::env::var("REALV").is_ok() {
+            eprintln!("char {ch}: oracle bodies {} port {} first_bad {first_bad:?} sounds_ok {sound_ok}\n  want {want:?}\n  got  {heard:?}", v["frames"][0].as_array().unwrap().len(), w.b2().c.bodies.iter().filter(|b| b.mass > 0.0).count());
+        }
+        report.push((ch, first_bad, sound_ok));
+    }
+    let bad: Vec<_> = report.iter().filter(|r| r.1.is_some() || !r.2).collect();
+    assert!(bad.is_empty(), "characters that differ from the real session (char, first bad frame/err, sounds ok): {bad:?}");
+}
