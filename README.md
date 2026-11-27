@@ -41,6 +41,10 @@ Original game assets are **not** included; point the app at your own copy of the
 
 `happywheels --level level.xml --window --players 2` — local split screen (P1: arrows/Space, P2: WASD/F). Online race: `--host 7777` on one machine, `--join HOST:7777` on the other (same level file).
 
+## Launcher
+
+`cargo build --release -p happywheels -p happywheels-launcher`, then run `target/release/happywheels-launcher` (GPUI; builds without full Xcode). It picks the character, the level (the game menu or an XML file), one or two players, 30/60 fps, blood and particle count, and starts the `happywheels` binary that sits next to it. Not offered: network play and the built-in level (not drawn yet). Tried on macOS only. ![launcher](screenshots/launcher.png)
+
 ## Assets, distribution and known gaps
 
 - **Assets are not distributed.** The original Happy Wheels artwork, audio and fonts belong to their rights holders. `assets/` is git-ignored, the browser build (`web/pkg/`) is not published, and the code only reads a copy of the assets that you supply (a folder for the desktop app, a folder picked in the page for the browser; picked files stay in the browser).

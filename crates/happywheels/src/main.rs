@@ -743,6 +743,7 @@ struct Options {
     window: bool,
     fps60: bool,
     players: usize,
+    character: Option<usize>,
     host: Option<u16>,
     join: Option<String>,
 }
@@ -762,6 +763,7 @@ fn parse_options() -> Result<Option<Options>> {
         window: false,
         fps60: false,
         players: 1,
+        character: None,
         host: None,
         join: None,
     };
@@ -785,6 +787,7 @@ fn parse_options() -> Result<Option<Options>> {
             "--join" => options.join = Some(args.next().context("--join needs HOST:PORT")?),
             "--level-png" => options.level_png = Some(PathBuf::from(args.next().context("--level-png needs a file")?)),
             "--window" => options.window = true,
+            "--character" => options.character = Some(args.next().context("--character needs 1 to 11")?.parse::<usize>()?.clamp(1, 11)),
             "--fps60" => options.fps60 = true,
             "--steps" => options.sim_steps = args.next().context("--steps needs N")?.parse().context("invalid --steps")?,
             "--frames" => {
@@ -797,7 +800,7 @@ fn parse_options() -> Result<Option<Options>> {
             }
             "--help" | "-h" => {
                 println!(
-                    "happywheels [--assets DIR] [--check-assets] [--screenshot FILE] [--frames N] [--level FILE.xml [--steps N] [--level-png F] [--window]] [--fps60]"
+                    "happywheels [--assets DIR] [--check-assets] [--screenshot FILE] [--frames N] [--level FILE.xml [--steps N] [--level-png F] [--window]] [--fps60] [--character 1..11] [--players 1|2] [--blood 0..4] [--particles N]"
                 );
                 return Ok(None);
             }
@@ -895,6 +898,9 @@ fn main() -> Result<()> {
     let mut app = App::new(menu, options.frame_limit, options.assets.clone());
     app.players = options.players;
     app.fps60 = options.fps60;
+    if let Some(character) = options.character {
+        app.character = character;
+    }
     if let Some(net) = connect_net(&options)? {
         app.players = 2;
         app.net = Some(net);

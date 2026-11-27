@@ -72,7 +72,7 @@ fn button(id: impl Into<gpui::ElementId>, label: impl Into<SharedString>, select
     div()
         .id(id)
         .px_3()
-        .py_1()
+        .py(px(3.0))
         .rounded_md()
         .cursor_pointer()
         .bg(rgb(if selected { ACCENT } else { BUTTON }))
@@ -129,7 +129,7 @@ impl Render for Launcher {
             .flex()
             .flex_col()
             .flex_1()
-            .gap_5()
+            .gap_3()
             .p_4()
             .rounded_lg()
             .bg(rgb(PANEL))
@@ -163,7 +163,7 @@ fn main() {
             }
         })
         .detach();
-        let bounds = Bounds::centered(None, size(px(760.0), px(600.0)), cx);
+        let bounds = Bounds::centered(None, size(px(760.0), px(700.0)), cx);
         let options = WindowOptions { window_bounds: Some(WindowBounds::Windowed(bounds)), ..Default::default() };
         cx.open_window(options, |_, cx| cx.new(|_| Launcher { settings: Settings::default(), status: "".into() })).expect("launcher window");
         cx.activate(true);

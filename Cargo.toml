@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/happywheels-core", "crates/happywheels", "crates/happywheels-web", "crates/box2d"]
+members = ["crates/happywheels-core", "crates/happywheels", "crates/happywheels-web", "crates/box2d", "crates/happywheels-launcher"]
 
 [profile.dev]
 opt-level = 1
