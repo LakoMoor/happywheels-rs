@@ -4063,3 +4063,31 @@ fn c7_rail_in_real_session() {
     eprintln!("RAIL first bad {first_bad:?}");
     assert!(first_bad.is_none_or(|(i, ..)| i >= 159), "real-session rail scene diverges earlier than before: {first_bad:?}");
 }
+
+/// Blood flow emission with dt against the real `ParticleController` (`analysis/flow-dt.js`): live particles after each of 12 `step(dt)` calls. One particle per
+/// 30 Hz tick whatever dt is (`_accumulatedDelta`), and `total` + 1 particles in all.
+#[test]
+fn blood_flow_emission_with_dt_matches_the_original() {
+    let xml = "<levelXML><info v='1.99' x='1000' y='250' c='1' h='f' bg='0' bgc=''/></levelXML>";
+    let cases: [(f64, u32, [usize; 13]); 4] = [
+        (1.0, 3, [0, 1, 2, 3, 4, 4, 4, 4, 4, 4, 4, 4, 4]),
+        (1.0, 50, [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]),
+        (0.5, 3, [0, 1, 1, 2, 2, 3, 3, 4, 4, 4, 4, 4, 4]),
+        (0.5, 50, [0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6]),
+    ];
+    for lines in [false, true] {
+        for (dt, total, want) in cases {
+            let mut w = World::from_level(&level::parse(xml).unwrap());
+            w.blood.line_blood = lines;
+            let body = w.b2_mut().create_body(&box2d::world::BodyDef { position: box2d::math::Vec2::new(16.0, 4.0), ..Default::default() });
+            w.set_external_particles(true);
+            w.blood_flow(2.5, 4.0, body, box2d::math::Vec2::default(), 270.0, total);
+            let mut got = vec![w.blood.particles.len() + w.blood.sprites.len()];
+            for _ in 0..12 {
+                w.step_particles(dt);
+                got.push(w.blood.particles.len() + w.blood.sprites.len());
+            }
+            assert_eq!(got, want, "lines {lines} dt {dt} total {total}");
+        }
+    }
+}
