@@ -2389,6 +2389,7 @@ impl World {
     /// [`World::step_particles`] (`dt = 30 / maxFPS`).
     pub fn set_external_particles(&mut self, on: bool) {
         self.external_particles = on;
+        self.blood.rate = if on { 0.5 } else { 1.0 };
     }
 
     /// `ParticleController.step(dt)` (dt clamped to 0..1): blood/shard/spark particles move and every emitter that is due creates its particles.

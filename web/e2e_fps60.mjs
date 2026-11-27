@@ -17,7 +17,7 @@ const send = (method, params = {}) => new Promise(r => { const i = ++id; pend.se
 await send('Runtime.enable'); await send('Page.enable'); await send('DOM.enable');
 await send('Page.navigate', { url: 'http://localhost:8011/' });
 await sleep(4000);
-await send('Runtime.evaluate',{expression:`(async()=>{document.querySelector('#fps60').click();const dt=new DataTransfer();dt.items.add(new File(["<levelXML><info v='1.99' x='1000' y='300'/><shapes><sh t='0' p0='1000' p1='450' p2='3000' p3='50' p4='0' p5='t' p6='f' p7='1' p8='0' p9='-1' p10='100' p11='1'/></shapes><specials><sp t='6' p0='1400' p1='420' p2='0' p3='t' p4='8' p5='f'/></specials></levelXML>"],'l.xml'));const i=document.querySelector('#level');i.files=dt.files;i.dispatchEvent(new Event('change'));return 1})()`,awaitPromise:true});
+await send('Runtime.evaluate',{expression:`(async()=>{if(!document.querySelector('#fps60').checked)document.querySelector('#fps60').click();document.querySelector('#blood').value='2';const dt=new DataTransfer();dt.items.add(new File(["<levelXML><info v='1.99' x='1000' y='300'/><shapes><sh t='0' p0='1000' p1='450' p2='3000' p3='50' p4='0' p5='t' p6='f' p7='1' p8='0' p9='-1' p10='100' p11='1'/></shapes><specials><sp t='6' p0='1400' p1='420' p2='0' p3='t' p4='8' p5='f'/></specials></levelXML>"],'l.xml'));const i=document.querySelector('#level');i.files=dt.files;i.dispatchEvent(new Event('change'));return 1})()`,awaitPromise:true});
 await send('Input.dispatchKeyEvent',{type:'rawKeyDown',key:'ArrowRight',code:'ArrowRight',windowsVirtualKeyCode:39});
 await sleep(7000);
 console.log('STATUS', (await send('Runtime.evaluate',{expression:'document.querySelector("#status").textContent'})).result.result.value);

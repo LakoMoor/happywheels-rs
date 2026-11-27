@@ -128,11 +128,13 @@ pub fn render_level_scene(level: &Level, world: &World, width: u32, height: u32,
     if world.blood.setting >= 3 {
         metaball_blood(&mut img, world, &to_screen);
     } else {
+        let scale = (to_screen(1.0, 0.0).0 - to_screen(0.0, 0.0).0).abs();
         for p in &world.blood.particles {
-            let (x0, y0) = to_screen(p.last[0] as f32, p.last[1] as f32);
-            let (x1, y1) = to_screen(p.cur[0] as f32, p.cur[1] as f32);
-            imageproc::drawing::draw_line_segment_mut(&mut img, (x0, y0), (x1, y1), Rgba([0x99, 0x00, 0x00, 255]));
-            imageproc::drawing::draw_line_segment_mut(&mut img, (x0, y0 + 1.0), (x1, y1 + 1.0), Rgba([0x99, 0x00, 0x00, 255]));
+            if p.width > 0.0 {
+                let a = to_screen(p.seg[0][0] as f32, p.seg[0][1] as f32);
+                let b = to_screen(p.seg[1][0] as f32, p.seg[1][1] as f32);
+                thick_line(&mut img, a, b, p.width as f32 * scale, Rgba([0x99, 0x00, 0x00, 255]));
+            }
         }
     }
     // Mower sparks: one yellow segment per spark (tail → head).
@@ -306,14 +308,37 @@ fn poly(img: &mut RgbaImage, pts: &[(f32, f32)], col: Rgba<u8>) {
 /// `bloodSetting` 3/4 look: the particle lines (0x990000, 1.75 px) go into an offscreen layer that is blurred (`BlurFilter(4, 4, 3)`, approximated here by three box
 /// blurs of radius 4) and then thresholded by the original's filter (`brightness = (max + min) / 2 of the premultiplied colour >= 0.075` becomes (0.6, 0, 0, 0.95),
 /// else transparent); the layer is drawn with alpha 0.8 (setting 4: 0.85). Setting 4's bevel and HARDLIGHT blend are not reproduced.
+/// A round-capped segment `width` pixels wide (at least one pixel).
+fn thick_line(img: &mut RgbaImage, a: (f32, f32), b: (f32, f32), width: f32, color: Rgba<u8>) {
+    let r = (width / 2.0).max(0.5);
+    let (w, h) = (img.width() as i64, img.height() as i64);
+    let x0 = ((a.0.min(b.0) - r).floor() as i64).max(0);
+    let x1 = ((a.0.max(b.0) + r).ceil() as i64).min(w - 1);
+    let y0 = ((a.1.min(b.1) - r).floor() as i64).max(0);
+    let y1 = ((a.1.max(b.1) + r).ceil() as i64).min(h - 1);
+    let (dx, dy) = (b.0 - a.0, b.1 - a.1);
+    let len2 = dx * dx + dy * dy;
+    for y in y0..=y1 {
+        for x in x0..=x1 {
+            let (px, py) = (x as f32 + 0.5 - a.0, y as f32 + 0.5 - a.1);
+            let t = if len2 > 0.0 { ((px * dx + py * dy) / len2).clamp(0.0, 1.0) } else { 0.0 };
+            if (px - t * dx).hypot(py - t * dy) <= r {
+                img.put_pixel(x as u32, y as u32, color);
+            }
+        }
+    }
+}
+
 fn metaball_blood(img: &mut RgbaImage, world: &World, to_screen: &dyn Fn(f32, f32) -> (f32, f32)) {
     let (w, h) = (img.width() as usize, img.height() as usize);
     let mut layer = RgbaImage::new(w as u32, h as u32);
+    let scale = (to_screen(1.0, 0.0).0 - to_screen(0.0, 0.0).0).abs();
     for p in &world.blood.particles {
-        let (x0, y0) = to_screen(p.last[0] as f32, p.last[1] as f32);
-        let (x1, y1) = to_screen(p.cur[0] as f32, p.cur[1] as f32);
-        imageproc::drawing::draw_line_segment_mut(&mut layer, (x0, y0), (x1, y1), Rgba([255, 0, 0, 255]));
-        imageproc::drawing::draw_line_segment_mut(&mut layer, (x0, y0 + 1.0), (x1, y1 + 1.0), Rgba([255, 0, 0, 255]));
+        if p.width > 0.0 {
+            let a = to_screen(p.seg[0][0] as f32, p.seg[0][1] as f32);
+            let b = to_screen(p.seg[1][0] as f32, p.seg[1][1] as f32);
+            thick_line(&mut layer, a, b, p.width as f32 * scale, Rgba([255, 0, 0, 255]));
+        }
     }
     // coverage in 0..1
     let mut a: Vec<f32> = layer.pixels().map(|p| f32::from(p.0[3]) / 255.0).collect();

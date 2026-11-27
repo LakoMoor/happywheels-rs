@@ -27,17 +27,35 @@ pub const WATER: u8 = 9;
 pub struct Particle {
     pub cur: [f64; 2],
     pub last: [f64; 2],
+    /// What the last step drew: from `last + delta/dt` to `last`, before moving (the camera-motion offset of the original is not applied).
+    pub seg: [[f64; 2]; 2],
+    /// Width of `seg` in px; 0 until the first step (nothing is drawn before it).
+    pub width: f64,
+    /// `lineThickness` used by the next step.
+    thickness: f64,
+    /// `BloodParticleLine` (bloodSetting 2): thinner the faster it flies. Otherwise `BloodParticle`: always 1.75.
+    variable: bool,
 }
 
 impl Particle {
     fn new(x: f64, y: f64, vx: f64, vy: f64) -> Self {
-        Self { cur: [x + vx * SCALER, y + vy * SCALER], last: [x, y] }
+        Self::from_points([x + vx * SCALER, y + vy * SCALER], [x, y], false)
+    }
+
+    fn from_points(cur: [f64; 2], last: [f64; 2], variable: bool) -> Self {
+        Self { cur, last, seg: [last, last], width: 0.0, thickness: if variable { 1.5 } else { 1.75 }, variable }
     }
 
     /// `BloodParticle.step` without drawing: Verlet step, `false` once below the limit.
     fn step(&mut self, dt: f64) -> bool {
         let dx = self.cur[0] - self.last[0];
         let dy = self.cur[1] - self.last[1];
+        self.seg = [[self.last[0] + dx / dt, self.last[1] + dy / dt], self.last];
+        self.width = self.thickness;
+        if self.variable {
+            let speed2 = (dx * dx + dy * dy) / (dt * dt);
+            self.thickness = ((1.0 - speed2 * 0.005) * 2.0 + 1.0).max(1.0);
+        }
         self.last = self.cur;
         // original: the Verlet delta is not scaled by dt, only the gravity is (`gravityIncrement * dt * dt`)
         self.cur = [self.cur[0] + dx, self.cur[1] + dy + GRAVITY * dt * dt];
@@ -118,11 +136,13 @@ pub fn set_blood_setting(setting: u8) {
 impl Default for Blood {
     fn default() -> Self {
         let setting = BLOOD_SETTING.load(std::sync::atomic::Ordering::Relaxed);
-        Self { particles: Vec::new(), sparks: Vec::new(), sprites: Vec::new(), flows: Vec::new(), line_blood: setting >= 2, off: setting == 0, setting, max: max_particles(), rng: 0, #[cfg(test)] script: Default::default() }
+        Self { particles: Vec::new(), sparks: Vec::new(), sprites: Vec::new(), flows: Vec::new(), line_blood: setting >= 2, off: setting == 0, setting, max: max_particles(), rng: 0, rate: 1.0, #[cfg(test)] script: Default::default() }
     }
 }
 
 pub struct Blood {
+    /// `30 / maxFPS`: line particles scale their creation velocity by it (0.5 in 60 fps mode).
+    pub rate: f64,
     /// Unit tests only: values returned by `rand` before the generator is used (the oracle runs replace `Math.random` the same way).
     #[cfg(test)]
     pub script: std::collections::VecDeque<f64>,
@@ -175,6 +195,13 @@ impl SpriteParticle {
 }
 
 impl Blood {
+    fn line_particle(&self, x: f64, y: f64, vx: f64, vy: f64) -> Particle {
+        let mut p = Particle::new(x, y, vx * self.rate, vy * self.rate);
+        p.variable = self.setting == 2;
+        p.thickness = if p.variable { 1.5 } else { 1.75 };
+        p
+    }
+
     /// `createSparkBurstPoint(start (m), vel (px/step), initialRange, speedRange, total)`: the particles' speeds are in px per step already.
     pub fn spark_burst(&mut self, start: Vec2, vel: Vec2, initial_range: f64, speed_range: f64, total: u32) {
         let scaler = 62.5 / 30.0;
@@ -225,7 +252,7 @@ impl Blood {
             let x = start[0] + self.rand() * initial_range - initial_range / 2.0;
             let y = start[1] + self.rand() * initial_range - initial_range / 2.0;
             if self.line_blood {
-                self.particles.push(Particle::new(x, y, vx, vy));
+                self.particles.push(self.line_particle(x, y, vx, vy));
             } else {
                 self.spawn_sprite(ShardKind::Food(BLOOD), [x, y], [vx, vy]);
             }
@@ -239,7 +266,7 @@ impl Blood {
         if !self.line_blood {
             self.spawn_sprite(ShardKind::Food(BLOOD), at, vel);
         } else if self.particles.len() < self.max {
-            self.particles.push(Particle::new(at[0], at[1], vel[0], vel[1]));
+            self.particles.push(self.line_particle(at[0], at[1], vel[0], vel[1]));
         }
     }
 
@@ -409,12 +436,45 @@ mod oracle_blood_dt_tests {
             }
         }
         for (dt, (init, traj)) in [(1.0, lines_1), (0.5, lines_0_5)] {
-            let particles = init.iter().map(|p| Particle { cur: [p[0], p[1]], last: [p[2], p[3]] }).collect();
+            let particles = init.iter().map(|p| Particle::from_points([p[0], p[1]], [p[2], p[3]], false)).collect();
             let mut b = Blood { particles, ..Blood::default() };
             for (n, want) in traj.iter().enumerate() {
                 b.step_particles(dt);
                 let got: Vec<[f64; 4]> = b.particles.iter().map(|p| [p.cur[0], p.cur[1], p.last[0], p.last[1]]).collect();
                 assert_eq!(got, want.to_vec(), "lines dt {dt} step {n}");
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod oracle_line_draw_tests {
+    use super::*;
+
+    /// What the real `BloodParticleLine` draws (`analysis/blood-lines.js`: a burst of 3 with `Math.random` replaced, `lineStyle`/`moveTo`/`lineTo`
+    /// recorded for four steps) at maxFPS 30 and 60: creation velocity scaled by 30/maxFPS, segment `last + delta/dt → last`, width.
+    #[test]
+    fn line_blood_draws_like_the_original() {
+        let doc: serde_json::Value = serde_json::from_str(include_str!("../../../tests/golden/blood-lines.json")).unwrap();
+        let v: serde_json::Value = serde_json::from_str(doc["result"]["value"].as_str().unwrap()).unwrap();
+        let f = |x: &serde_json::Value| x.as_f64().unwrap();
+        for rate in [30.0, 60.0] {
+            let o = &v[format!("2_{rate}")];
+            let dt = 30.0 / rate;
+            let mut ps: Vec<Particle> = o["init"].as_array().unwrap().iter().map(|p| Particle::from_points([f(&p[0]), f(&p[1])], [f(&p[2]), f(&p[3])], true)).collect();
+            // creation: the same `lastPos` at both rates, the velocity is 30/maxFPS of the 30 fps one
+            for (p, full) in ps.iter().zip(v["2_30"]["init"].as_array().unwrap()) {
+                for k in 0..2 {
+                    assert!((p.cur[k] - p.last[k] - (f(&full[k]) - f(&full[k + 2])) * dt).abs() < 1e-9, "creation velocity at {rate}");
+                }
+            }
+            for (n, frame) in o["frames"].as_array().unwrap().iter().enumerate() {
+                let calls = frame.as_array().unwrap();
+                assert_eq!(calls.len(), ps.len() * 3, "rate {rate} step {n}");
+                for (p, c) in ps.iter_mut().zip(calls.chunks(3)) {
+                    p.step(dt);
+                    assert_eq!([p.width, p.seg[0][0], p.seg[0][1], p.seg[1][0], p.seg[1][1]], [f(&c[0][1]), f(&c[1][1]), f(&c[1][2]), f(&c[2][1]), f(&c[2][2])], "rate {rate} step {n}");
+                }
             }
         }
     }

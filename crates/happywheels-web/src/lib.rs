@@ -91,6 +91,7 @@ mod browser {
         keys: [bool; 8],
         last_time: Option<f64>,
         accumulator: f64,
+        particle_time: f64,
         /// The original's "60 fps" option (`maxFPS = 60`, `update60fps`): the simulation still runs at 30 Hz, bodies are drawn between the last two steps.
         interpolate: bool,
         prev_poses: Vec<happywheels_core::Pose>,
@@ -137,6 +138,7 @@ mod browser {
                 keys: [false; 8],
                 last_time: None,
                 accumulator: 0.0,
+                particle_time: 0.0,
                 interpolate: false,
                 prev_poses: Vec::new(),
                 character: 3,
@@ -331,7 +333,12 @@ mod browser {
                 self.accumulator -= 1000.0 / 30.0;
             }
             if self.interpolate && !self.paused {
-                self.world.step_particles(elapsed / (1000.0 / 30.0));
+                // the original's ticker is capped at maxFPS = 60 and steps the particles with dt = 0.5; faster displays must not add steps
+                self.particle_time += elapsed;
+                while self.particle_time >= 1000.0 / 60.0 {
+                    self.world.step_particles(0.5);
+                    self.particle_time -= 1000.0 / 60.0;
+                }
             }
             let (w, h) = (self.canvas.width().max(1), self.canvas.height().max(1));
             let blend = (self.interpolate && !self.paused && !self.prev_poses.is_empty()).then(|| (self.accumulator / (1000.0 / 30.0)).clamp(0.0, 1.0));
