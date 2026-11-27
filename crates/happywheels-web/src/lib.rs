@@ -91,10 +91,8 @@ mod browser {
         keys: [bool; 8],
         last_time: Option<f64>,
         accumulator: f64,
-        particle_time: f64,
         /// The original's "60 fps" option (`maxFPS = 60`, `update60fps`): the simulation still runs at 30 Hz, bodies are drawn between the last two steps.
         interpolate: bool,
-        prev_poses: Vec<happywheels_core::Pose>,
         character: usize,
         assets: Option<SpriteAssets>,
         sprites: Option<Sprites>,
@@ -138,9 +136,7 @@ mod browser {
                 keys: [false; 8],
                 last_time: None,
                 accumulator: 0.0,
-                particle_time: 0.0,
                 interpolate: false,
-                prev_poses: Vec::new(),
                 character: 3,
                 assets: None,
                 sprites: None,
@@ -211,7 +207,6 @@ mod browser {
             let world = world_for(&level, character);
             self.level = level;
             self.world = world;
-            self.prev_poses.clear();
             self.character = character;
             self.sprites = self.assets.as_ref().and_then(|assets| {
                 let mut sprites = Sprites::open_from(assets, character as u32)?;
@@ -240,6 +235,13 @@ mod browser {
             }
         }
 
+        /// `switchCamera` (C): follow the next rider (riders with passengers only).
+        pub fn switch_camera(&mut self) {
+            if !self.paused {
+                self.world.switch_camera();
+            }
+        }
+
         pub fn clear_keys(&mut self) {
             self.keys = [false; 8];
         }
@@ -259,8 +261,7 @@ mod browser {
             self.keys = [false; 8];
         }
 
-        /// Mouse triggers are transparent, unrotated rectangles in the original session's 900×500 screen space.
-        /// `use60FPS` option: draw the simulation interpolated between its 30 Hz steps (the physics itself is unchanged).
+        /// `use60FPS` option: display frames at 60 Hz alternating between midpoints and states (`World::tick60`); the physics itself is unchanged.
         pub fn set_interpolation(&mut self, on: bool) {
             self.interpolate = on;
         }
@@ -309,41 +310,33 @@ mod browser {
             let mut sounds = Vec::new();
             let mut trigger_sounds = Vec::new();
             let mut scaled_sounds = Vec::new();
-            // 60 fps (`run60fps`): physics keeps its 30 Hz tick, the particles move every display frame by dt = 30 / maxFPS
-            self.world.set_external_particles(self.interpolate);
-            while !self.paused && self.accumulator >= 1000.0 / 30.0 {
+            // 30 fps: one physics step per tick. 60 fps (`update60fps`): ticks of 1/60 s, physics on every other one (`World::tick60`); faster
+            // displays do not add ticks.
+            if !self.interpolate {
+                self.world.set_external_particles(false);
+            }
+            let period = 1000.0 / if self.interpolate { 60.0 } else { 30.0 };
+            while !self.paused && self.accumulator >= period {
+                if !self.interpolate || self.world.next_tick60_steps() {
+                    let k = self.keys;
+                    self.world
+                        .drive(f32::from(u8::from(k[1])) - f32::from(u8::from(k[0])));
+                }
                 let k = self.keys;
-                self.world
-                    .drive(f32::from(u8::from(k[1])) - f32::from(u8::from(k[0])));
-                self.world.set_rider_keys(Keys {
-                    left: k[0],
-                    right: k[1],
-                    up: k[2],
-                    down: k[3],
-                    space: k[4],
-                    z: k[5],
-                    shift: k[6],
-                    ctrl: k[7],
-                });
-                self.prev_poses = self.world.b2().pose_snapshot();
-                self.world.step();
+                let keys = Keys { left: k[0], right: k[1], up: k[2], down: k[3], space: k[4], z: k[5], shift: k[6], ctrl: k[7] };
+                if self.interpolate {
+                    self.world.tick60(keys);
+                } else {
+                    self.world.set_rider_keys(keys);
+                    self.world.step();
+                }
                 sounds.extend(self.world.take_sounds());
                 trigger_sounds.extend(self.world.take_trigger_sounds());
                 scaled_sounds.extend(self.world.take_scaled_sounds());
-                self.accumulator -= 1000.0 / 30.0;
+                self.accumulator -= period;
             }
             let (w, h) = (self.canvas.width().max(1), self.canvas.height().max(1));
-            let blend = (self.interpolate && !self.paused && !self.prev_poses.is_empty()).then(|| (self.accumulator / (1000.0 / 30.0)).clamp(0.0, 1.0));
-            let saved = blend.map(|b| self.world.b2_mut().blend_poses(&self.prev_poses, b));
-            if self.interpolate && !self.paused {
-                // the original's ticker is capped at maxFPS = 60 and steps camera and particles with dt = 0.5; faster displays must not add steps
-                self.particle_time += elapsed;
-                while self.particle_time >= 1000.0 / 60.0 {
-                    self.world.step_camera(0.5);
-                    self.world.step_particles(0.5);
-                    self.particle_time -= 1000.0 / 60.0;
-                }
-            }
+            let saved = if self.interpolate { self.world.show_tick60() } else { None };
             let camera = self.world.view_center_px().unwrap_or(self.level.info.start);
             let frame = render::render_level_scene(
                 &self.level,

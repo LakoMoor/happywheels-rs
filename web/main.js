@@ -86,6 +86,7 @@ try {
       event.preventDefault();
       return;
     }
+    if (event.code === 'KeyC' && down && !event.repeat && !editing && !paused && !menuOpen) game.switch_camera();
     if (input.key(event.code, down, Boolean(editing) || paused || menuOpen)) event.preventDefault();
   };
   window.addEventListener('keydown', event => updateKey(event, true));

@@ -4121,3 +4121,47 @@ fn camera_matches_the_original_in_real_sessions() {
 fn real_keys(i: usize) -> happywheels_core::vehicle::Keys {
     happywheels_core::vehicle::Keys { up: i < 60, left: (60..80).contains(&i), space: (80..100).contains(&i), right: (100..120).contains(&i), down: (120..140).contains(&i), shift: (140..150).contains(&i), ctrl: (150..160).contains(&i), z: i == 170 }
 }
+
+fn camera_fixture(name: &str, ch: u32) -> (World, serde_json::Value) {
+    let doc: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(format!("{}/../../tests/golden/{name}-{ch}.json", env!("CARGO_MANIFEST_DIR"))).unwrap()).unwrap();
+    let xml = "<levelXML><info v='1.99' x='1000' y='250' h='f' bg='0' bgc=''/><shapes><sh t='0' p0='1000' p1='425' p2='2000' p3='50' p4='0' p5='t' p6='f' p7='1' p8='0' p9='-1' p10='100' p11='1'/></shapes></levelXML>";
+    let mut w = World::from_level(&level::parse(xml).unwrap());
+    assert!(w.spawn_bike(ch as usize, [1000.0, 250.0]), "spawn {ch}");
+    (w, doc)
+}
+
+fn assert_camera(w: &World, want: &serde_json::Value, what: &str) {
+    let c = w.camera().unwrap();
+    let got = [c.container[0], c.container[1], c.borders[0], c.borders[1], c.borders[2], c.borders[3], c.particle_limit];
+    for (i, g) in got.iter().enumerate() {
+        assert!((g - want[i].as_f64().unwrap()).abs() < 2e-3, "{what} value {i}: {got:?} want {want}");
+    }
+}
+
+/// The C key (`analysis/camera-switch.js`: `switchCamera` before steps 20, 60 and 90) for the riders with passengers.
+#[test]
+fn camera_switch_matches_the_original() {
+    for ch in [3u32, 5, 8, 10] {
+        let (mut w, doc) = camera_fixture("camera-switch", ch);
+        for (frame, want) in doc["cam"].as_array().unwrap().iter().enumerate() {
+            if [20, 60, 90].contains(&frame) {
+                w.switch_camera();
+            }
+            w.set_rider_keys(real_keys(frame));
+            w.step();
+            assert_camera(&w, want, &format!("char {ch} frame {frame}"));
+        }
+    }
+}
+
+/// The camera in the 60 fps loop (`analysis/camera60-real.js`: the game's `update60fps` order, one entry per display frame).
+#[test]
+fn camera_at_60fps_matches_the_original() {
+    for ch in 1..=11u32 {
+        let (mut w, doc) = camera_fixture("camera60", ch);
+        for (tick, want) in doc["cam"].as_array().unwrap().iter().enumerate() {
+            w.tick60(real_keys(tick.div_ceil(2)));
+            assert_camera(&w, want, &format!("char {ch} tick {tick}"));
+        }
+    }
+}

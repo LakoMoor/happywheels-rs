@@ -613,6 +613,14 @@ impl ApplicationHandler for App {
                     }
                 }
             }
+            // `switchCamera`
+            WindowEvent::KeyboardInput { event: winit::event::KeyEvent { logical_key: winit::keyboard::Key::Character(c), state: ElementState::Pressed, repeat: false, .. }, .. }
+                if c.eq_ignore_ascii_case("c") && self.sim.is_some() =>
+            {
+                if let Some(sim) = self.sim.as_mut() {
+                    sim.world.switch_camera();
+                }
+            }
             WindowEvent::KeyboardInput { event: key, .. } if self.sim.is_some()
                 && matches!(&key.logical_key, winit::keyboard::Key::Character(c) if c.eq_ignore_ascii_case("z")) =>
             {

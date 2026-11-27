@@ -629,6 +629,9 @@ pub struct World {
     snow: Option<Spray>,
     camera: Option<crate::camera::Camera>,
     camera_released: Option<BodyId>,
+    camera_target: usize,
+    /// The 60 fps mode: poses to interpolate from and the factor shown last.
+    sixty: Option<(Vec<box2d::world::Pose>, f64)>,
     camera_focus_body: Option<BodyId>,
     logs: Vec<Log>,
     toilets: Vec<Toilet>,
@@ -732,6 +735,8 @@ impl World {
             snow: None,
             camera: None,
             camera_released: None,
+            camera_target: 0,
+            sixty: None,
             camera_focus_body: None,
             logs: Vec::new(),
             toilets: Vec::new(),
@@ -2395,6 +2400,9 @@ impl World {
     /// [`World::step_particles`] (`dt = 30 / maxFPS`).
     pub fn set_external_particles(&mut self, on: bool) {
         self.external_particles = on;
+        if !on {
+            self.sixty = None;
+        }
         self.blood.rate = if on { 0.5 } else { 1.0 };
     }
 
@@ -2422,12 +2430,74 @@ impl World {
 
     fn camera_inputs(&self) -> Option<(crate::camera::Focus, Option<usize>)> {
         let character = self.character.as_ref()?;
-        let focus = character.heart.or_else(|| character.bodies.get(&crate::character::Part::Chest).copied())?;
+        let of = |doll: &crate::character::Ragdoll| doll.heart.or_else(|| doll.bodies.get(&crate::character::Part::Chest).copied());
+        let passengers = self.passengers();
+        let doll = match self.camera_target % (passengers.len() + 1) {
+            0 => character,
+            n => passengers[n - 1],
+        };
+        let focus = of(doll)?;
         let magnet = match self.bike.as_ref() {
             Some(crate::vehicle::Vehicle::Heli(h)) => Some(h.magnet),
             _ => None,
         };
         Some((self.camera_body(focus), magnet))
+    }
+
+    /// The riders besides the player, in the order `switchCamera` visits them.
+    fn passengers(&self) -> Vec<&crate::character::Ragdoll> {
+        use crate::vehicle::Vehicle;
+        match self.bike.as_ref() {
+            Some(Vehicle::Bike(b)) => b.kid.iter().map(|k| &k.doll).collect(),
+            Some(Vehicle::Dirt(d)) => d.girl.iter().map(|g| &g.doll).collect(),
+            Some(Vehicle::Family(f)) => vec![&f.daughter.doll, &f.son.doll],
+            Some(Vehicle::Santa(s)) => vec![&s.elf1.doll, &s.elf2.doll],
+            _ => Vec::new(),
+        }
+    }
+
+    /// `switchCamera` (the C key): the camera follows the next rider, then the player again. Nothing for riders without passengers.
+    pub fn switch_camera(&mut self) {
+        let n = self.passengers().len() + 1;
+        self.camera_target = (self.camera_target + 1) % n;
+    }
+
+    /// One display frame of the 60 fps mode (`update60fps`): physics on every other frame; what is shown, and what the camera and particles see, is
+    /// alternately the midpoint of the last two states and the state before the step just taken. `keys` are applied on physics frames, after the shown
+    /// state is taken (key handling can change velocities at once). Returns whether physics ran.
+    pub fn tick60(&mut self, keys: crate::vehicle::Keys) -> bool {
+        self.set_external_particles(true);
+        let first = self.sixty.is_none();
+        let step = self.next_tick60_steps();
+        let (prev, alpha, dt) = if first {
+            self.set_rider_keys(keys);
+            self.step();
+            (self.b.pose_snapshot(), 1.0, 1.0)
+        } else if step {
+            let prev = self.b.pose_snapshot();
+            self.set_rider_keys(keys);
+            self.step();
+            (prev, 0.0, 0.5)
+        } else {
+            (self.sixty.take().map(|s| s.0).unwrap_or_default(), 0.5, 0.5)
+        };
+        let saved = self.b.blend_poses(&prev, alpha);
+        self.step_camera(dt);
+        self.step_particles(dt);
+        self.b.restore_poses(&saved);
+        self.sixty = Some((prev, alpha));
+        step
+    }
+
+    /// Whether the next `tick60` runs physics (the first one, and each one after a midpoint frame).
+    pub fn next_tick60_steps(&self) -> bool {
+        self.sixty.as_ref().is_none_or(|s| s.1 == 0.5)
+    }
+
+    /// Moves the bodies to what the last `tick60` shows; pass the result to `b2_mut().restore_poses` after drawing.
+    pub fn show_tick60(&mut self) -> Option<Vec<box2d::world::Pose>> {
+        let (prev, alpha) = self.sixty.as_ref()?;
+        Some(self.b.blend_poses(prev, *alpha))
     }
 
     /// `Camera.step(dt)`; the particles' kill height and line offset come from it.

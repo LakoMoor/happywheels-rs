@@ -725,16 +725,17 @@ pub struct Pose {
     pub r: Mat22,
     pub c: Vec2,
     pub a: f64,
+    pub v: Vec2,
 }
 
 impl World {
     /// Poses of all bodies in id order (destroyed ones included, so indices stay stable).
     pub fn pose_snapshot(&self) -> Vec<Pose> {
-        self.c.bodies.iter().map(|b| Pose { position: b.xf.position, r: b.xf.r, c: b.sweep.c, a: b.sweep.a }).collect()
+        self.c.bodies.iter().map(|b| Pose { position: b.xf.position, r: b.xf.r, c: b.sweep.c, a: b.sweep.a, v: b.linear_velocity }).collect()
     }
 
     /// Display interpolation of the original's 60 fps mode (`b2Body.UpdateInterpolation`): every living non-static body that existed in `from`
-    /// is moved to `from + (now − from)·t` (matrix columns, position, centre of mass and angle). Returns the true poses for `restore_poses`.
+    /// is moved to `from + (now − from)·t` (matrix columns, position, centre of mass, linear velocity and angle). Returns the true poses for `restore_poses`.
     pub fn blend_poses(&mut self, from: &[Pose], t: f64) -> Vec<Pose> {
         let saved = self.pose_snapshot();
         let lerp = |a: f64, b: f64| a + (b - a) * t;
@@ -747,6 +748,7 @@ impl World {
             b.xf.r.col2 = Vec2::new(lerp(f.r.col2.x, b.xf.r.col2.x), lerp(f.r.col2.y, b.xf.r.col2.y));
             b.sweep.c = Vec2::new(lerp(f.c.x, b.sweep.c.x), lerp(f.c.y, b.sweep.c.y));
             b.sweep.a = lerp(f.a, b.sweep.a);
+            b.linear_velocity = Vec2::new(lerp(f.v.x, b.linear_velocity.x), lerp(f.v.y, b.linear_velocity.y));
         }
         saved
     }
@@ -757,6 +759,7 @@ impl World {
             b.xf.r = s.r;
             b.sweep.c = s.c;
             b.sweep.a = s.a;
+            b.linear_velocity = s.v;
         }
     }
 
