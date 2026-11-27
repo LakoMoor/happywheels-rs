@@ -630,6 +630,7 @@ pub struct World {
     camera: Option<crate::camera::Camera>,
     camera_released: Option<BodyId>,
     camera_target: usize,
+    true_poses: Vec<box2d::world::Pose>,
     /// The 60 fps mode: poses to interpolate from and the factor shown last.
     sixty: Option<(Vec<box2d::world::Pose>, f64)>,
     camera_focus_body: Option<BodyId>,
@@ -736,6 +737,7 @@ impl World {
             camera: None,
             camera_released: None,
             camera_target: 0,
+            true_poses: Vec::new(),
             sixty: None,
             camera_focus_body: None,
             logs: Vec::new(),
@@ -2481,12 +2483,33 @@ impl World {
         } else {
             (self.sixty.take().map(|s| s.0).unwrap_or_default(), 0.5, 0.5)
         };
-        let saved = self.b.blend_poses(&prev, alpha);
-        self.step_camera(dt);
-        self.step_particles(dt);
-        self.b.restore_poses(&saved);
+        self.with_shown_pose(&prev, alpha, |w| {
+            w.step_camera(dt);
+            w.step_particles(dt);
+        });
         self.sixty = Some((prev, alpha));
         step
+    }
+
+    /// Runs `f` with the bodies moved to the shown (interpolated) state; the true one stays available to [`Self::true_body`].
+    fn with_shown_pose(&mut self, from: &[box2d::world::Pose], alpha: f64, f: impl FnOnce(&mut Self)) {
+        self.true_poses = self.b.blend_poses(from, alpha);
+        f(self);
+        let saved = std::mem::take(&mut self.true_poses);
+        self.b.restore_poses(&saved);
+    }
+
+    /// The body as the simulation has it (the original's non-"Interpolated" getters), even while an interpolated state is shown.
+    fn true_body(&self, id: BodyId) -> box2d::world::Body {
+        let mut b = self.b.body(id).clone();
+        if let Some(t) = self.true_poses.get(id) {
+            b.xf.position = t.position;
+            b.xf.r = t.r;
+            b.sweep.c = t.c;
+            b.sweep.a = t.a;
+            b.linear_velocity = t.v;
+        }
+        b
     }
 
     /// Whether the next `tick60` runs physics (the first one, and each one after a midpoint frame).
@@ -3723,8 +3746,8 @@ impl World {
             let speed = self.blood.rand() * range + min;
             let b = self.b.body(body);
             let a = b.sweep.a + angle;
-            let v = b.linear_velocity_from_local_point(offset);
             let at = b.world_point(offset);
+            let v = self.true_body(body).linear_velocity_from_local_point(offset);
             let vel = [box2d::fdlibm::cos(a) * speed + v.x, box2d::fdlibm::sin(a) * speed + v.y];
             match sprite {
                 Some(kind) => self.blood.spawn_sprite(kind, [at.x * PS, at.y * PS], vel),
@@ -3774,10 +3797,12 @@ impl World {
             let t = self.blood.rand();
             let local = Vec2::new(s.start.x + s.range.x * t, s.start.y + s.range.y * t);
             let speed = self.blood.rand() * (s.max - s.min) + s.min;
-            let a = self.b.body(s.body).sweep.a + s.rot + s.angle_range * self.blood.rand();
-            let b = self.b.body(s.body);
-            let v = b.linear_velocity_from_local_point(local);
-            let at = b.world_point(local);
+            // the snow spray (`Mf`) reads the true state; the others take angle and point from the shown one
+            let truth = self.true_body(s.body);
+            let shown = if s.kind == crate::blood::ShardKind::Snow { &truth } else { self.b.body(s.body) };
+            let (angle, at) = (shown.sweep.a, shown.world_point(local));
+            let a = angle + s.rot + s.angle_range * self.blood.rand();
+            let v = truth.linear_velocity_from_local_point(local);
             self.blood.spawn_sprite(s.kind, [at.x * PS, at.y * PS], [box2d::fdlibm::cos(a) * speed + v.x, box2d::fdlibm::sin(a) * speed + v.y]);
             // the snowflake constructor draws one more number (`accelX`, never used)
             if s.kind == crate::blood::ShardKind::Snow {
@@ -7813,6 +7838,66 @@ mod emitter_oracle_tests {
         for n in 0..3 {
             w.step_particles(1.0);
             check("rect", n + 1, &w);
+        }
+    }
+}
+
+#[cfg(test)]
+mod emitter_60fps_oracle_tests {
+    use super::*;
+    use crate::blood::ShardKind;
+
+    /// Emitters while the shown (interpolated) state differs from the true one (`analysis/emitters60.js`: halfway between two poses, as in a midpoint
+    /// frame): spray and blood flow take angle and point from the shown state and the point velocity from the true state; the snow spray uses the true
+    /// state only.
+    #[test]
+    fn emitters_use_the_shown_pose_and_the_true_velocity() {
+        let load = |s: &str| -> serde_json::Value {
+            let doc: serde_json::Value = serde_json::from_str(s).unwrap();
+            serde_json::from_str(doc["result"]["value"].as_str().unwrap()).unwrap()
+        };
+        let shape = load(include_str!("../../../tests/golden/emitters.json"));
+        let v = load(include_str!("../../../tests/golden/emitters60.json"));
+        let f = |x: &serde_json::Value| x.as_f64().unwrap();
+        let o = &shape["body"];
+        for name in ["spray", "snow", "blood"] {
+            let xml = "<levelXML><info v='1.99' x='1000' y='250' c='1' h='f' bg='0' bgc=''/></levelXML>";
+            let mut w = World::from_level(&crate::level::parse(xml).unwrap());
+            let (a, b) = (&v["a"], &v["b"]);
+            let id = w.b2_mut().create_body(&box2d::world::BodyDef { position: Vec2::new(f(&a["x"]), f(&a["y"])), angle: f(&a["a"]), ..Default::default() });
+            let verts = o["verts"].as_array().unwrap().iter().map(|p| Vec2::new(f(&p[0]), f(&p[1]))).collect();
+            w.b2_mut().create_shape(id, &box2d::shape::ShapeDef::new(box2d::shape::Geometry::Polygon(verts)));
+            let lc = Vec2::new(f(&o["lc"][0]), f(&o["lc"][1]));
+            let c = w.b2().body(id).world_point(lc);
+            let body = w.b2_mut().body_mut(id);
+            body.sweep.local_center = lc;
+            body.sweep.c = c;
+            body.linear_velocity = Vec2::new(f(&a["vx"]), f(&a["vy"]));
+            let from = w.b2().pose_snapshot();
+            w.b2_mut().set_xform(id, Vec2::new(f(&b["x"]), f(&b["y"])), f(&b["a"]));
+            let body = w.b2_mut().body_mut(id);
+            body.linear_velocity = Vec2::new(f(&b["vx"]), f(&b["vy"]));
+            body.angular_velocity = f(&v["w"]);
+            w.blood.script = (0..2000u32).map(|k| f64::from((k * 37 + 11) % 101) / 101.0).collect();
+            w.blood.line_blood = false;
+            w.set_external_particles(true);
+            let px = |x: f64, y: f64| (x * PS, y * PS);
+            let plain = ShardKind::Food(0);
+            match name {
+                "spray" => w.sprays.push(Spray::new(plain, id, px(-0.5, 0.25), px(0.75, 0.5), 1.0, 4.0, 30.0, 3, 5000)),
+                "snow" => w.sprays.push(Spray::new(ShardKind::Snow, id, px(-0.5, 0.25), px(0.75, 0.5), 0.0, 0.0, 180.0, 5, 5000)),
+                _ => {
+                    w.blood_flow(2.5, 4.0, id, Vec2::new(0.25, -0.125), 270.0, 50);
+                }
+            }
+            w.with_shown_pose(&from, 0.5, |w| w.step_particles(0.5));
+            let want = v[name].as_array().unwrap();
+            assert_eq!(w.blood.sprites.len(), want.len(), "{name} count");
+            for (i, (p, q)) in w.blood.sprites.iter().zip(want).enumerate() {
+                assert!((p.pos[0] - f(&q[0])).abs() < 1e-6 && (p.pos[1] - f(&q[1])).abs() < 1e-6, "{name} {i} pos {:?} want {q}", p.pos);
+                let got = p.velocity();
+                assert!((got[0] - f(&q[2])).abs() < 1e-9 && (got[1] - f(&q[3])).abs() < 1e-9, "{name} {i} velocity {got:?} want {q}");
+            }
         }
     }
 }
