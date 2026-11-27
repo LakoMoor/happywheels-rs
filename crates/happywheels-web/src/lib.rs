@@ -332,18 +332,19 @@ mod browser {
                 scaled_sounds.extend(self.world.take_scaled_sounds());
                 self.accumulator -= 1000.0 / 30.0;
             }
+            let (w, h) = (self.canvas.width().max(1), self.canvas.height().max(1));
+            let blend = (self.interpolate && !self.paused && !self.prev_poses.is_empty()).then(|| (self.accumulator / (1000.0 / 30.0)).clamp(0.0, 1.0));
+            let saved = blend.map(|b| self.world.b2_mut().blend_poses(&self.prev_poses, b));
             if self.interpolate && !self.paused {
-                // the original's ticker is capped at maxFPS = 60 and steps the particles with dt = 0.5; faster displays must not add steps
+                // the original's ticker is capped at maxFPS = 60 and steps camera and particles with dt = 0.5; faster displays must not add steps
                 self.particle_time += elapsed;
                 while self.particle_time >= 1000.0 / 60.0 {
+                    self.world.step_camera(0.5);
                     self.world.step_particles(0.5);
                     self.particle_time -= 1000.0 / 60.0;
                 }
             }
-            let (w, h) = (self.canvas.width().max(1), self.canvas.height().max(1));
-            let blend = (self.interpolate && !self.paused && !self.prev_poses.is_empty()).then(|| (self.accumulator / (1000.0 / 30.0)).clamp(0.0, 1.0));
-            let saved = blend.map(|b| self.world.b2_mut().blend_poses(&self.prev_poses, b));
-            let camera = self.world.camera_focus_px().unwrap_or(self.level.info.start);
+            let camera = self.world.view_center_px().unwrap_or(self.level.info.start);
             let frame = render::render_level_scene(
                 &self.level,
                 &self.world,

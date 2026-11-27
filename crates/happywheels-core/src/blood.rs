@@ -6,6 +6,7 @@ use box2d::math::Vec2;
 
 const SCALER: f64 = 62.5 / 30.0;
 const GRAVITY: f64 = 10.0 * 62.5 / 900.0;
+/// `YParticleLimit` before the camera has set it.
 const Y_LIMIT: f64 = 850.0;
 /// `ParticleController.maxParticles` (options slider 0..2000, default 2000), process-wide like the blood setting.
 static MAX_PARTICLES_SETTING: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(2000);
@@ -46,11 +47,12 @@ impl Particle {
         Self { cur, last, seg: [last, last], width: 0.0, thickness: if variable { 1.5 } else { 1.75 }, variable }
     }
 
-    /// `BloodParticle.step` without drawing: Verlet step, `false` once below the limit.
-    fn step(&mut self, dt: f64) -> bool {
+    /// `BloodParticle.step`: remembers what to draw (shifted by the camera `motion`), Verlet step, `false` once below `limit`.
+    fn step(&mut self, dt: f64, limit: f64, motion: [f64; 2]) -> bool {
         let dx = self.cur[0] - self.last[0];
         let dy = self.cur[1] - self.last[1];
-        self.seg = [[self.last[0] + dx / dt, self.last[1] + dy / dt], self.last];
+        let end = [self.last[0] + motion[0], self.last[1] + motion[1]];
+        self.seg = [[end[0] + (dx - motion[0]) / dt, end[1] + (dy - motion[1]) / dt], end];
         self.width = self.thickness;
         if self.variable {
             let speed2 = (dx * dx + dy * dy) / (dt * dt);
@@ -59,7 +61,7 @@ impl Particle {
         self.last = self.cur;
         // original: the Verlet delta is not scaled by dt, only the gravity is (`gravityIncrement * dt * dt`)
         self.cur = [self.cur[0] + dx, self.cur[1] + dy + GRAVITY * dt * dt];
-        self.last[1] <= Y_LIMIT
+        self.last[1] <= limit
     }
 }
 
@@ -136,11 +138,14 @@ pub fn set_blood_setting(setting: u8) {
 impl Default for Blood {
     fn default() -> Self {
         let setting = BLOOD_SETTING.load(std::sync::atomic::Ordering::Relaxed);
-        Self { particles: Vec::new(), sparks: Vec::new(), sprites: Vec::new(), flows: Vec::new(), line_blood: setting >= 2, off: setting == 0, setting, max: max_particles(), rng: 0, rate: 1.0, #[cfg(test)] script: Default::default() }
+        Self { particles: Vec::new(), sparks: Vec::new(), sprites: Vec::new(), flows: Vec::new(), line_blood: setting >= 2, off: setting == 0, setting, max: max_particles(), rng: 0, y_limit: Y_LIMIT, motion: [0.0, 0.0], rate: 1.0, #[cfg(test)] script: Default::default() }
     }
 }
 
 pub struct Blood {
+    /// Set by the camera each step: particles below `y_limit` are dropped; line segments are shifted by `motion`.
+    pub y_limit: f64,
+    pub motion: [f64; 2],
     /// `30 / maxFPS`: line particles scale their creation velocity by it (0.5 in 60 fps mode).
     pub rate: f64,
     /// Unit tests only: values returned by `rand` before the generator is used (the oracle runs replace `Math.random` the same way).
@@ -299,8 +304,9 @@ impl Blood {
         self.sprites.push(SpriteParticle { kind, frame, pos: at, vel: [vel[0] * k, vel[1] * k] });
     }
 
-    /// Advances the sprite particles one step (dropped below `Y_LIMIT`).
+    /// Advances the sprite particles one step (dropped below `y_limit`).
     pub fn step_sprites(&mut self, dt: f64) {
+        let limit = self.y_limit;
         self.sprites.retain_mut(|p| {
             p.pos[1] += p.vel[1] * dt;
             p.pos[0] += p.vel[0] * dt;
@@ -314,13 +320,14 @@ impl Blood {
                     p.vel[0] *= dt * 0.9;
                 }
             }
-            p.pos[1] <= Y_LIMIT
+            p.pos[1] <= limit
         });
     }
 
     /// Advances every particle one frame and drops the dead ones.
     pub fn step_particles(&mut self, dt: f64) {
-        self.particles.retain_mut(|p| p.step(dt));
+        let (limit, motion) = (self.y_limit, self.motion);
+        self.particles.retain_mut(|p| p.step(dt, limit, motion));
     }
 }
 
@@ -372,7 +379,7 @@ mod dt_tests {
     fn particle_steps_take_dt_like_the_original() {
         let mut p = Particle::new(0.0, 0.0, 1.0, 0.0);
         let first = p.cur;
-        assert!(p.step(0.5));
+        assert!(p.step(0.5, Y_LIMIT, [0.0, 0.0]));
         let dx = p.cur[0] - first[0];
         assert!((dx - (first[0] - 0.0)).abs() < 1e-12, "x delta is not scaled by dt");
         let mut s = Spark { pos: [0.0, 0.0], speed: [10.0, 0.0], gravity: 0.0, seg: [[0.0; 2]; 2], blue: 0 };
@@ -472,7 +479,7 @@ mod oracle_line_draw_tests {
                 let calls = frame.as_array().unwrap();
                 assert_eq!(calls.len(), ps.len() * 3, "rate {rate} step {n}");
                 for (p, c) in ps.iter_mut().zip(calls.chunks(3)) {
-                    p.step(dt);
+                    p.step(dt, Y_LIMIT, [0.0, 0.0]);
                     assert_eq!([p.width, p.seg[0][0], p.seg[0][1], p.seg[1][0], p.seg[1][1]], [f(&c[0][1]), f(&c[1][1]), f(&c[1][2]), f(&c[2][1]), f(&c[2][2])], "rate {rate} step {n}");
                 }
             }

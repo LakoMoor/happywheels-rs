@@ -293,9 +293,10 @@ impl Player {
 }
 
 impl Sim {
-    /// Camera centre (px): the rider's chest, or the level start when there is no character.
+    /// Camera centre (px): the centre of the session camera's view, or the level start when there is no character.
+    /// (Split screen keeps centring on each rider: its halves are narrower than the camera's dead zone.)
     fn camera(&self) -> [f32; 2] {
-        self.world.camera_focus_px().unwrap_or(self.level.info.start)
+        self.world.view_center_px().unwrap_or(self.level.info.start)
     }
 }
 

@@ -4005,6 +4005,7 @@ impl Heli {
         }
         self.com = vec![self.copter, self.magnet];
         self.target_ang = 0.0;
+        world.remove_camera_second_focus(self.magnet);
     }
 }
 

@@ -7,7 +7,7 @@
   <style>
     body { margin: 0; background: #242424; color: white; font: 16px system-ui, sans-serif; }
     main { max-width: 1000px; margin: auto; padding: 1rem; }
-    canvas { display: block; width: 100%; aspect-ratio: 16 / 9; background: #111; }
+    canvas { display: block; width: 100%; aspect-ratio: 9 / 5; background: #111; }
     .controls { display: flex; flex-wrap: wrap; align-items: center; gap: 1rem; margin: 1rem 0; }
     #status { min-height: 1.5em; }
   </style>
@@ -15,7 +15,7 @@
 <body>
   <main>
     <h1>Happy Wheels Rust — browser preview</h1>
-    <canvas id="game" width="960" height="540" tabindex="0" aria-label="Game screen"></canvas>
+    <canvas id="game" width="900" height="500" tabindex="0" aria-label="Game screen"></canvas>
     <div class="controls">
       <label>Load level XML <input id="level" type="file" accept=".xml,.txt,text/xml"></label>
       <label>Character <select id="character"></select></label>

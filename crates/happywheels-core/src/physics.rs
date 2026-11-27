@@ -627,6 +627,9 @@ pub struct World {
     sprays: Vec<Spray>,
     external_particles: bool,
     snow: Option<Spray>,
+    camera: Option<crate::camera::Camera>,
+    camera_released: Option<BodyId>,
+    camera_focus_body: Option<BodyId>,
     logs: Vec<Log>,
     toilets: Vec<Toilet>,
     glasses: Vec<Glass>,
@@ -727,6 +730,9 @@ impl World {
             sprays: Vec::new(),
             external_particles: false,
             snow: None,
+            camera: None,
+            camera_released: None,
+            camera_focus_body: None,
             logs: Vec::new(),
             toilets: Vec::new(),
             glasses: Vec::new(),
@@ -2398,6 +2404,77 @@ impl World {
     }
 
     pub fn step(&mut self) {
+        // `create`: the camera takes one step before any physics
+        if self.camera.is_none() {
+            self.step_camera(1.0);
+        }
+        self.step_physics();
+        // at 60 fps the front end steps the camera (and the particles) per display frame instead
+        if !self.external_particles {
+            self.step_camera(1.0);
+        }
+    }
+
+    fn camera_body(&self, body: BodyId) -> crate::camera::Focus {
+        let b = self.b.body(body);
+        crate::camera::Focus { body, position: b.xf.position, velocity: b.linear_velocity }
+    }
+
+    fn camera_inputs(&self) -> Option<(crate::camera::Focus, Option<usize>)> {
+        let character = self.character.as_ref()?;
+        let focus = character.heart.or_else(|| character.bodies.get(&crate::character::Part::Chest).copied())?;
+        let magnet = match self.bike.as_ref() {
+            Some(crate::vehicle::Vehicle::Heli(h)) => Some(h.magnet),
+            _ => None,
+        };
+        Some((self.camera_body(focus), magnet))
+    }
+
+    /// `Camera.step(dt)`; the particles' kill height and line offset come from it.
+    pub fn step_camera(&mut self, dt: f64) {
+        let Some((focus, magnet)) = self.camera_inputs() else { return };
+        self.camera_focus_body = Some(focus.body);
+        let mut camera = self.camera.unwrap_or_default();
+        let released = self.camera_released;
+        let second = magnet.filter(|_| released.is_none()).map(|m| self.camera_body(m));
+        let temp = released.map(|m| self.camera_body(m));
+        camera.step(focus, second, temp, dt);
+        self.apply_camera(camera);
+    }
+
+    fn apply_camera(&mut self, camera: crate::camera::Camera) {
+        self.camera = Some(camera);
+        self.blood.y_limit = camera.particle_limit;
+        self.blood.motion = camera.motion;
+    }
+
+    /// `removeSecondFocus` (the rider leaves the helicopter): ease away from the magnet, with a camera step of its own at once.
+    pub(crate) fn remove_camera_second_focus(&mut self, magnet: BodyId) {
+        self.camera_released = Some(magnet);
+        // the focus is the one of the last step (the doll is lent to its vehicle while ejecting)
+        if let (Some(mut camera), Some(focus)) = (self.camera, self.camera_focus_body) {
+            camera.start_easing();
+            camera.step(self.camera_body(focus), None, Some(self.camera_body(magnet)), 1.0);
+            self.apply_camera(camera);
+        }
+    }
+
+    /// The session camera; before the first step it is where `create` puts it.
+    pub fn camera(&self) -> Option<crate::camera::Camera> {
+        self.camera.or_else(|| {
+            let (focus, magnet) = self.camera_inputs()?;
+            let mut camera = crate::camera::Camera::default();
+            camera.step(focus, magnet.map(|m| self.camera_body(m)), None, 1.0);
+            Some(camera)
+        })
+    }
+
+    /// Centre of the 900 × 500 view in world px.
+    pub fn view_center_px(&self) -> Option<[f32; 2]> {
+        self.camera().map(|c| c.center().map(|v| v as f32))
+    }
+
+    fn step_physics(&mut self) {
         if let Some(mut doll) = self.character.take() {
             doll.check_vocals(self);
             self.character = Some(doll);
