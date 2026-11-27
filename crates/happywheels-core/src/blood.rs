@@ -463,14 +463,17 @@ mod oracle_line_draw_tests {
     #[test]
     fn line_blood_draws_like_the_original() {
         let doc: serde_json::Value = serde_json::from_str(include_str!("../../../tests/golden/blood-lines.json")).unwrap();
-        let v: serde_json::Value = serde_json::from_str(doc["result"]["value"].as_str().unwrap()).unwrap();
+        let lines: serde_json::Value = serde_json::from_str(doc["result"]["value"].as_str().unwrap()).unwrap();
+        // bloodSetting 3 (metaball): the same particle with a constant width (`analysis/blood-metaball.js`)
+        let meta: serde_json::Value = serde_json::from_str(include_str!("../../../tests/golden/blood-metaball.json")).unwrap();
+        let meta: serde_json::Value = serde_json::from_str(meta["result"]["value"].as_str().unwrap()).unwrap();
         let f = |x: &serde_json::Value| x.as_f64().unwrap();
-        for rate in [30.0, 60.0] {
-            let o = &v[format!("2_{rate}")];
+        for (v, setting, rate) in [(&lines, 2, 30.0), (&lines, 2, 60.0), (&meta, 3, 30.0), (&meta, 3, 60.0)] {
+            let o = &v[format!("{setting}_{rate}")];
             let dt = 30.0 / rate;
-            let mut ps: Vec<Particle> = o["init"].as_array().unwrap().iter().map(|p| Particle::from_points([f(&p[0]), f(&p[1])], [f(&p[2]), f(&p[3])], true)).collect();
+            let mut ps: Vec<Particle> = o["init"].as_array().unwrap().iter().map(|p| Particle::from_points([f(&p[0]), f(&p[1])], [f(&p[2]), f(&p[3])], setting == 2)).collect();
             // creation: the same `lastPos` at both rates, the velocity is 30/maxFPS of the 30 fps one
-            for (p, full) in ps.iter().zip(v["2_30"]["init"].as_array().unwrap()) {
+            for (p, full) in ps.iter().zip(v[format!("{setting}_30")]["init"].as_array().unwrap()) {
                 for k in 0..2 {
                     assert!((p.cur[k] - p.last[k] - (f(&full[k]) - f(&full[k + 2])) * dt).abs() < 1e-9, "creation velocity at {rate}");
                 }
