@@ -3359,7 +3359,7 @@ pub struct Heli {
     /// `bladeLocalCenter` = the blade box centre (copter-local).
     blade_center: Vec2,
     pub copter_smashed: bool,
-    blade_smashed: bool,
+    pub blade_smashed: bool,
     legs_present: [bool; 2],
     /// Bodies born from smashes (copter pieces, blade shards, legs).
     pub debris: Vec<BodyId>,
@@ -4045,6 +4045,11 @@ pub struct Dongle {
 }
 
 impl Grinder {
+    /// Which feet are still joined to the cart (`cartFoot1Joint`, `cartFoot2Joint`).
+    pub fn feet_held(&self) -> [bool; 2] {
+        [self.joints[2].is_some(), self.joints[3].is_some()]
+    }
+
     /// Limb-break reactions (original ~34025): shoulder/elbow breaks drop that hand's joint, hip/knee breaks that foot's;
     /// `checkEject` fires once all four are gone.
     pub fn limbs_broken(&mut self, world: &mut World, doll: &mut Ragdoll, broken: &[Limb]) {
@@ -5511,6 +5516,28 @@ pub struct Elf {
 }
 
 impl Elf {
+    /// While a foot rides the unicycle (`wheelFootNJoint`), `paint` eases that leg's clips from their bodies towards the pose on the stem
+    /// the faster the wheel stands still: the clip centre (m) and angle of `lowerLeg` (`lower`) or `upperLeg` of leg `side`.
+    pub fn leg_paint(&self, world: &World, side: usize, lower: bool) -> Option<([f64; 2], f64)> {
+        self.feet[side]?;
+        let (stem, wheel) = (self.stem?, self.wheel?);
+        let part = match (lower, side) {
+            (true, 0) => Part::LowerLeg1,
+            (true, _) => Part::LowerLeg2,
+            (false, 0) => Part::UpperLeg1,
+            (false, _) => Part::UpperLeg2,
+        };
+        let leg = world.b2().body(*self.doll.bodies.get(&part)?);
+        let (stem, wheel) = (world.b2().body(stem), world.b2().body(wheel));
+        let rest = 1.0 - (wheel.angular_velocity.abs() / 5.0).clamp(0.0, 1.0);
+        let (anchor, offset) = if lower { ([0.115, 0.5702], 0.305) } else { ([0.1553, 0.1994], -0.1952) };
+        let (sin, cos) = stem.sweep.a.sin_cos();
+        let (x, y) = (anchor[0] - stem.sweep.local_center.x, anchor[1] - stem.sweep.local_center.y);
+        let target = [stem.sweep.c.x + cos * x - sin * y, stem.sweep.c.y + sin * x + cos * y];
+        let centre = [leg.sweep.c.x - (leg.sweep.c.x - target[0]) * rest, leg.sweep.c.y - (leg.sweep.c.y - target[1]) * rest];
+        Some((centre, leg.sweep.a - (leg.sweep.a - (stem.sweep.a + offset)) * rest))
+    }
+
     fn attach(world: &mut World, name: &str, group: i16, start_px: [f32; 2], sleigh: BodyId, vertical_offset: f64, santa_wheel_radius: f64) -> Option<Self> {
         let guide = crate::character::subguide(name)?;
         let mut doll = Ragdoll::spawn_full_deferred(world, &guide, start_px, false, 50.0, group)?;

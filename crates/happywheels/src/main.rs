@@ -829,10 +829,11 @@ fn main() -> Result<()> {
             level.shapes.len(), level.special_count, level.joint_count, level.info.start
         );
         let mut world = happywheels_core::physics::World::from_level(&level);
-        if !world.spawn_bike(3, level.info.start) {
-            world.spawn_character(1, level.info.start);
+        let character = options.character.unwrap_or(3);
+        if !world.spawn_bike(character, level.info.start) {
+            world.spawn_character(character, level.info.start);
         }
-        let sprites = make_sprites(&options.assets, 3, &world, level.info.start);
+        let sprites = make_sprites(&options.assets, character, &world, level.info.start);
         let mut p2 = (options.players > 1).then(|| Player::new(&options.assets, &level, 4));
         if let Some(mut net) = connect_net(&options)? {
             // Headless lockstep run: scripted keys (host rides right, client rides right from step 10), both peers print the final positions —

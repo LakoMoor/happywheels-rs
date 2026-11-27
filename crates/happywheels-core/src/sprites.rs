@@ -24,10 +24,40 @@ struct Node {
     sx: f64,
     sy: f64,
     t: Option<String>,
+    /// Pixi skew (radians): Flash exports some rotations as skew.
+    #[serde(default)]
+    kx: f64,
+    #[serde(default)]
+    ky: f64,
     k: Vec<Node>,
     /// Children of the clip at its other frames (`gotoAndStop(n)`, n ≥ 2) for multi-frame parts.
     #[serde(default)]
     alt: HashMap<String, Vec<Node>>,
+    /// Invisible when the original has just built the character (`data/runtime-clips.json`).
+    #[serde(skip)]
+    hidden: bool,
+}
+
+/// What the original changes in a character's clips at run time, dumped from its display tree: the layer order of the parts
+/// (`addChildAt` in `createMovieClips`), nodes hidden at start and the positions it gives the `inner` nodes of vehicle bodies.
+#[derive(Debug, Deserialize)]
+struct RuntimeClip {
+    order: Vec<String>,
+    hidden: Vec<String>,
+    pos: HashMap<String, [f64; 2]>,
+}
+
+fn apply_runtime(nodes: &mut [Node], prefix: &str, runtime: &RuntimeClip) {
+    for n in nodes {
+        let path = if prefix.is_empty() { n.n.clone() } else { format!("{prefix}/{}", n.n) };
+        if runtime.hidden.contains(&path) {
+            n.hidden = true;
+        }
+        if let Some(&[x, y]) = runtime.pos.get(&path) {
+            (n.x, n.y) = (x, y);
+        }
+        apply_runtime(&mut n.k, &path, runtime);
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -122,7 +152,11 @@ impl SpriteAssets {
     }
 }
 
+#[derive(Clone)]
 struct Binding {
+    /// Draw only this nested clip (as its own layer), or everything but it.
+    only: Option<&'static str>,
+    without: Option<&'static str>,
     /// Index path to the part clip (one entry for top-level parts, more inside nested clips such as `kid`/`girl`).
     path: Vec<usize>,
     body: BodyId,
@@ -130,13 +164,23 @@ struct Binding {
     rest: M,
 }
 
+/// One drawn texture: its name and where the untrimmed texture's top-left, top-right and bottom-left corners land.
+pub type DrawnTexture = (String, [[f64; 2]; 3]);
+
 pub struct Sprites {
+    /// When set, every texture drawn is recorded here (compared with the original's display list in tests).
+    pub trace: std::cell::RefCell<Option<Vec<DrawnTexture>>>,
     clip: Vec<Node>,
+    /// Layer of each part clip (`name`, or `npc/name`), bottom first.
+    layers: HashMap<String, usize>,
+    /// Hidden node names to show while the current binding is drawn.
+    shown: std::cell::RefCell<Vec<&'static str>>,
+    /// Parts collected by `draw` to be painted in layer order.
+    queue: std::cell::RefCell<Option<Vec<Binding>>>,
     /// Atlas pages (a character has one, or several in `a`/`b`/`c` subfolders): frames and pixels.
     pages: Vec<(HashMap<String, AtlasFrame>, RgbaImage)>,
     bindings: Vec<Binding>,
     /// Clip-vs-physics layout offset (px) used only by `bind_in` (the c10 daughter's frame / son's basket, whose clips do not follow the COM rule).
-    shift: [f64; 2],
     /// City backdrop layers (bottom → top, with their parallax multiplier): baked buildings (`drawBuilding`).
     city: Vec<(f64, Vec<Building>)>,
     /// Extra node names hidden for the current `draw` (Santa's `ski`/`stem` children after those parts broke off).
@@ -166,6 +210,16 @@ struct Building {
 const HIDDEN: [&str; 6] = ["broken", "wound", "helmet", "kid", "metalShards", "shape"];
 
 impl Node {
+    /// The node's own transform with y position and scales as given (`rotation` and `skew` as pixi composes them).
+    fn matrix_with(&self, x: f64, y: f64, rot: f64, sx: f64, sy: f64) -> M {
+        let (a, b) = (rot + self.ky, rot - self.kx);
+        [a.cos() * sx, a.sin() * sx, -b.sin() * sy, b.cos() * sy, x, y]
+    }
+
+    fn matrix(&self) -> M {
+        self.matrix_with(self.x, self.y, self.r, self.sx, self.sy)
+    }
+
     fn name_is(&self, n: &str) -> bool {
         self.n == n
     }
@@ -179,7 +233,7 @@ impl Sprites {
 
     pub fn open_from(source: &SpriteAssets, index: u32) -> Option<Self> {
         let assets = source.root();
-        let clip: Vec<Node> = serde_json::from_str(match index {
+        let mut clip: Vec<Node> = serde_json::from_str(match index {
             1 => include_str!("../data/clip-c1.json"),
             2 => include_str!("../data/clip-c2.json"),
             3 => include_str!("../data/clip-c3.json"),
@@ -194,6 +248,10 @@ impl Sprites {
             _ => return None,
         })
         .ok()?;
+        let mut runtimes: HashMap<String, RuntimeClip> = serde_json::from_str(include_str!("../data/runtime-clips.json")).ok()?;
+        let runtime = runtimes.remove(&index.to_string())?;
+        apply_runtime(&mut clip, "", &runtime);
+        let layers = runtime.order.into_iter().enumerate().map(|(layer, name)| (name, layer)).collect();
         let dir = assets.join(format!("animate/character{index}"));
         let mut folders = vec![(dir.clone(), format!("character{index}"))];
         for sub in ["a", "b", "c"] {
@@ -239,7 +297,7 @@ impl Sprites {
                 pages.push((atlas.frames, img.to_rgba8()));
             }
         }
-        Some(Self { clip, pages, bindings: Vec::new(), shift: [0.0, 0.0], city: Vec::new(), hidden: Default::default(), show_wound: Default::default(), grind_mask: Default::default(), assets: source.clone(), npc: Default::default() })
+        Some(Self { trace: Default::default(), layers, shown: Default::default(), queue: Default::default(), clip, pages, bindings: Vec::new(), city: Vec::new(), hidden: Default::default(), show_wound: Default::default(), grind_mask: Default::default(), assets: source.clone(), npc: Default::default() })
     }
 
     /// Clip set of the NPC ragdolls: `NPCSprite1..12` (dumped from the oracle) with the atlas pages that hold their textures (game atlases and the
@@ -267,7 +325,7 @@ impl Sprites {
         let mut clip = Vec::new();
         for (i, s) in sources.iter().enumerate() {
             let f: File = serde_json::from_str(s).ok()?;
-            clip.push(Node { n: format!("npc{}", i + 1), x: 0.0, y: 0.0, r: 0.0, sx: 1.0, sy: 1.0, t: None, k: f.k, alt: HashMap::new() });
+            clip.push(Node { n: format!("npc{}", i + 1), x: 0.0, y: 0.0, r: 0.0, sx: 1.0, sy: 1.0, t: None, k: f.k, alt: HashMap::new(), hidden: false, kx: 0.0, ky: 0.0 });
         }
         let mut missing = Vec::new();
         Self::textures(&clip, &mut missing);
@@ -296,7 +354,7 @@ impl Sprites {
             missing.retain(|t| !atlas.frames.contains_key(t));
             pages.push((atlas.frames, img.to_rgba8()));
         }
-        Some(Self { clip, pages, bindings: Vec::new(), shift: [0.0, 0.0], city: Vec::new(), hidden: Default::default(), show_wound: Default::default(), grind_mask: Default::default(), assets: source.clone(), npc: Default::default() })
+        Some(Self { trace: Default::default(), layers: Default::default(), shown: Default::default(), queue: Default::default(), clip, pages, bindings: Vec::new(), city: Vec::new(), hidden: Default::default(), show_wound: Default::default(), grind_mask: Default::default(), assets: source.clone(), npc: Default::default() })
     }
 
     /// Draws the NPC of special `sp` (frame 1 of every part, `shape` guides hidden): each part clip sits at its body's centre of mass with the body's
@@ -357,24 +415,6 @@ impl Sprites {
         self.bind_origin(name, body);
     }
 
-    /// Rest-offset binding for a part nested inside clip `parent` (assumed unrotated and unscaled) — the c10 daughter's frame and son's basket sit
-    /// at their clip's rest layout, not at their body's centre of mass; `shift` comes from [`set_shift`](Self::set_shift).
-    pub fn bind_in(&mut self, world: &World, parent: &str, name: &str, body: BodyId, start: [f32; 2]) {
-        let Some(pi) = self.clip.iter().position(|c| c.n == parent) else { return };
-        let Some(ci) = self.clip[pi].k.iter().position(|c| c.n == name) else { return };
-        let (p, c) = (&self.clip[pi], &self.clip[pi].k[ci]);
-        let Some(inv) = invert(body_matrix(world, body)) else { return };
-        let origin = local(f64::from(start[0]) - self.shift[0], f64::from(start[1]) - self.shift[1], 0.0, 0.5, 0.5);
-        let world_part = mul(origin, mul(local(p.x, p.y, 0.0, 1.0, 1.0), local(c.x, c.y, c.r, c.sx, c.sy)));
-        self.bindings.push(Binding { path: vec![pi, ci], body, rest: mul(inv, world_part) });
-    }
-
-    /// Measures the clip-vs-physics layout offset from top-level clip `name` and its body (call before `bind_in`).
-    fn set_shift(&mut self, world: &World, name: &str, body: BodyId, start: [f32; 2]) {
-        let (Some(c), Some(p)) = (self.clip.iter().find(|c| c.n == name), world.body_center_px(body)) else { return };
-        self.shift = [f64::from(start[0]) + c.x * 0.5 - f64::from(p[0]), f64::from(start[1]) + c.y * 0.5 - f64::from(p[1])];
-    }
-
     /// Parallax backdrop of the "green hills" level backdrop (`bg='1'`; clips `green_sky_backdrop`, `green_backdrop3/2/1`, bottom to top). The layers
     /// are plain clip trees drawn with [`draw_backdrop`](Self::draw_backdrop); `assets` is the original asset root.
     pub fn open_backdrop(assets: &Path) -> Option<Self> {
@@ -395,7 +435,7 @@ impl Sprites {
         ];
         let clip: Vec<Node> = layers
             .iter()
-            .map(|s| serde_json::from_str::<File>(s).ok().map(|f| Node { n: "layer".into(), x: 0.0, y: 0.0, r: 0.0, sx: 1.0, sy: 1.0, t: None, k: f.k, alt: HashMap::new() }))
+            .map(|s| serde_json::from_str::<File>(s).ok().map(|f| Node { n: "layer".into(), x: 0.0, y: 0.0, r: 0.0, sx: 1.0, sy: 1.0, t: None, k: f.k, alt: HashMap::new(), hidden: false, kx: 0.0, ky: 0.0 }))
             .collect::<Option<_>>()?;
         let mut pages = Vec::new();
         for i in 1..=3 {
@@ -408,7 +448,7 @@ impl Sprites {
         if pages.is_empty() {
             return None;
         }
-        Some(Self { clip, pages, bindings: Vec::new(), shift: [0.0, 0.0], city: Vec::new(), hidden: Default::default(), show_wound: Default::default(), grind_mask: Default::default(), assets: source.clone(), npc: Default::default() })
+        Some(Self { trace: Default::default(), layers: Default::default(), shown: Default::default(), queue: Default::default(), clip, pages, bindings: Vec::new(), city: Vec::new(), hidden: Default::default(), show_wound: Default::default(), grind_mask: Default::default(), assets: source.clone(), npc: Default::default() })
     }
 
     /// City backdrop (`bg='2'`): `city_bd1` (fixed sky/clouds) below two layers of baked buildings (`backdrop2`: multiplier .25, blur 5;
@@ -425,7 +465,7 @@ impl Sprites {
         let load = |s: &str| serde_json::from_str::<File>(s).ok();
         let (l1, l2, sky) = (load(include_str!("../data/backdrop-city-backdrop1.json"))?, load(include_str!("../data/backdrop-city-backdrop2.json"))?, load(include_str!("../data/backdrop-city-city_bd1.json"))?);
         let mut s = Self::open_backdrop_from(source)?;
-        s.clip = vec![Node { n: "layer".into(), x: 0.0, y: 0.0, r: 0.0, sx: 1.0, sy: 1.0, t: None, k: sky.k, alt: HashMap::new() }];
+        s.clip = vec![Node { n: "layer".into(), x: 0.0, y: 0.0, r: 0.0, sx: 1.0, sy: 1.0, t: None, k: sky.k, alt: HashMap::new(), hidden: false, kx: 0.0, ky: 0.0 }];
         // (W, k, duplicate offset) per building b1..b4
         let near = [(90.0, 88.0, Some(5000.0)), (140.0, 90.0, Some(5000.0)), (60.0, 102.0, Some(5000.0)), (160.0, 101.0, Some(5000.0))];
         let far = [(90.0, 88.0, None), (40.0, 50.0, Some(2500.0)), (46.0, 50.0, Some(2500.0)), (15.0, 50.0, Some(2500.0))];
@@ -540,7 +580,7 @@ impl Sprites {
     pub fn bind_origin(&mut self, name: &str, body: BodyId) {
         let Some(part) = self.clip.iter().position(|c| c.name_is(name)) else { return };
         let c = &self.clip[part];
-        self.bindings.push(Binding { path: vec![part], body, rest: local(0.0, 0.0, 0.0, 0.5 * c.sx, 0.5 * c.sy) });
+        self.bindings.push(Binding { only: None, without: None, path: vec![part], body, rest: local(0.0, 0.0, 0.0, 0.5 * c.sx, 0.5 * c.sy) });
     }
 
     /// [`bind_origin`](Self::bind_origin) for a part nested one level down inside clip `parent` (`kid`, `girl`).
@@ -548,7 +588,7 @@ impl Sprites {
         let Some(pi) = self.clip.iter().position(|c| c.n == parent) else { return };
         let Some(ci) = self.clip[pi].k.iter().position(|c| c.n == name) else { return };
         let c = &self.clip[pi].k[ci];
-        self.bindings.push(Binding { path: vec![pi, ci], body, rest: local(0.0, 0.0, 0.0, 0.5 * c.sx, 0.5 * c.sy) });
+        self.bindings.push(Binding { only: None, without: None, path: vec![pi, ci], body, rest: local(0.0, 0.0, 0.0, 0.5 * c.sx, 0.5 * c.sy) });
     }
 
     /// Depth-first path to the first clip called `name` (skipping `shapeGuide`).
@@ -577,7 +617,7 @@ impl Sprites {
             node = &node.k[i];
         }
         let rest = local(0.0, 0.0, 0.0, 0.5 * node.sx, 0.5 * node.sy);
-        self.bindings.push(Binding { path, body, rest });
+        self.bindings.push(Binding { only: None, without: None, path, body, rest });
     }
 
     /// Binds the eleven limbs of `doll` to the clips named like the original's parts, inside `parent` when given.
@@ -618,6 +658,7 @@ impl Sprites {
             Some(Vehicle::Bike(b)) => {
                 if let Some(k) = b.kid.as_ref() {
                     self.bind_ragdoll(&k.doll, Some("kid"));
+                    self.bind_origin_in("kid", "seat", k.seat);
                 }
             }
             Some(Vehicle::Dirt(d)) => {
@@ -656,11 +697,8 @@ impl Sprites {
             let (frame, wheel, gear, basket) = (d.frame, d.wheel, d.gear, s.basket);
             self.bind_origin_in("daughter", "wheel", wheel);
             self.bind_origin_in("daughter", "gear", gear);
-            if let Some(d) = Some(&f.dad) {
-                self.set_shift(world, "backWheel", d.back_wheel, start);
-            }
-            self.bind_in(world, "daughter", "frame", frame, start);
-            self.bind_in(world, "son", "basket", basket, start);
+            self.bind_origin_in("daughter", "frame", frame);
+            self.bind_origin_in("son", "basket", basket);
         }
         let bike = match world.bike.as_ref() {
             Some(Vehicle::Bike(b)) => Some(b),
@@ -698,6 +736,14 @@ impl Sprites {
             Some(Vehicle::Cart(c)) => {
                 let (body, shaft, back, front) = (c.body, c.shaft, c.back_wheel, c.front_wheel);
                 self.bind(world, "main", body, start);
+                // `createMovieClips` lifts `main.inner.cart` into its own layer above the near lower arm.
+                if let Some(mut front) = self.bindings.last().cloned() {
+                    if let Some(main) = self.bindings.last_mut() {
+                        main.without = Some("cart");
+                    }
+                    front.only = Some("cart");
+                    self.bindings.push(front);
+                }
                 self.bind(world, "shaft", shaft, start);
                 let boxes = c.groceries.clone();
                 for (i, b) in boxes.into_iter().enumerate() {
@@ -711,7 +757,7 @@ impl Sprites {
         if let Some(Vehicle::Segway(s)) = world.bike.as_ref() {
             let (frame, wheel) = (s.frame, s.wheel);
             self.bind(world, "frame", frame, start);
-            self.bind(world, "wheelCover", frame, start);
+            self.bind_origin("wheelCover", s.stand);
             self.bind_origin("wheel", wheel);
         }
         if let Some(Vehicle::Chair(c)) = world.bike.as_ref() {
@@ -720,6 +766,8 @@ impl Sprites {
             self.bind(world, "chair", chair, start);
             self.bind_origin("bigWheel", big);
             self.bind_origin("smallWheel", small);
+            // `paint` keeps the intact jet at the big wheel's centre with the chair's angle (+ `jetAngle`).
+            self.bind_origin("jet", big);
         }
     }
 
@@ -984,7 +1032,7 @@ impl Sprites {
                     if n.n == "blades" && sp.kind == 8 {
                         let f = (world.frame() % 6) as usize + 1;
                         let kids = if f > 1 { n.alt.get(&f.to_string()).unwrap_or(&n.k) } else { &n.k };
-                        let bm = mul(m, local(n.x, n.y, n.r, n.sx, n.sy));
+                        let bm = mul(m, n.matrix());
                         for k in kids {
                             self.draw_node(img, k, bm);
                         }
@@ -1072,7 +1120,7 @@ impl Sprites {
                 let m = mul(cam, local(x, y, a, 1.0, 1.0));
                 for n in &guns[usize::from(!harpoon)] {
                     if n.n == "turret" {
-                        let tm = mul(m, local(n.x, n.y, turret, n.sx, n.sy));
+                        let tm = mul(m, n.matrix_with(n.x, n.y, turret, n.sx, n.sy));
                         for k in &n.k {
                             if k.n != "light" {
                                 self.draw_node(img, k, tm);
@@ -1107,7 +1155,7 @@ impl Sprites {
                             if burning {
                                 let fs = 0.95 * accel + 0.05;
                                 for k in &n.k {
-                                    self.draw_node(img, k, mul(m, local(n.x, n.y, n.r, fs, fs)));
+                                    self.draw_node(img, k, mul(m, n.matrix_with(n.x, n.y, n.r, fs, fs)));
                                 }
                             }
                         } else {
@@ -1138,7 +1186,7 @@ impl Sprites {
                 let place = |s: &Self, img: &mut RgbaImage, clip: &[Node], m: M| {
                     for n in clip {
                         let mx = if rev && matches!(n.n.as_str(), "nub" | "timer" | "arrow") { -1.0 } else { 1.0 };
-                        let nm = mul(m, local(n.x * mx, n.y, n.r, n.sx, n.sy));
+                        let nm = mul(m, n.matrix_with(n.x * mx, n.y, n.r, n.sx, n.sy));
                         if let Some(tex) = &n.t {
                             s.blit(img, tex, nm);
                         }
@@ -1591,6 +1639,9 @@ impl Sprites {
         {
             let mut h = self.hidden.borrow_mut();
             h.clear();
+            if matches!(world.bike.as_ref(), Some(crate::vehicle::Vehicle::Heli(heli)) if heli.blade_smashed) {
+                h.push("propeller");
+            }
             if let Some(crate::vehicle::Vehicle::Santa(s)) = world.bike.as_ref() {
                 if s.wheels_gone {
                     h.push("ski");
@@ -1600,6 +1651,7 @@ impl Sprites {
                 }
             }
         }
+        *self.queue.borrow_mut() = Some(Vec::new());
         for b in &self.bindings {
             self.draw_binding(img, world, camera_offset, b);
         }
@@ -1666,7 +1718,6 @@ impl Sprites {
         if let Some(doll) = world.character.as_ref() {
             self.draw_doll_extras(img, world, camera_offset, doll, None);
         }
-        self.draw_shards(img, world, camera_offset);
         if let Some(crate::vehicle::Vehicle::Family(f)) = world.bike.as_ref() {
             for (&body, name) in f.daughter.debris.iter().zip(["fork", "brokenFrame", "seat"]) {
                 self.draw_loose_in(img, world, camera_offset, "daughter", name, body);
@@ -1677,6 +1728,29 @@ impl Sprites {
                 self.draw_doll_extras(img, world, camera_offset, doll, Some(name));
             }
         }
+        let mut parts = self.queue.borrow_mut().take().unwrap_or_default();
+        parts.sort_by_key(|b| match b.only {
+            Some(_) => self.layers.get("lowerArm1").map_or((usize::MAX, 1), |&l| (l, 1)),
+            None => (self.layer(&b.path), 0),
+        });
+        for b in &parts {
+            self.draw_binding(img, world, camera_offset, b);
+        }
+        self.draw_shards(img, world, camera_offset);
+    }
+
+    fn layer(&self, path: &[usize]) -> usize {
+        let top = &self.clip[path[0]];
+        let mut node = top;
+        for &i in &path[1..] {
+            node = &node.k[i];
+        }
+        let key = if matches!(top.n.as_str(), "kid" | "girl" | "daughter" | "son" | "elf1" | "elf2") && path.len() > 1 {
+            format!("{}/{}", top.n, top.k[path[1]].n)
+        } else {
+            node.n.clone()
+        };
+        self.layers.get(&key).copied().unwrap_or(usize::MAX)
     }
 
     /// Sprite particles of the shard bursts (`createPointBurst`): the particle's frame of its debris clip, centred on the particle, natural clip scale.
@@ -1769,7 +1843,7 @@ impl Sprites {
         let Some(pi) = self.clip.iter().position(|c| c.n == parent) else { return };
         let Some(ci) = self.clip[pi].k.iter().position(|c| c.n == name) else { return };
         let c = &self.clip[pi].k[ci];
-        let b = Binding { path: vec![pi, ci], body, rest: local(0.0, 0.0, 0.0, 0.5 * c.sx, 0.5 * c.sy) };
+        let b = Binding { only: None, without: None, path: vec![pi, ci], body, rest: local(0.0, 0.0, 0.0, 0.5 * c.sx, 0.5 * c.sy) };
         self.draw_binding(img, world, camera_offset, &b);
     }
 
@@ -1777,12 +1851,16 @@ impl Sprites {
     fn draw_loose(&self, img: &mut RgbaImage, world: &World, camera_offset: (f32, f32), name: &str, body: BodyId) {
         let Some(part) = self.clip.iter().position(|c| c.n == name) else { return };
         let c = &self.clip[part];
-        let b = Binding { path: vec![part], body, rest: local(0.0, 0.0, 0.0, 0.5 * c.sx, 0.5 * c.sy) };
+        let b = Binding { only: None, without: None, path: vec![part], body, rest: local(0.0, 0.0, 0.0, 0.5 * c.sx, 0.5 * c.sy) };
         self.draw_binding(img, world, camera_offset, &b);
     }
 
     fn draw_binding(&self, img: &mut RgbaImage, world: &World, camera_offset: (f32, f32), b: &Binding) {
         if world.body_center_px(b.body).is_none() {
+            return;
+        }
+        if let Some(queue) = self.queue.borrow_mut().as_mut() {
+            queue.push(b.clone());
             return;
         }
         // `skiSmash` on an intact sleigh re-centres the clip (`sleighMC.inner` follows the new local centre): keep it fixed to the body origin.
@@ -1793,7 +1871,45 @@ impl Sprites {
             }
             _ => local(0.0, 0.0, 0.0, 1.0, 1.0),
         };
-        let g = mul(local(f64::from(camera_offset.0), f64::from(camera_offset.1), 0.0, 1.0, 1.0), mul(body_matrix(world, b.body), mul(recentre, b.rest)));
+        if let Some(crate::vehicle::Vehicle::Grinder(g)) = world.bike.as_ref() {
+            if b.path.len() == 1 && !g.ejected {
+                let held = match self.clip[b.path[0]].n.as_str() {
+                    "lowerLeg1" => g.feet_held()[0],
+                    "lowerLeg2" => g.feet_held()[1],
+                    _ => false,
+                };
+                if held {
+                    return;
+                }
+            }
+        }
+        let mut placed = body_matrix(world, b.body);
+        if let Some(crate::vehicle::Vehicle::Chair(c)) = world.bike.as_ref() {
+            if b.body == c.big_wheel && self.clip[b.path[0]].n == "jet" {
+                if c.chair_smashed {
+                    return;
+                }
+                placed = local(placed[4], placed[5], f64::from(world.body_angle(c.chair)) + c.jet_angle, 1.0, 1.0);
+            }
+        }
+        if let (Some(crate::vehicle::Vehicle::Santa(s)), [top, part]) = (world.bike.as_ref(), b.path.as_slice()) {
+            let elf = match self.clip[*top].n.as_str() {
+                "elf1" => Some(&s.elf1),
+                "elf2" => Some(&s.elf2),
+                _ => None,
+            };
+            let leg = match self.clip[*top].k[*part].n.as_str() {
+                "lowerLeg1" => Some((0, true)),
+                "lowerLeg2" => Some((1, true)),
+                "upperLeg1" => Some((0, false)),
+                "upperLeg2" => Some((1, false)),
+                _ => None,
+            };
+            if let Some(([x, y], angle)) = elf.zip(leg).and_then(|(elf, (side, lower))| elf.leg_paint(world, side, lower)) {
+                placed = local(x * 62.5, y * 62.5, angle, 1.0, 1.0);
+            }
+        }
+        let g = mul(local(f64::from(camera_offset.0), f64::from(camera_offset.1), 0.0, 1.0, 1.0), mul(placed, mul(recentre, b.rest)));
         let mut node = &self.clip[b.path[0]];
         for &i in &b.path[1..] {
             node = &node.k[i];
@@ -1810,28 +1926,78 @@ impl Sprites {
         }
         let children = if frame > 1 { node.alt.get(&frame.to_string()).unwrap_or(&node.k) } else { &node.k };
         self.show_wound.set(owner.is_some_and(|d| d.part_wound(&node.n)));
+        // (the pogo man's parts sit deeper in one assembled skeleton)
+        let pogo = matches!(world.bike.as_ref(), Some(crate::vehicle::Vehicle::Pogo(_)));
+        self.reveal(world, owner.or_else(|| world.character.as_ref().filter(|_| pogo)));
         // a body the mower is grinding is clipped by `targetMaskHolder`'s rect
         self.set_grind_mask(world, b.body, local(f64::from(camera_offset.0), f64::from(camera_offset.1), 0.0, 1.0, 1.0));
-        for child in children {
-            self.draw_node(img, child, g);
+        if let Some(name) = b.only {
+            if let Some((child, parent)) = Self::nested(children, name, g) {
+                self.draw_node(img, child, parent);
+            }
+        } else {
+            if let Some(name) = b.without {
+                self.hidden.borrow_mut().push(name);
+            }
+            for child in children {
+                self.draw_node(img, child, g);
+            }
+            if let Some(name) = b.without {
+                self.hidden.borrow_mut().retain(|&n| n != name);
+            }
         }
         self.grind_mask.set(None);
         self.show_wound.set(false);
+        self.shown.borrow_mut().clear();
+    }
+
+    /// The node called `name` under `nodes`, with the transform of its parent.
+    fn nested<'a>(nodes: &'a [Node], name: &str, parent: M) -> Option<(&'a Node, M)> {
+        nodes.iter().find_map(|n| if n.n == name { Some((n, parent)) } else { Self::nested(&n.k, name, mul(parent, n.matrix())) })
+    }
+
+    /// Hidden clips the original makes visible in the current state (its head `helmet` is drawn until it comes off).
+    fn reveal(&self, world: &World, owner: Option<&crate::character::Ragdoll>) {
+        use crate::vehicle::Vehicle;
+        let mut shown = self.shown.borrow_mut();
+        shown.clear();
+        if let Some(doll) = owner {
+            if doll.helmet_on || doll.helmet_geo.is_empty() {
+                shown.push("helmet");
+            }
+            if doll.broken.contains(&crate::character::Limb::Neck) {
+                shown.push("neck");
+            }
+        }
+        match world.bike.as_ref() {
+            Some(Vehicle::Chair(c)) if c.firing => shown.push("flames"),
+            Some(Vehicle::Heli(h)) => {
+                if h.magnetized {
+                    shown.push("lights");
+                }
+                if h.blade_smashed {
+                    shown.push("brokenPropeller");
+                }
+            }
+            _ => {}
+        }
     }
 
     /// `draw_node` with the node's y and/or vertical scale replaced (runtime-resized clips).
     fn draw_node_at(&self, img: &mut RgbaImage, n: &Node, parent: M, y: Option<f64>, sy: Option<f64>) {
-        let m = mul(parent, local(n.x, y.unwrap_or(n.y), n.r, n.sx, sy.unwrap_or(n.sy)));
+        let m = mul(parent, n.matrix_with(n.x, y.unwrap_or(n.y), n.r, n.sx, sy.unwrap_or(n.sy)));
         for k in &n.k {
             self.draw_node(img, k, m);
         }
     }
 
     fn draw_node(&self, img: &mut RgbaImage, n: &Node, parent: M) {
-        if (HIDDEN.contains(&n.n.as_str()) && !(n.n == "wound" && self.show_wound.get())) || self.hidden.borrow().contains(&n.n.as_str()) {
+        let name = n.n.as_str();
+        let shown = (name == "wound" && self.show_wound.get()) || self.shown.borrow().contains(&name);
+        if ((n.hidden || HIDDEN.contains(&name)) && !shown) || self.hidden.borrow().contains(&name) {
             return;
         }
-        let m = mul(parent, local(n.x, n.y, n.r, n.sx, n.sy));
+        let m = mul(parent, n.matrix());
         if let Some(t) = &n.t {
             self.blit(img, t, m);
         }
@@ -1845,6 +2011,11 @@ impl Sprites {
         // Leaf textures are authored at 3× (scale .33); frame pixels are `ratio` of the original source pixels.
         let ratio = f.orig.map_or(1.0, |o| f.source.w / o.w);
         let ratio_y = f.orig.map_or(1.0, |o| f.source.h / o.h);
+        if let Some(trace) = self.trace.borrow_mut().as_mut() {
+            let at = |x: f64, y: f64| [m[0] * x + m[2] * y + m[4], m[1] * x + m[3] * y + m[5]];
+            let (ow, oh) = (f.source.w / ratio, f.source.h / ratio_y);
+            trace.push((name.to_string(), [at(0.0, 0.0), at(ow, 0.0), at(0.0, oh)]));
+        }
         let (w, h) = (f.sprite_source.w, f.sprite_source.h);
         // texture px (small atlas) → source px (÷ratio) → clip transform
         let full = mul(m, local(f.sprite_source.x / ratio, f.sprite_source.y / ratio_y, 0.0, 1.0 / ratio, 1.0 / ratio_y));
