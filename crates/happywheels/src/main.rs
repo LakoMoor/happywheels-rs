@@ -238,11 +238,33 @@ impl Renderer {
                 multiview_mask: None,
             });
             pass.set_pipeline(&self.pipeline);
+            let [x, y, w, h] = letterbox(self.texture_size, (self.config.width, self.config.height));
+            pass.set_viewport(x, y, w, h, 0.0, 1.0);
             pass.set_bind_group(0, &self.bind_group, &[]);
             pass.draw(0..3, 0..1);
         }
         self.queue.submit([encoder.finish()]);
         self.queue.present(frame);
+    }
+}
+
+/// Where a frame of size `frame` goes in a `surface`: as large as fits with its aspect ratio, centred (x, y, width, height).
+fn letterbox(frame: (u32, u32), surface: (u32, u32)) -> [f32; 4] {
+    let (fw, fh) = (frame.0.max(1) as f32, frame.1.max(1) as f32);
+    let (sw, sh) = (surface.0 as f32, surface.1 as f32);
+    let scale = (sw / fw).min(sh / fh);
+    let (w, h) = (fw * scale, fh * scale);
+    [(sw - w) / 2.0, (sh - h) / 2.0, w, h]
+}
+
+#[cfg(test)]
+mod letterbox_tests {
+    #[test]
+    fn frames_keep_their_aspect_and_are_centred() {
+        assert_eq!(super::letterbox((900, 500), (1800, 1000)), [0.0, 0.0, 1800.0, 1000.0]);
+        assert_eq!(super::letterbox((900, 500), (900, 700)), [0.0, 100.0, 900.0, 500.0]);
+        assert_eq!(super::letterbox((900, 500), (1000, 500)), [50.0, 0.0, 900.0, 500.0]);
+        assert_eq!(super::letterbox((1280, 720), (1280, 720)), [0.0, 0.0, 1280.0, 720.0]);
     }
 }
 
@@ -391,6 +413,7 @@ struct App {
     assets: PathBuf,
     /// Local players (1 or 2; `--players N`).
     players: usize,
+    fps60: bool,
     net: Option<Net>,
 }
 
@@ -399,6 +422,7 @@ impl App {
         Self {
             assets,
             players: 1,
+            fps60: false,
             net: None,
             sim: None,
             audio: audio::Audio::new(),
@@ -427,7 +451,8 @@ impl App {
     fn current_frame(&mut self, w: u32, h: u32) -> Result<RgbaImage> {
         match &self.sim {
             Some(sim) => Ok(match &sim.p2 {
-                None => happywheels_core::render::render_level_scene(&sim.level, &sim.world, w.max(1), h.max(1), sim.camera(), sim.sprites.as_ref(), sim.backdrop.as_ref()),
+                // the original's 900 × 500 view, stretched into the window by the renderer
+                None => happywheels_core::render::render_level_scene(&sim.level, &sim.world, 900, 500, sim.camera(), sim.sprites.as_ref(), sim.backdrop.as_ref()),
                 Some(p2) => render_split(&sim.level, &sim.world, sim.sprites.as_ref(), p2, sim.backdrop.as_ref(), w, h),
             }),
             None => self.menu.render(w, h),
@@ -506,9 +531,18 @@ impl ApplicationHandler for App {
                     }
                 }
             }
-            sim.world.drive(drive);
-            sim.world.set_rider_keys(happywheels_core::vehicle::Keys { left: k[0], right: k[1], up: k[2], down: k[3], space: k[4], z: k[5], shift: k[6], ctrl: k[7] });
-            sim.world.step();
+            let keys = happywheels_core::vehicle::Keys { left: k[0], right: k[1], up: k[2], down: k[3], space: k[4], z: k[5], shift: k[6], ctrl: k[7] };
+            // `--fps60` (one player): display frames of 1/60 s with physics on every other one
+            let sixty = self.fps60 && sim.p2.is_none();
+            if !sixty || sim.world.next_tick60_steps() {
+                sim.world.drive(drive);
+            }
+            if sixty {
+                sim.world.tick60(keys);
+            } else {
+                sim.world.set_rider_keys(keys);
+                sim.world.step();
+            }
             if let Some(p2) = &mut sim.p2 {
                 p2.step();
             }
@@ -529,11 +563,16 @@ impl ApplicationHandler for App {
                 for sound in &trigger_sounds { audio.play_trigger(sound, listener); }
                 audio.set_loops(&sim.world.loops, listener);
             }
-            sim.next_step += std::time::Duration::from_secs_f64(happywheels_core::physics::TIME_STEP);
+            sim.next_step += std::time::Duration::from_secs_f64(happywheels_core::physics::TIME_STEP / if sixty { 2.0 } else { 1.0 });
             if sim.next_step < now {
                 sim.next_step = now; // don't spiral after a stall
             }
-            if let Err(error) = self.refresh_frame() {
+            let saved = if sixty { sim.world.show_tick60() } else { None };
+            let refreshed = self.refresh_frame();
+            if let (Some(saved), Some(sim)) = (saved, &mut self.sim) {
+                sim.world.b2_mut().restore_poses(&saved);
+            }
+            if let Err(error) = refreshed {
                 self.fail(event_loop, error);
                 return;
             }
@@ -702,6 +741,7 @@ struct Options {
     sim_steps: u32,
     level_png: Option<PathBuf>,
     window: bool,
+    fps60: bool,
     players: usize,
     host: Option<u16>,
     join: Option<String>,
@@ -720,6 +760,7 @@ fn parse_options() -> Result<Option<Options>> {
         sim_steps: 90,
         level_png: None,
         window: false,
+        fps60: false,
         players: 1,
         host: None,
         join: None,
@@ -744,6 +785,7 @@ fn parse_options() -> Result<Option<Options>> {
             "--join" => options.join = Some(args.next().context("--join needs HOST:PORT")?),
             "--level-png" => options.level_png = Some(PathBuf::from(args.next().context("--level-png needs a file")?)),
             "--window" => options.window = true,
+            "--fps60" => options.fps60 = true,
             "--steps" => options.sim_steps = args.next().context("--steps needs N")?.parse().context("invalid --steps")?,
             "--frames" => {
                 let value = args.next().context("--frames needs a positive integer")?;
@@ -755,7 +797,7 @@ fn parse_options() -> Result<Option<Options>> {
             }
             "--help" | "-h" => {
                 println!(
-                    "happywheels [--assets DIR] [--check-assets] [--screenshot FILE] [--frames N] [--level FILE.xml [--steps N] [--level-png F] [--window]]"
+                    "happywheels [--assets DIR] [--check-assets] [--screenshot FILE] [--frames N] [--level FILE.xml [--steps N] [--level-png F] [--window]] [--fps60]"
                 );
                 return Ok(None);
             }
@@ -852,6 +894,7 @@ fn main() -> Result<()> {
     let menu = Menu::load(&assets)?;
     let mut app = App::new(menu, options.frame_limit, options.assets.clone());
     app.players = options.players;
+    app.fps60 = options.fps60;
     if let Some(net) = connect_net(&options)? {
         app.players = 2;
         app.net = Some(net);

@@ -105,7 +105,8 @@ fn fill<T: SizedSample + FromSample<f32>>(mixer: &Mutex<Mixer>, out: &mut [T], c
         let mut mono = 0.0f32;
         for voice in voices.iter_mut() {
             let i = voice.at as usize;
-            if i + 1 < voice.end {
+            // a finished voice has `at = f64::MAX` (so `i = usize::MAX`) until it is dropped after the buffer
+            if i < voice.end.saturating_sub(1) {
                 let f = (voice.at - i as f64) as f32;
                 let v = (samples[i] * (1.0 - f) + samples[i + 1] * f) * voice.gain;
                 let gains = stereo_gains(voice.pan);
@@ -255,5 +256,20 @@ mod tests {
         fill(&mixer(1.0), &mut mono, 1);
         assert_eq!(mono[0], 0.5);
         assert_eq!(area_pan([500.0, 0.0], [0.0, 0.0]), 0.5);
+    }
+}
+
+#[cfg(test)]
+mod finished_voice_tests {
+    use super::*;
+
+    #[test]
+    fn a_voice_that_ends_inside_a_buffer_does_not_crash_the_mixer() {
+        let mixer = Mutex::new(Mixer { samples: vec![0.5; 8], voices: vec![Voice { end: 4, at: 0.0, gain: 1.0, pan: 0.0 }], loops: Vec::new(), step: 1.0, fade: 0.1 });
+        let mut out = [0.0f32; 32];
+        fill(&mixer, &mut out, 2);
+        assert!(out[0] > 0.0);
+        assert!(out[8..].iter().all(|&s| s == 0.0));
+        assert!(mixer.lock().unwrap().voices.is_empty());
     }
 }
