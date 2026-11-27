@@ -2445,6 +2445,16 @@ impl World {
             }
             self.bike = Some(bike);
         }
+        if let (Some(doll), Some(vehicle)) = (self.character.as_mut(), self.bike.as_ref()) {
+            use crate::vehicle::Vehicle as V;
+            if vehicle.ejected() && !doll.eject_noted {
+                doll.eject_noted = true;
+                // the bikes' `eject` leaves the hands as they are
+                if matches!(vehicle, V::Chair(_) | V::Segway(_) | V::Cart(_) | V::Mower(_) | V::Grinder(_) | V::Santa(_) | V::Pogo(_) | V::Heli(_)) {
+                    doll.hands_open = true;
+                }
+            }
+        }
         // at 60 fps the front end steps the camera (and the particles) per display frame instead
         if !self.external_particles {
             self.step_camera(1.0);

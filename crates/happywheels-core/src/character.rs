@@ -188,6 +188,10 @@ pub struct Ragdoll {
     pub broken: Vec<Limb>,
     /// Space held: hands grab what they touch (`startGrab`).
     pub grabbing: bool,
+    /// `lowerArm*MC.hand` shows its open frame: after `releaseGrip`, or after the eject of the vehicles that open the hands.
+    pub hands_open: bool,
+    /// The eject has already been seen by [`World::step`](crate::physics::World::step).
+    pub(crate) eject_noted: bool,
     /// Grip joints of the two hands (`gripJoint1/2`).
     pub grips: [Option<usize>; 2],
     /// Collision group of the character (`groupID`, −1 for the player, −2/−3 for sub-characters).
@@ -392,7 +396,7 @@ impl Ragdoll {
         }
         let joint_ids = if defer { Vec::new() } else { Self::make_joints(b, guide, start, &bodies)? };
         let joints = LIMB_ORDER.iter().copied().zip(joint_ids).collect();
-        Some(Self { deferred: None, poses: PoseSet::Base, bodies, joints, pose: 0, cancel: false, broken: Vec::new(), grabbing: false, grips: [None; 2], group, head_chunk_radius: guide.get("headChunkShape").map_or(0.0, |g| g[3] * 5.0 / CHARACTER_SCALE), chest_chunk_radius: guide.get("chestChunkShape").map_or(0.0, |g| g[3] * 5.0 / CHARACTER_SCALE), pelvis_chunk_radius: guide.get("pelvisChunkShape").map_or(0.0, |g| g[3] * 5.0 / CHARACTER_SCALE), foot_guide: guide.get("footShape").copied().unwrap_or_default(), ref_scale, chunks: Vec::new(), chunk_names: Vec::new(), brain: None, heart: None, feet: [None; 2], dead: false, helmet_geo: (1..=4).map(|k| guide.get(&format!("helmetVert{k}")).map(|g| Vec2::new(g[0] / CHARACTER_SCALE, g[1] / CHARACTER_SCALE))).collect::<Option<Vec<_>>>().unwrap_or_default(), helmet_on: guide.get("helmetVert1").is_some(), helmet: None, sev: Vec::new(), sev_limbs: Vec::new(), ground: Vec::new(), pelvis_smashed: false, blood_flows: Vec::new(), tag: "Char3", voices: [None; 6], voice_until: 0, voice_prio: -1, intestines: None, spine: None, ligaments: [None, None, None, None], chain_len: ["intestineShape", "ligamentShape"].map(|n| guide.get(n).map_or(0.0, |g| g[5] / CHARACTER_SCALE)), spine_anchor: guide.get("spineAnchor").map_or([0.0; 2], |g| [g[0], g[1]]), sev_guides: ["sevArm1Shape", "sevLeg1Shape", "sevLeg2Shape"].map(|n| guide.get(n).copied().unwrap_or_default()) })
+        Some(Self { deferred: None, poses: PoseSet::Base, bodies, joints, pose: 0, cancel: false, broken: Vec::new(), grabbing: false, hands_open: false, eject_noted: false, grips: [None; 2], group, head_chunk_radius: guide.get("headChunkShape").map_or(0.0, |g| g[3] * 5.0 / CHARACTER_SCALE), chest_chunk_radius: guide.get("chestChunkShape").map_or(0.0, |g| g[3] * 5.0 / CHARACTER_SCALE), pelvis_chunk_radius: guide.get("pelvisChunkShape").map_or(0.0, |g| g[3] * 5.0 / CHARACTER_SCALE), foot_guide: guide.get("footShape").copied().unwrap_or_default(), ref_scale, chunks: Vec::new(), chunk_names: Vec::new(), brain: None, heart: None, feet: [None; 2], dead: false, helmet_geo: (1..=4).map(|k| guide.get(&format!("helmetVert{k}")).map(|g| Vec2::new(g[0] / CHARACTER_SCALE, g[1] / CHARACTER_SCALE))).collect::<Option<Vec<_>>>().unwrap_or_default(), helmet_on: guide.get("helmetVert1").is_some(), helmet: None, sev: Vec::new(), sev_limbs: Vec::new(), ground: Vec::new(), pelvis_smashed: false, blood_flows: Vec::new(), tag: "Char3", voices: [None; 6], voice_until: 0, voice_prio: -1, intestines: None, spine: None, ligaments: [None, None, None, None], chain_len: ["intestineShape", "ligamentShape"].map(|n| guide.get(n).map_or(0.0, |g| g[5] / CHARACTER_SCALE)), spine_anchor: guide.get("spineAnchor").map_or([0.0; 2], |g| [g[0], g[1]]), sev_guides: ["sevArm1Shape", "sevLeg1Shape", "sevLeg2Shape"].map(|n| guide.get(n).copied().unwrap_or_default()) })
     }
 
     /// `headSmash1`: the head body is destroyed (taking the neck joint with it) and replaced by four chunk balls on a
@@ -896,6 +900,71 @@ impl Ragdoll {
         }
     }
 
+    /// Where `paint` puts the clips `intestine1..10` / `spine1..10`: (clip number from 0, a ball whose existence the clip depends on,
+    /// position in m, rotation, length over rest length). Intestine segments stretch along their links; vertebrae only turn.
+    /// An intestine end that has torn is hidden.
+    pub(crate) fn chain_clips(&self, world: &World, spine: bool) -> Vec<(usize, BodyId, Vec2, f64, f64)> {
+        let Some(chain) = (if spine { self.spine.as_ref() } else { self.intestines.as_ref() }) else { return Vec::new() };
+        let n = chain.bodies.len();
+        if n == 0 || chain.joints.len() != n + 1 {
+            return Vec::new();
+        }
+        let at = |k: usize| world.b2().body(chain.bodies[k]).xf.position;
+        let anchor = |k: usize, second: bool| chain.joints[k].and_then(|j| crate::vehicle::joint_anchor(world, j, second));
+        let towards = |from: Vec2, to: Vec2| (from.y - to.y).atan2(from.x - to.x);
+        let length = self.chain_len[usize::from(spine)];
+        let stretch = |a: Vec2, b: Vec2| ((a.x - b.x).powi(2) + (a.y - b.y).powi(2)).sqrt() / length;
+        let mut clips = Vec::new();
+        if spine {
+            for k in 0..n - 1 {
+                clips.push((k, chain.bodies[k], at(k), towards(at(k), at(k + 1)), 1.0));
+            }
+            let turn = match anchor(n, true) {
+                Some(head) => towards(at(n - 1), head),
+                None => clips.last().map_or(0.0, |c| c.3),
+            };
+            clips.push((n - 1, chain.bodies[n - 1], at(n - 1), turn, 1.0));
+        } else {
+            if let Some(pelvis) = anchor(0, false) {
+                clips.push((0, chain.bodies[0], pelvis, towards(pelvis, at(0)), stretch(pelvis, at(0))));
+            }
+            for k in 0..n - 1 {
+                clips.push((k + 1, chain.bodies[k], at(k), towards(at(k), at(k + 1)), stretch(at(k), at(k + 1))));
+            }
+            if let Some(chest) = anchor(n, true) {
+                // the last of the ten clips takes the chest end
+                clips.push((9, chain.bodies[n - 1], at(n - 1), towards(at(n - 1), chest), stretch(at(n - 1), chest)));
+            }
+        }
+        clips
+    }
+
+    /// The red lines of the spinal cord and of the elbow/knee ligaments; `prefix` is the clip a sub-character's parts live in.
+    pub(crate) fn gore_strokes(&self, world: &World, prefix: Option<&str>) -> Vec<crate::vehicle::Stroke> {
+        let layer = |name: &str| std::borrow::Cow::Owned(prefix.map_or_else(|| name.to_string(), |p| format!("{p}/{name}")));
+        let px = |p: Vec2| [p.x * 62.5, p.y * 62.5];
+        let anchor = |j: Option<usize>, second: bool| j.and_then(|j| crate::vehicle::joint_anchor(world, j, second));
+        let at = |id: BodyId| world.b2().body(id).xf.position;
+        let mut lines = Vec::new();
+        if let Some(chain) = &self.spine {
+            let mut points: Vec<_> = anchor(chain.joints[0], false).into_iter().chain(chain.bodies.iter().map(|&b| at(b))).map(px).collect();
+            points.extend(anchor(chain.joints[chain.joints.len() - 1], true).map(px));
+            lines.push(crate::vehicle::Stroke { points, width: 1.0, color: 0xff0000, layer: layer("spine1"), above: false });
+        }
+        for (slot, (upper, lower)) in [("upperArm1", Part::LowerArm1), ("upperArm2", Part::LowerArm2), ("upperLeg1", Part::LowerLeg1), ("upperLeg2", Part::LowerLeg2)].into_iter().enumerate() {
+            let Some(chain) = &self.ligaments[slot] else { continue };
+            // `bodies` may hold a third ball (the torn end); the three links are what is drawn
+            let [first, middle, last] = chain.joints[..] else { continue };
+            let Some(start) = anchor(first, false) else { continue };
+            let mut points = vec![px(start)];
+            points.extend([first, middle].into_iter().flatten().map(|j| px(at(world.b2().joint(j).body2))));
+            points.extend(anchor(last, true).map(px));
+            points.push(px(world.b2().body(self.bodies[&lower]).sweep.c));
+            lines.push(crate::vehicle::Stroke { points, width: 2.0, color: 0xff0000, layer: layer(upper), above: false });
+        }
+        lines
+    }
+
     /// `checkJoints` of both chains: an end joint whose |impulse| exceeds 1.5 tears.
     pub fn check_chains(&mut self, world: &mut World) {
         let mut torn = Vec::new();
@@ -1213,8 +1282,10 @@ impl Ragdoll {
         }
         if pressed {
             self.grabbing = true;
+            self.hands_open = false;
         } else if self.grabbing {
             self.grabbing = false;
+            self.hands_open = true;
             for g in &mut self.grips {
                 if let Some(id) = g.take() {
                     world.b2_mut().destroy_joint(id);

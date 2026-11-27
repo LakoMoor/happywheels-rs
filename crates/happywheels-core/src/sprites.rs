@@ -154,6 +154,8 @@ impl SpriteAssets {
 
 #[derive(Clone)]
 struct Binding {
+    /// Placement the original computes itself (gore chain clips): position px, rotation, stretch of the `inner` node.
+    pose: Option<([f64; 2], f64, f64)>,
     /// Draw only this nested clip (as its own layer), or everything but it.
     only: Option<&'static str>,
     without: Option<&'static str>,
@@ -620,7 +622,7 @@ impl Sprites {
     pub fn bind_origin(&mut self, name: &str, body: BodyId) {
         let Some(part) = self.clip.iter().position(|c| c.name_is(name)) else { return };
         let c = &self.clip[part];
-        self.bindings.push(Binding { only: None, without: None, path: vec![part], body, rest: local(0.0, 0.0, 0.0, 0.5 * c.sx, 0.5 * c.sy) });
+        self.bindings.push(Binding { pose: None, only: None, without: None, path: vec![part], body, rest: local(0.0, 0.0, 0.0, 0.5 * c.sx, 0.5 * c.sy) });
     }
 
     /// [`bind_origin`](Self::bind_origin) for a part nested one level down inside clip `parent` (`kid`, `girl`).
@@ -628,7 +630,7 @@ impl Sprites {
         let Some(pi) = self.clip.iter().position(|c| c.n == parent) else { return };
         let Some(ci) = self.clip[pi].k.iter().position(|c| c.n == name) else { return };
         let c = &self.clip[pi].k[ci];
-        self.bindings.push(Binding { only: None, without: None, path: vec![pi, ci], body, rest: local(0.0, 0.0, 0.0, 0.5 * c.sx, 0.5 * c.sy) });
+        self.bindings.push(Binding { pose: None, only: None, without: None, path: vec![pi, ci], body, rest: local(0.0, 0.0, 0.0, 0.5 * c.sx, 0.5 * c.sy) });
     }
 
     /// Depth-first path to the first clip called `name` (skipping `shapeGuide`).
@@ -657,7 +659,7 @@ impl Sprites {
             node = &node.k[i];
         }
         let rest = local(0.0, 0.0, 0.0, 0.5 * node.sx, 0.5 * node.sy);
-        self.bindings.push(Binding { only: None, without: None, path, body, rest });
+        self.bindings.push(Binding { pose: None, only: None, without: None, path, body, rest });
     }
 
     /// Binds the eleven limbs of `doll` to the clips named like the original's parts, inside `parent` when given.
@@ -1781,7 +1783,12 @@ impl Sprites {
             None => (self.layer(&b.path), 1),
         };
         parts.sort_by_key(key);
-        let mut strokes: Vec<_> = world.bike.as_ref().map_or_else(Vec::new, |v| v.strokes(world)).into_iter().map(|s| ((self.layers.get(s.layer).copied().unwrap_or(usize::MAX), if s.above { 2 } else { 0 }), s)).collect();
+        let mut lines = world.bike.as_ref().map_or_else(Vec::new, |v| v.strokes(world));
+        lines.extend(world.character.iter().flat_map(|d| d.gore_strokes(world, None)));
+        for name in ["kid", "girl", "daughter", "son", "elf1", "elf2"] {
+            lines.extend(Self::npc_doll(world, name).into_iter().flat_map(|d| d.gore_strokes(world, Some(name))));
+        }
+        let mut strokes: Vec<_> = lines.into_iter().map(|s| ((self.layers.get(s.layer.as_ref()).copied().unwrap_or(usize::MAX), if s.above { 2 } else { 0 }), s)).collect();
         strokes.sort_by_key(|s| s.0);
         let mut strokes = strokes.into_iter().peekable();
         for b in &parts {
@@ -1919,10 +1926,11 @@ impl Sprites {
         let mut extras: Vec<(&str, BodyId)> = doll.chunks.iter().zip(&doll.chunk_names).map(|(&b, n)| (n.as_str(), b)).collect();
         extras.extend(doll.brain.map(|b| ("brain", b)));
         extras.extend(doll.heart.map(|b| ("heart", b)));
-        let spine_names: Vec<String> = (1..=doll.spine.as_ref().map_or(0, |c| c.bodies.len())).map(|i| format!("spine{i}")).collect();
-        let gut_names: Vec<String> = (1..=doll.intestines.as_ref().map_or(0, |c| c.bodies.len())).map(|i| format!("intestine{i}")).collect();
-        extras.extend(doll.spine.iter().flat_map(|c| c.bodies.iter()).zip(&spine_names).map(|(&b, n)| (n.as_str(), b)));
-        extras.extend(doll.intestines.iter().flat_map(|c| c.bodies.iter()).zip(&gut_names).map(|(&b, n)| (n.as_str(), b)));
+        for (spine, stem) in [(true, "spine"), (false, "intestine")] {
+            for (i, body, p, angle, stretch) in doll.chain_clips(world, spine) {
+                self.draw_posed(img, world, camera_offset, parent, &format!("{stem}{}", i + 1), body, ([p.x * 62.5, p.y * 62.5], angle, stretch));
+            }
+        }
         extras.extend(doll.helmet.map(|b| ("helmet", b)));
         extras.extend(doll.feet[0].map(|b| ("foot1", b)));
         extras.extend(doll.feet[1].map(|b| ("foot2", b)));
@@ -1943,12 +1951,30 @@ impl Sprites {
             }
         }
     }
+    /// Draws clip `name` (inside `parent` for sub-characters) at a placement of its own rather than on `body`.
+    #[allow(clippy::too_many_arguments)]
+    fn draw_posed(&self, img: &mut RgbaImage, world: &World, camera_offset: (f32, f32), parent: Option<&str>, name: &str, body: BodyId, pose: ([f64; 2], f64, f64)) {
+        let mut path = Vec::new();
+        let mut nodes = &self.clip;
+        for part in parent.into_iter().chain([name]) {
+            let Some(i) = nodes.iter().position(|c| c.n == part) else { return };
+            path.push(i);
+            nodes = &nodes[i].k;
+        }
+        let mut node = &self.clip[path[0]];
+        for &i in &path[1..] {
+            node = &node.k[i];
+        }
+        let rest = local(0.0, 0.0, 0.0, 0.5 * node.sx, 0.5 * node.sy);
+        self.draw_binding(img, world, camera_offset, &Binding { pose: Some(pose), only: None, without: None, path, body, rest });
+    }
+
     /// [`draw_loose`](Self::draw_loose) for a clip nested in `parent`.
     fn draw_loose_in(&self, img: &mut RgbaImage, world: &World, camera_offset: (f32, f32), parent: &str, name: &str, body: BodyId) {
         let Some(pi) = self.clip.iter().position(|c| c.n == parent) else { return };
         let Some(ci) = self.clip[pi].k.iter().position(|c| c.n == name) else { return };
         let c = &self.clip[pi].k[ci];
-        let b = Binding { only: None, without: None, path: vec![pi, ci], body, rest: local(0.0, 0.0, 0.0, 0.5 * c.sx, 0.5 * c.sy) };
+        let b = Binding { pose: None, only: None, without: None, path: vec![pi, ci], body, rest: local(0.0, 0.0, 0.0, 0.5 * c.sx, 0.5 * c.sy) };
         self.draw_binding(img, world, camera_offset, &b);
     }
 
@@ -1956,7 +1982,7 @@ impl Sprites {
     fn draw_loose(&self, img: &mut RgbaImage, world: &World, camera_offset: (f32, f32), name: &str, body: BodyId) {
         let Some(part) = self.clip.iter().position(|c| c.n == name) else { return };
         let c = &self.clip[part];
-        let b = Binding { only: None, without: None, path: vec![part], body, rest: local(0.0, 0.0, 0.0, 0.5 * c.sx, 0.5 * c.sy) };
+        let b = Binding { pose: None, only: None, without: None, path: vec![part], body, rest: local(0.0, 0.0, 0.0, 0.5 * c.sx, 0.5 * c.sy) };
         self.draw_binding(img, world, camera_offset, &b);
     }
 
@@ -2024,6 +2050,10 @@ impl Sprites {
             placed = local(placed[4], placed[5], 0.0, 1.0, 1.0);
             angle
         });
+        if let Some(([x, y], angle, _)) = b.pose {
+            placed = local(x, y, angle, 1.0, 1.0);
+        }
+        let stretch = b.pose.map(|p| p.2);
         let g = mul(self.camera(camera_offset), mul(placed, mul(recentre, b.rest)));
         // Top-level rider parts switch frames when limbs break (`gotoAndStop`); NPC / nested parts stay on frame 1.
         let owner = match b.path.len() {
@@ -2037,6 +2067,7 @@ impl Sprites {
         }
         let children = if frame > 1 { node.alt.get(&frame.to_string()).unwrap_or(&node.k) } else { &node.k };
         self.show_wound.set(owner.is_some_and(|d| d.part_wound(&node.n)));
+        let hands_open = owner.or_else(|| world.character.as_ref().filter(|_| matches!(world.bike.as_ref(), Some(crate::vehicle::Vehicle::Pogo(_))))).is_some_and(|d| d.hands_open);
         // (the pogo man's parts sit deeper in one assembled skeleton)
         let pogo = matches!(world.bike.as_ref(), Some(crate::vehicle::Vehicle::Pogo(_)));
         self.reveal(world, owner.or_else(|| world.character.as_ref().filter(|_| pogo)));
@@ -2051,8 +2082,23 @@ impl Sprites {
                 self.hidden.borrow_mut().push(name);
             }
             for child in children {
-                match spin {
-                    Some(angle) if child.n == "inner" => self.draw_node_turned(img, child, g, angle),
+                if hands_open && child.n == "hand" {
+                    if let Some(open) = child.alt.get("2") {
+                        let m = mul(g, child.matrix());
+                        for k in open {
+                            self.draw_node(img, k, m);
+                        }
+                        continue;
+                    }
+                }
+                match (spin, stretch) {
+                    (Some(angle), _) if child.n == "inner" => self.draw_node_turned(img, child, g, angle),
+                    (_, Some(sx)) if child.n == "inner" => {
+                        let m = mul(g, child.matrix_with(child.x, child.y, child.r, sx, child.sy));
+                        for k in &child.k {
+                            self.draw_node(img, k, m);
+                        }
+                    }
                     _ => self.draw_node(img, child, g),
                 }
             }

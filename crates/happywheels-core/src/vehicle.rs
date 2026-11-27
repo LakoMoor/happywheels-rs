@@ -412,7 +412,7 @@ pub struct Stroke {
     pub points: Vec<[f64; 2]>,
     pub width: f64,
     pub color: u32,
-    pub layer: &'static str,
+    pub layer: std::borrow::Cow<'static, str>,
     pub above: bool,
 }
 
@@ -423,7 +423,7 @@ fn px(p: Vec2) -> [f64; 2] {
 }
 
 /// `GetAnchor1` / `GetAnchor2` of a joint (also of a destroyed one, which the original keeps drawing).
-fn joint_anchor(world: &World, id: usize, second: bool) -> Option<Vec2> {
+pub(crate) fn joint_anchor(world: &World, id: usize, second: bool) -> Option<Vec2> {
     use box2d::joints::JointKind;
     let j = world.b2().joint(id);
     let (a, b) = match &j.kind {
@@ -442,7 +442,7 @@ fn shock_line(world: &World, from: Option<Vec2>, to: BodyId, width: f64, color: 
     if !end.alive {
         return None;
     }
-    Some(Stroke { points: vec![px(from?), px(end.sweep.c)], width, color, layer, above: false })
+    Some(Stroke { points: vec![px(from?), px(end.sweep.c)], width, color, layer: layer.into(), above: false })
 }
 
 impl Vehicle {
@@ -460,13 +460,13 @@ impl Vehicle {
                 .into_iter()
                 .filter_map(|(j, body)| shock_line(world, anchor(j), body, 3.0, 0x171717, "mower"))
                 .collect(),
-            Vehicle::Heli(h) => vec![Stroke { points: h.rope_points.iter().map(|p| px(p.0)).collect(), width: 1.0, color: 0x333333, layer: "copter", above: false }],
+            Vehicle::Heli(h) => vec![Stroke { points: h.rope_points.iter().map(|p| px(p.0)).collect(), width: 1.0, color: 0x333333, layer: "copter".into(), above: false }],
             Vehicle::Santa(s) => [(&s.strap_head, 1.0), (&s.strap_chest1, 1.5), (&s.strap_chest2, 1.5)]
                 .into_iter()
                 .filter_map(|(chain, width)| {
                     let mut points = vec![px(joint_anchor(world, *chain.first()?, false)?)];
                     points.extend(chain.iter().filter_map(|&j| joint_anchor(world, j, true)).map(px));
-                    Some(Stroke { points, width, color: 0x333333, layer: "sleigh", above: true })
+                    Some(Stroke { points, width, color: 0x333333, layer: "sleigh".into(), above: true })
                 })
                 .collect(),
             _ => Vec::new(),
