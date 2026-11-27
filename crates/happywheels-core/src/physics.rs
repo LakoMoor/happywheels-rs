@@ -2439,6 +2439,12 @@ impl World {
             self.step_camera(1.0);
         }
         self.step_physics();
+        if let Some(mut bike) = self.bike.take() {
+            if let crate::vehicle::Vehicle::Heli(heli) = &mut bike {
+                heli.step_rope(self);
+            }
+            self.bike = Some(bike);
+        }
         // at 60 fps the front end steps the camera (and the particles) per display frame instead
         if !self.external_particles {
             self.step_camera(1.0);

@@ -111,7 +111,8 @@ pub fn render_level_view(level: &Level, world: &World, width: u32, height: u32, 
         let mut bodies: Vec<_> = doll.bodies.values().map(|h| (*h, Rgba([0x20, 0x30, 0x80, 255]))).collect();
         let red = Rgba([0x90, 0x20, 0x20, 255]);
         bodies.extend(doll.chunks.iter().chain(doll.brain.iter()).chain(doll.heart.iter()).chain(doll.feet.iter().flatten()).chain(doll.helmet.iter()).chain(doll.sev.iter()).chain(doll.intestines.iter().flat_map(|c| c.bodies.iter())).chain(doll.spine.iter().flat_map(|c| c.bodies.iter())).chain(doll.ligaments.iter().flatten().flat_map(|c| c.bodies.iter())).map(|h| (*h, red)));
-        if let Some(bike) = &world.bike {
+        // with artwork the vehicle is only its clips: several of its bodies (sleigh wheels, elf stands) are invisible in the original
+        if let Some(bike) = world.bike.as_ref().filter(|_| sprites.is_none()) {
             let grey = Rgba([0x55, 0x55, 0x55, 255]);
             bodies.extend(bike.bodies().into_iter().map(|h| (h, grey)));
         }

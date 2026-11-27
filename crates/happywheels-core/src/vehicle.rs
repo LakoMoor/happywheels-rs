@@ -405,7 +405,74 @@ pub enum Vehicle {
     Santa(Box<Santa>),
 }
 
+/// A polyline the original strokes with `graphics` (ropes, shocks, harness): world px, drawn in the layer of the clip `layer`
+/// (below it, or above it when `above`).
+#[derive(Debug, Clone)]
+pub struct Stroke {
+    pub points: Vec<[f64; 2]>,
+    pub width: f64,
+    pub color: u32,
+    pub layer: &'static str,
+    pub above: bool,
+}
+
+const PX_PER_M: f64 = 62.5;
+
+fn px(p: Vec2) -> [f64; 2] {
+    [p.x * PX_PER_M, p.y * PX_PER_M]
+}
+
+/// `GetAnchor1` / `GetAnchor2` of a joint (also of a destroyed one, which the original keeps drawing).
+fn joint_anchor(world: &World, id: usize, second: bool) -> Option<Vec2> {
+    use box2d::joints::JointKind;
+    let j = world.b2().joint(id);
+    let (a, b) = match &j.kind {
+        JointKind::Revolute(k) => (k.local_anchor1, k.local_anchor2),
+        JointKind::Prismatic(k) => (k.local_anchor1, k.local_anchor2),
+        JointKind::Distance(k) => (k.local_anchor1, k.local_anchor2),
+        JointKind::Rope(k) => (k.local_anchor1, k.local_anchor2),
+        JointKind::Gear(_) => return None,
+    };
+    Some(world.b2().body(if second { j.body2 } else { j.body1 }).world_point(if second { b } else { a }))
+}
+
+/// A shock absorber: from the joint's first anchor (or a body centre) to the centre of the sliding body.
+fn shock_line(world: &World, from: Option<Vec2>, to: BodyId, width: f64, color: u32, layer: &'static str) -> Option<Stroke> {
+    let end = world.b2().body(to);
+    if !end.alive {
+        return None;
+    }
+    Some(Stroke { points: vec![px(from?), px(end.sweep.c)], width, color, layer, above: false })
+}
+
 impl Vehicle {
+    /// What `paint` strokes besides the clips.
+    pub fn strokes(&self, world: &World) -> Vec<Stroke> {
+        let center = |id: BodyId| Some(world.b2().body(id)).filter(|b| b.alive).map(|b| b.sweep.c);
+        let anchor = |id: usize| joint_anchor(world, id, false);
+        match self {
+            Vehicle::Segway(s) => shock_line(world, center(s.stand), s.shock, 3.0, 0xd1d8e0, "wheel").into_iter().collect(),
+            Vehicle::Cart(c) if !c.main_smashed => [(c.back_shock_joint, c.back_shock), (c.front_shock_joint, c.front_shock)]
+                .into_iter()
+                .filter_map(|(j, body)| shock_line(world, anchor(j), body, 3.0, 0x0c160d, "backWheel"))
+                .collect(),
+            Vehicle::Mower(m) => [(m.front_shock_joint, m.front_shock), (m.back_shock_joint, m.back_shock)]
+                .into_iter()
+                .filter_map(|(j, body)| shock_line(world, anchor(j), body, 3.0, 0x171717, "mower"))
+                .collect(),
+            Vehicle::Heli(h) => vec![Stroke { points: h.rope_points.iter().map(|p| px(p.0)).collect(), width: 1.0, color: 0x333333, layer: "copter", above: false }],
+            Vehicle::Santa(s) => [(&s.strap_head, 1.0), (&s.strap_chest1, 1.5), (&s.strap_chest2, 1.5)]
+                .into_iter()
+                .filter_map(|(chain, width)| {
+                    let mut points = vec![px(joint_anchor(world, *chain.first()?, false)?)];
+                    points.extend(chain.iter().filter_map(|&j| joint_anchor(world, j, true)).map(px));
+                    Some(Stroke { points, width, color: 0x333333, layer: "sleigh", above: true })
+                })
+                .collect(),
+            _ => Vec::new(),
+        }
+    }
+
     pub fn ejected(&self) -> bool {
         match self {
             Vehicle::Bike(b) => b.ejected,
@@ -3365,9 +3432,53 @@ pub struct Heli {
     pub debris: Vec<BodyId>,
     /// Sprite clip of each debris body (`broken1..7`; empty for blade shards).
     pub debris_names: Vec<String>,
+    /// The drawn rope (not the joint): `numRopeSegments + 1` Verlet points as (current, previous), metres.
+    rope_points: Vec<(Vec2, Vec2)>,
 }
 
 impl Heli {
+    const ROPE_SEGMENTS: usize = 20;
+
+    /// The rope part of `paint`: both ends follow the joint anchors (the upper one hangs free once the copter is smashed),
+    /// then gravity and 20 passes over the springs, whose length is 0.8 of the rope joint's limit.
+    pub(crate) fn step_rope(&mut self, world: &World) {
+        let last = Self::ROPE_SEGMENTS;
+        if let Some(a) = joint_anchor(world, self.rope, false).filter(|_| !self.copter_smashed) {
+            self.rope_points[0] = (a, a);
+        }
+        if let Some(b) = joint_anchor(world, self.rope, true) {
+            self.rope_points[last] = (b, b);
+        }
+        let free: Vec<f64> = (0..=last).map(|i| if i == last || (i == 0 && !self.copter_smashed) { 0.0 } else { 1.0 }).collect();
+        for (p, &f) in self.rope_points.iter_mut().zip(&free) {
+            if f > 0.0 {
+                let (dx, dy) = (p.0.x - p.1.x, p.0.y - p.1.y);
+                p.1 = p.0;
+                p.0.x += dx;
+                p.0.y += dy + (10.0 / 30.0) / 30.0;
+            }
+        }
+        let box2d::joints::JointKind::Rope(rope) = &world.b2().joint(self.rope).kind else { return };
+        let length = rope.max_length * 0.8 / last as f64;
+        for _ in 0..20 {
+            for i in 0..last {
+                let (a, b) = (self.rope_points[i].0, self.rope_points[i + 1].0);
+                let (dx, dy) = (b.x - a.x, b.y - a.y);
+                let d = (dx * dx + dy * dy).sqrt();
+                let total = free[i] + free[i + 1];
+                if d == 0.0 || total == 0.0 {
+                    continue;
+                }
+                let k = (d - length) / d;
+                let (cx, cy) = (dx * k, dy * k);
+                self.rope_points[i].0.x += cx * (free[i] / total);
+                self.rope_points[i].0.y += cy * (free[i] / total);
+                self.rope_points[i + 1].0.x -= cx * (free[i + 1] / total);
+                self.rope_points[i + 1].0.y -= cy * (free[i + 1] / total);
+            }
+        }
+    }
+
     /// `heliLoop` volume: 0.75 while up/down is held (`isLoud`), 0.5 otherwise.
     pub fn loop_volume(&self) -> f32 {
         if self.hover_state != 0 { 0.75 } else { 0.5 }
@@ -3537,6 +3648,7 @@ impl Heli {
             legs_present: [true, true],
             debris: Vec::new(),
             debris_names: Vec::new(),
+            rope_points: Vec::new(),
         };
         let ic = s.center_of_mass(world);
         let b = world.b2_mut();
@@ -3553,6 +3665,13 @@ impl Heli {
         d.collide_connected = true;
         s.rope_min = d.length;
         s.rope = b.create_rope_joint(&d);
+        s.rope_points = (0..=Self::ROPE_SEGMENTS)
+            .map(|i| {
+                let t = i as f64 / Self::ROPE_SEGMENTS as f64;
+                let p = Vec2::new(anchor1.x + (anchor2.x - anchor1.x) * t, anchor1.y + (anchor2.y - anchor1.y) * t);
+                (p, p)
+            })
+            .collect();
         doll.poses = PoseSet::Heli;
         Some(s)
     }

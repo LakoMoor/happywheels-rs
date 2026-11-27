@@ -261,6 +261,12 @@ impl Sprites {
             _ => return None,
         })
         .ok()?;
+        // `christmas_bell` (library clip, 0.5 scale) on the four balls of Santa's rear strap.
+        if index == 8 {
+            for i in 1..=4 {
+                clip.push(serde_json::from_str(&format!(r#"{{"n":"bell{i}","x":0,"y":0,"r":0,"sx":1,"sy":1,"px":0,"py":0,"t":null,"vis":true,"k":[{{"n":"","x":-5,"y":-4,"r":0,"sx":0.333,"sy":0.333,"px":0,"py":0,"t":"santa-asset-21.png","vis":true,"k":[]}}]}}"#)).ok()?);
+            }
+        }
         let mut runtimes: HashMap<String, RuntimeClip> = serde_json::from_str(include_str!("../data/runtime-clips.json")).ok()?;
         let runtime = runtimes.remove(&index.to_string())?;
         apply_runtime(&mut clip, "", &runtime);
@@ -722,6 +728,10 @@ impl Sprites {
             self.bind(world, "sleigh", sleigh, start);
             for (i, b) in boxes.into_iter().enumerate() {
                 self.bind_origin(&format!("box{}", i + 1), b);
+            }
+            // `addChildAt` at one index: the last bell ends up lowest
+            for (i, &b) in s.strap_balls.iter().skip(12).take(4).enumerate().rev() {
+                self.bind_origin(&format!("bell{}", i + 1), b);
             }
         }
         if let Some(Vehicle::Family(f)) = world.bike.as_ref() {
@@ -1763,14 +1773,69 @@ impl Sprites {
             }
         }
         let mut parts = self.queue.borrow_mut().take().unwrap_or_default();
-        parts.sort_by_key(|b| match b.only {
-            Some(_) => self.layers.get("lowerArm1").map_or((usize::MAX, 1), |&l| (l, 1)),
-            None => (self.layer(&b.path), 0),
-        });
+        let sleigh = self.layers.get("sleigh").copied().unwrap_or(usize::MAX);
+        // (layer, place within it): 0 below the clip (strokes), 1 the clip, 2 and 3 above it
+        let key = |b: &Binding| match b.only {
+            Some(_) => self.layers.get("lowerArm1").map_or((usize::MAX, 2), |&l| (l, 2)),
+            None if self.clip[b.path[0]].n.starts_with("bell") => (sleigh, 3),
+            None => (self.layer(&b.path), 1),
+        };
+        parts.sort_by_key(key);
+        let mut strokes: Vec<_> = world.bike.as_ref().map_or_else(Vec::new, |v| v.strokes(world)).into_iter().map(|s| ((self.layers.get(s.layer).copied().unwrap_or(usize::MAX), if s.above { 2 } else { 0 }), s)).collect();
+        strokes.sort_by_key(|s| s.0);
+        let mut strokes = strokes.into_iter().peekable();
         for b in &parts {
+            while let Some((_, s)) = strokes.next_if(|s| s.0 < key(b)) {
+                self.draw_stroke(img, camera_offset, &s);
+            }
             self.draw_binding(img, world, camera_offset, b);
         }
+        for (_, s) in strokes {
+            self.draw_stroke(img, camera_offset, &s);
+        }
         self.draw_shards(img, world, camera_offset);
+    }
+
+    /// An antialiased polyline with flat ends, `width` world px thick. Traced segment by segment as `("line <colour> <width>", [from, to, _])`.
+    fn draw_stroke(&self, img: &mut RgbaImage, camera_offset: (f32, f32), stroke: &crate::vehicle::Stroke) {
+        if let Some(trace) = self.trace.borrow_mut().as_mut() {
+            let m = self.camera((0.0, 0.0));
+            for s in stroke.points.windows(2) {
+                let at = |p: [f64; 2]| [m[0] * p[0] + m[4], m[3] * p[1] + m[5]];
+                trace.push((format!("line {:06x} {}", stroke.color, stroke.width), [at(s[0]), at(s[1]), [0.0, 0.0]]));
+            }
+        }
+        let m = self.camera(camera_offset);
+        let at = |p: [f64; 2]| (m[0] * p[0] + m[4], m[3] * p[1] + m[5]);
+        let half = stroke.width * m[0] / 2.0;
+        let color = [(stroke.color >> 16) as u8, (stroke.color >> 8) as u8, stroke.color as u8];
+        // coverage first, so the joints between segments are not blended twice
+        let mut covered: HashMap<(u32, u32), f64> = HashMap::new();
+        for s in stroke.points.windows(2) {
+            let (a, b) = (at(s[0]), at(s[1]));
+            let (dx, dy) = (b.0 - a.0, b.1 - a.1);
+            let len = dx.hypot(dy);
+            let pad = half + 1.0;
+            let xs = (a.0.min(b.0) - pad).floor().max(0.0) as u32..(a.0.max(b.0) + pad).ceil().clamp(0.0, f64::from(img.width())) as u32;
+            for x in xs {
+                let ys = (a.1.min(b.1) - pad).floor().max(0.0) as u32..(a.1.max(b.1) + pad).ceil().clamp(0.0, f64::from(img.height())) as u32;
+                for y in ys {
+                    let (px, py) = (f64::from(x) + 0.5 - a.0, f64::from(y) + 0.5 - a.1);
+                    let t = if len > 0.0 { ((px * dx + py * dy) / (len * len)).clamp(0.0, 1.0) } else { 0.0 };
+                    let cover = (half + 0.5 - (px - t * dx).hypot(py - t * dy)).clamp(0.0, 1.0);
+                    if cover > 0.0 {
+                        let c = covered.entry((x, y)).or_insert(0.0);
+                        *c = c.max(cover);
+                    }
+                }
+            }
+        }
+        for ((x, y), a) in covered {
+            let d = img.get_pixel_mut(x, y);
+            for i in 0..3 {
+                d[i] = (f64::from(color[i]) * a + f64::from(d[i]) * (1.0 - a)).round() as u8;
+            }
+        }
     }
 
     /// World px → image px for a view whose world-space offset is `offset`.
@@ -1949,11 +2014,17 @@ impl Sprites {
                 placed = local(x * 62.5, y * 62.5, angle, 1.0, 1.0);
             }
         }
-        let g = mul(self.camera(camera_offset), mul(placed, mul(recentre, b.rest)));
         let mut node = &self.clip[b.path[0]];
         for &i in &b.path[1..] {
             node = &node.k[i];
         }
+        // These wheel clips only follow their body's position (the chair's wheels are ordinary body clips); `paint` turns its `inner` node, the rest of the clip stays level.
+        let spin = (b.path.len() == 1 && matches!(node.n.as_str(), "wheel" | "frontWheel" | "backWheel") && node.k.iter().any(|c| c.n == "inner")).then(|| {
+            let angle = f64::from(world.body_angle(b.body));
+            placed = local(placed[4], placed[5], 0.0, 1.0, 1.0);
+            angle
+        });
+        let g = mul(self.camera(camera_offset), mul(placed, mul(recentre, b.rest)));
         // Top-level rider parts switch frames when limbs break (`gotoAndStop`); NPC / nested parts stay on frame 1.
         let owner = match b.path.len() {
             1 => world.character.as_ref(),
@@ -1980,7 +2051,10 @@ impl Sprites {
                 self.hidden.borrow_mut().push(name);
             }
             for child in children {
-                self.draw_node(img, child, g);
+                match spin {
+                    Some(angle) if child.n == "inner" => self.draw_node_turned(img, child, g, angle),
+                    _ => self.draw_node(img, child, g),
+                }
             }
             if let Some(name) = b.without {
                 self.hidden.borrow_mut().retain(|&n| n != name);
@@ -2032,12 +2106,17 @@ impl Sprites {
     }
 
     fn draw_node(&self, img: &mut RgbaImage, n: &Node, parent: M) {
+        self.draw_node_turned(img, n, parent, n.r);
+    }
+
+    /// [`draw_node`](Self::draw_node) with the node's rotation replaced.
+    fn draw_node_turned(&self, img: &mut RgbaImage, n: &Node, parent: M, r: f64) {
         let name = n.n.as_str();
         let shown = (name == "wound" && self.show_wound.get()) || self.shown.borrow().contains(&name);
         if ((n.hidden || HIDDEN.contains(&name)) && !shown) || self.hidden.borrow().contains(&name) {
             return;
         }
-        let m = mul(parent, n.matrix());
+        let m = mul(parent, n.matrix_with(n.x, n.y, r, n.sx, n.sy));
         if let Some(t) = &n.t {
             self.blit(img, t, m);
         }
