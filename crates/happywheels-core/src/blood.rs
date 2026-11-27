@@ -118,11 +118,14 @@ pub fn set_blood_setting(setting: u8) {
 impl Default for Blood {
     fn default() -> Self {
         let setting = BLOOD_SETTING.load(std::sync::atomic::Ordering::Relaxed);
-        Self { particles: Vec::new(), sparks: Vec::new(), sprites: Vec::new(), flows: Vec::new(), line_blood: setting >= 2, off: setting == 0, setting, max: max_particles(), rng: 0 }
+        Self { particles: Vec::new(), sparks: Vec::new(), sprites: Vec::new(), flows: Vec::new(), line_blood: setting >= 2, off: setting == 0, setting, max: max_particles(), rng: 0, #[cfg(test)] script: Default::default() }
     }
 }
 
 pub struct Blood {
+    /// Unit tests only: values returned by `rand` before the generator is used (the oracle runs replace `Math.random` the same way).
+    #[cfg(test)]
+    pub script: std::collections::VecDeque<f64>,
     pub particles: Vec<Particle>,
     pub sparks: Vec<Spark>,
     pub sprites: Vec<SpriteParticle>,
@@ -164,6 +167,13 @@ impl Spark {
     }
 }
 
+impl SpriteParticle {
+    /// Pixels per 30 Hz step.
+    pub fn velocity(&self) -> [f64; 2] {
+        self.vel
+    }
+}
+
 impl Blood {
     /// `createSparkBurstPoint(start (m), vel (px/step), initialRange, speedRange, total)`: the particles' speeds are in px per step already.
     pub fn spark_burst(&mut self, start: Vec2, vel: Vec2, initial_range: f64, speed_range: f64, total: u32) {
@@ -183,6 +193,10 @@ impl Blood {
     }
 
     pub fn rand(&mut self) -> f64 {
+        #[cfg(test)]
+        if let Some(v) = self.script.pop_front() {
+            return v;
+        }
         if self.rng == 0 {
             self.rng = 0x9E37_79B9_7F4A_7C15;
         }
@@ -264,6 +278,15 @@ impl Blood {
             p.pos[1] += p.vel[1] * dt;
             p.pos[0] += p.vel[0] * dt;
             p.vel[1] += if p.kind == ShardKind::Snow { 62.5 / 180.0 } else { 62.5 / 90.0 } * dt;
+            // snowflakes only (`Mb`): air drag above 20 px per step, positive directions only
+            if p.kind == ShardKind::Snow {
+                if p.vel[1] > 20.0 {
+                    p.vel[1] *= dt * 0.9;
+                }
+                if p.vel[0] > 20.0 {
+                    p.vel[0] *= dt * 0.9;
+                }
+            }
             p.pos[1] <= Y_LIMIT
         });
     }

@@ -428,6 +428,17 @@ struct Spray {
     kind: crate::blood::ShardKind,
 }
 
+impl Spray {
+    /// `from`/`to` are in the body's local px.
+    #[allow(clippy::too_many_arguments)]
+    fn new(kind: crate::blood::ShardKind, body: BodyId, from: (f64, f64), to: (f64, f64), min: f64, max: f64, angle_deg: f64, per_frame: u32, total: u32) -> Self {
+        let (start, range) = (Vec2::new(from.0 / PS, from.1 / PS), Vec2::new((to.0 - from.0) / PS, (to.1 - from.1) / PS));
+        let angle_range = angle_deg.to_radians();
+        let rot = range.y.atan2(range.x) + (std::f64::consts::FRAC_PI_2 - angle_range * 0.5);
+        Spray { body, start, range, min, max, angle_range, rot, per_frame, total, count: 0, acc: 0.0, kind }
+    }
+}
+
 /// A special's `checkAdd`: a contact starting on one of its shapes with a non-sensor body that is static or at least as heavy, closing speed along the
 /// normal above `threshold`, plays `name` (`variants` picks `name1..n`). `lock_frames` > 0 = the original keeps a handle until the sound ends (toilet, trash can).
 struct HitSound {
@@ -615,7 +626,7 @@ pub struct World {
     chairs: Vec<BreakChair>,
     sprays: Vec<Spray>,
     external_particles: bool,
-    snow_acc: f64,
+    snow: Option<Spray>,
     logs: Vec<Log>,
     toilets: Vec<Toilet>,
     glasses: Vec<Glass>,
@@ -715,7 +726,7 @@ impl World {
             chairs: Vec::new(),
             sprays: Vec::new(),
             external_particles: false,
-            snow_acc: 0.0,
+            snow: None,
             logs: Vec::new(),
             toilets: Vec::new(),
             glasses: Vec::new(),
@@ -3502,28 +3513,33 @@ impl World {
 
     /// `stopSpewing`.
     pub fn blood_stop(&mut self, flow: usize) {
+        // `total = count`: the emitter still creates one more particle on its next due step
         if let Some(f) = self.blood.flows.get_mut(flow) {
-            f.finished = true;
+            f.total = f.count;
         }
     }
 
-    /// `createSnowSpray("snowflakes", sleighBody, (start − 143/125, start.y + 178/125), (start + 107/125, …), 0, 0, 180°, 5)`: while the sleigh boosts, five
-    /// snowflakes per step appear on that bottom edge of the sleigh and move with it (speed range 0, so only the body's velocity at the point), 180° fan downwards.
+    /// `createSnowSpray("snowflakes", sleighBody, (start − 143/125, start.y + 178/125), (start + 107/125, …), 0, 0, 180°, 5, 5000)`: while the sleigh boosts,
+    /// five snowflakes per tick appear on that bottom edge of the sleigh and move with it (speed range 0, so only the body's velocity at the point). A new
+    /// emitter is made each time the bells come on; when they go off it is told to `stopSpewing`. (The original passes world-start coordinates as local ones.)
     fn snow_spray(&mut self) {
-        let Some(crate::vehicle::Vehicle::Santa(s)) = self.bike.as_ref() else { return };
-        if !s.bell || s.sleigh_gone {
-            return;
-        }
-        let (body, start) = (s.sleigh, s.start_m);
-        let (a, b) = (Vec2::new(start.x - 143.0 / 125.0, start.y + 178.0 / 125.0), Vec2::new(start.x + 107.0 / 125.0, start.y + 178.0 / 125.0));
-        for _ in 0..5 {
-            let t = self.blood.rand();
-            let p = Vec2::new(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t);
-            let (v, at) = {
-                let bd = self.b.body(body);
-                (bd.linear_velocity_from_local_point(p), bd.world_point(p))
-            };
-            self.blood.spawn_sprite(crate::blood::ShardKind::Snow, [at.x * PS, at.y * PS], [v.x, v.y]);
+        let on = match self.bike.as_ref() {
+            Some(crate::vehicle::Vehicle::Santa(s)) if s.bell && !s.sleigh_gone => Some((s.sleigh, s.start_m)),
+            _ => None,
+        };
+        match on {
+            Some((body, start)) if self.snow.is_none() => {
+                let from = ((start.x - 143.0 / 125.0) * PS, (start.y + 178.0 / 125.0) * PS);
+                let to = ((start.x + 107.0 / 125.0) * PS, (start.y + 178.0 / 125.0) * PS);
+                self.snow = Some(Spray::new(crate::blood::ShardKind::Snow, body, from, to, 0.0, 0.0, 180.0, 5, 5000));
+            }
+            None => {
+                if let Some(mut s) = self.snow.take() {
+                    s.total = s.count;
+                    self.sprays.push(s);
+                }
+            }
+            _ => {}
         }
     }
 
@@ -3533,14 +3549,7 @@ impl World {
         self.blood.step_sparks(dt);
         self.blood.step_sprites(dt);
         // every emitter only creates particles on the step where its `_accumulatedDelta` is 0 (the sum of dt reaches 1 → reset)
-        let emit = self.snow_acc == 0.0;
-        self.snow_acc += dt;
-        if self.snow_acc >= 1.0 {
-            self.snow_acc = 0.0;
-        }
-        if emit {
-            self.snow_spray();
-        }
+        self.snow_spray();
         self.step_sprays(dt);
         for i in 0..self.blood.flows.len() {
             let (body, offset, angle, min, range, total, count, finished, sprite) = {
@@ -3579,45 +3588,54 @@ impl World {
     /// `ParticleController.createSpray(kind, body, from, to, minSpeed, maxSpeed, angleDeg, perFrame, total)`: positions `from`/`to` are in the body's local px.
     #[allow(clippy::too_many_arguments)]
     fn create_spray(&mut self, kind: crate::blood::ShardKind, body: BodyId, from: (f64, f64), to: (f64, f64), min: f64, max: f64, angle_deg: f64, per_frame: u32, total: u32) {
-        let (start, range) = (Vec2::new(from.0 / PS, from.1 / PS), Vec2::new((to.0 - from.0) / PS, (to.1 - from.1) / PS));
-        let angle_range = angle_deg.to_radians();
-        let rot = range.y.atan2(range.x) + (std::f64::consts::FRAC_PI_2 - angle_range * 0.5);
-        self.sprays.push(Spray { body, start, range, min, max, angle_range, rot, per_frame, total, count: 0, acc: 0.0, kind });
+        self.sprays.push(Spray::new(kind, body, from, to, min, max, angle_deg, per_frame, total));
     }
 
     /// `Mu.step`: each emitter creates `per_frame` particles per step, placed along its segment and thrown at `rot + angleRange·rand` plus the body's velocity there.
     fn step_sprays(&mut self, dt: f64) {
-        for i in 0..self.sprays.len() {
-            let s = &self.sprays[i];
-            if s.count > s.total || !self.b.body(s.body).alive {
-                continue;
+        let mut sprays = std::mem::take(&mut self.sprays);
+        for s in &mut sprays {
+            self.step_spray(s, dt);
+        }
+        sprays.retain(|s| s.count <= s.total && self.b.c.bodies[s.body].alive);
+        self.sprays = sprays;
+        // the snow emitter stays referenced (even when used up) until the bells go off
+        if let Some(mut s) = self.snow.take() {
+            self.step_spray(&mut s, dt);
+            self.snow = Some(s);
+        }
+    }
+
+    fn step_spray(&mut self, s: &mut Spray, dt: f64) {
+        if s.count > s.total || !self.b.body(s.body).alive {
+            return;
+        }
+        let emit = s.acc == 0.0;
+        s.acc += dt;
+        if s.acc >= 1.0 {
+            s.acc = 0.0;
+        }
+        if !emit {
+            return;
+        }
+        for _ in 0..s.per_frame {
+            if s.count > s.total {
+                break;
             }
-            let emit = self.sprays[i].acc == 0.0;
-            self.sprays[i].acc += dt;
-            if self.sprays[i].acc >= 1.0 {
-                self.sprays[i].acc = 0.0;
-            }
-            if !emit {
-                continue;
-            }
-            for _ in 0..self.sprays[i].per_frame {
-                let s = &self.sprays[i];
-                if s.count > s.total {
-                    break;
-                }
-                let (body, start, range, min, max, angle_range, rot, kind) = (s.body, s.start, s.range, s.min, s.max, s.angle_range, s.rot, s.kind);
-                self.sprays[i].count += 1;
-                let t = self.blood.rand();
-                let local = Vec2::new(start.x + range.x * t, start.y + range.y * t);
-                let speed = self.blood.rand() * (max - min) + min;
-                let b = self.b.body(body);
-                let a = b.sweep.a + rot + angle_range * self.blood.rand();
-                let v = b.linear_velocity_from_local_point(local);
-                let at = b.world_point(local);
-                self.blood.spawn_sprite(kind, [at.x * PS, at.y * PS], [box2d::fdlibm::cos(a) * speed + v.x, box2d::fdlibm::sin(a) * speed + v.y]);
+            s.count += 1;
+            let t = self.blood.rand();
+            let local = Vec2::new(s.start.x + s.range.x * t, s.start.y + s.range.y * t);
+            let speed = self.blood.rand() * (s.max - s.min) + s.min;
+            let a = self.b.body(s.body).sweep.a + s.rot + s.angle_range * self.blood.rand();
+            let b = self.b.body(s.body);
+            let v = b.linear_velocity_from_local_point(local);
+            let at = b.world_point(local);
+            self.blood.spawn_sprite(s.kind, [at.x * PS, at.y * PS], [box2d::fdlibm::cos(a) * speed + v.x, box2d::fdlibm::sin(a) * speed + v.y]);
+            // the snowflake constructor draws one more number (`accelX`, never used)
+            if s.kind == crate::blood::ShardKind::Snow {
+                self.blood.rand();
             }
         }
-        self.sprays.retain(|s| s.count <= s.total && self.b.c.bodies[s.body].alive);
     }
 
     /// Whether `h` is a broken-special piece (chair, glass, toilet, log, boombox/TV, food chunk) that the sprite renderer draws with its own art.
@@ -7571,5 +7589,82 @@ mod tests {
         let y = w.position_px(1).unwrap()[1];
         // floor top = 490, ball radius 25 → resting centre ≈ 465
         assert!((y - 465.0).abs() < 6.0, "ball centre y = {y}");
+    }
+}
+
+#[cfg(test)]
+mod emitter_oracle_tests {
+    use super::*;
+    use crate::blood::ShardKind;
+
+    /// Spawn and flight of the real emitters (`analysis/emitters.js`: snow spray, `createSpray` with and without `stopSpewing`, point and rect bursts) with
+    /// `Math.random` replaced by `((k*37+11) % 101) / 101`. Velocities must be bit-identical; positions within 1e-9 px (the oracle stores the bitmap's corner).
+    #[test]
+    fn emitters_match_the_original() {
+        let doc: serde_json::Value = serde_json::from_str(include_str!("../../../tests/golden/emitters.json")).unwrap();
+        let v: serde_json::Value = serde_json::from_str(doc["result"]["value"].as_str().unwrap()).unwrap();
+        let f = |x: &serde_json::Value| x.as_f64().unwrap();
+        let o = &v["body"];
+        let setup = || {
+            let xml = "<levelXML><info v='1.99' x='1000' y='250' c='1' h='f' bg='0' bgc=''/></levelXML>";
+            let mut w = World::from_level(&crate::level::parse(xml).unwrap());
+            let pos = Vec2::new(f(&o["x"]), f(&o["y"]));
+            let id = w.b2_mut().create_body(&box2d::world::BodyDef { position: pos, angle: f(&o["a"]), ..Default::default() });
+            let verts = o["verts"].as_array().unwrap().iter().map(|p| Vec2::new(f(&p[0]), f(&p[1]))).collect();
+            w.b2_mut().create_shape(id, &box2d::shape::ShapeDef::new(box2d::shape::Geometry::Polygon(verts)));
+            let lc = Vec2::new(f(&o["lc"][0]), f(&o["lc"][1]));
+            let c = w.b2().body(id).world_point(lc);
+            let b = w.b2_mut().body_mut(id);
+            b.sweep.local_center = lc;
+            b.sweep.c = c;
+            b.linear_velocity = Vec2::new(3.5, 40.25);
+            b.angular_velocity = 1.5;
+            w.blood.script = (0..2000u32).map(|k| f64::from((k * 37 + 11) % 101) / 101.0).collect();
+            (w, id)
+        };
+        let check = |name: &str, n: usize, w: &World| {
+            let want = v[name][n].as_array().unwrap();
+            assert_eq!(w.blood.sprites.len(), want.len(), "{name} step {n} count");
+            for (i, (p, q)) in w.blood.sprites.iter().zip(want).enumerate() {
+                assert!((p.pos[0] - f(&q[0])).abs() < 1e-9 && (p.pos[1] - f(&q[1])).abs() < 1e-9, "{name} step {n} particle {i} pos {:?} want {q}", p.pos);
+                assert_eq!(p.velocity(), [f(&q[2]), f(&q[3])], "{name} step {n} particle {i} velocity");
+            }
+        };
+        let plain = ShardKind::Food(0);
+        let px = |x: f64, y: f64| (x * PS, y * PS);
+        for dt in ["1", "0.5"] {
+            for (prefix, kind, min, max, angle, per_frame, total, steps, stop) in [
+                ("snow", ShardKind::Snow, 0.0, 0.0, 180.0, 5, 5000, 5, usize::MAX),
+                ("spray", plain, 1.0, 4.0, 30.0, 3, 7, 6, usize::MAX),
+                ("stop", plain, 1.0, 4.0, 30.0, 3, 5000, 6, 2),
+            ] {
+                let name = format!("{prefix}_{dt}");
+                let (mut w, id) = setup();
+                w.sprays.push(Spray::new(kind, id, px(-0.5, 0.25), px(0.75, 0.5), min, max, angle, per_frame, total));
+                check(&name, 0, &w);
+                for n in 0..steps {
+                    if n == stop {
+                        w.sprays[0].total = w.sprays[0].count;
+                    }
+                    w.step_particles(dt.parse().unwrap());
+                    check(&name, n + 1, &w);
+                }
+            }
+        }
+        let (mut w, _) = setup();
+        w.blood.sprite_burst(plain, [640.0, 320.0], 30.0, 30.0, 6);
+        check("point", 0, &w);
+        for n in 0..3 {
+            w.step_particles(1.0);
+            check("point", n + 1, &w);
+        }
+        let (mut w, id) = setup();
+        let src = w.b2().body(id).clone();
+        w.rect_burst(&src, id, plain, 10.0, 6);
+        check("rect", 0, &w);
+        for n in 0..3 {
+            w.step_particles(1.0);
+            check("rect", n + 1, &w);
+        }
     }
 }
