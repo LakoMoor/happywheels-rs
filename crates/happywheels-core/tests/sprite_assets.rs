@@ -15,7 +15,7 @@ fn collect_atlases(root: &Path, dir: &Path, files: &mut HashMap<PathBuf, Vec<u8>
         let path = entry.unwrap().path();
         if path.is_dir() {
             collect_atlases(root, &path, files);
-        } else if path.to_string_lossy().contains("@0.3x.") {
+        } else if path.to_string_lossy().contains("@0.6x.") {
             files.insert(
                 path.strip_prefix(root).unwrap().to_path_buf(),
                 std::fs::read(path).unwrap(),

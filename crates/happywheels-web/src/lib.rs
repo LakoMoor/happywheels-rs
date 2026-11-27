@@ -338,11 +338,13 @@ mod browser {
             let (w, h) = (self.canvas.width().max(1), self.canvas.height().max(1));
             let saved = if self.interpolate { self.world.show_tick60() } else { None };
             let camera = self.world.view_center_px().unwrap_or(self.level.info.start);
-            let frame = render::render_level_scene(
+            // the original's 900 × 500 view, at as many image pixels as the canvas has
+            let frame = render::render_level_view(
                 &self.level,
                 &self.world,
                 w,
                 h,
+                w as f32 / 900.0,
                 camera,
                 self.sprites.as_ref(),
                 self.backdrop.as_ref(),

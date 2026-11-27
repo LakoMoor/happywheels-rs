@@ -13,6 +13,16 @@ use winit::{
     window::{Window, WindowId},
 };
 
+/// The frames hold sRGB bytes. They are decoded on sampling only if the surface encodes again; a browser surface often does not,
+/// and decoding there turned every mid tone dark.
+fn frame_format(surface: wgpu::TextureFormat) -> wgpu::TextureFormat {
+    if surface.is_srgb() {
+        wgpu::TextureFormat::Rgba8UnormSrgb
+    } else {
+        wgpu::TextureFormat::Rgba8Unorm
+    }
+}
+
 struct Renderer {
     surface: wgpu::Surface<'static>,
     device: wgpu::Device,
@@ -109,7 +119,7 @@ impl Renderer {
             cache: None,
         });
         let (_texture, bind_group, texture_size) =
-            Self::create_texture(&device, &texture_layout, frame);
+            Self::create_texture(&device, &texture_layout, frame, frame_format(config.format));
         let mut renderer = Self {
             surface,
             device,
@@ -129,6 +139,7 @@ impl Renderer {
         device: &wgpu::Device,
         layout: &wgpu::BindGroupLayout,
         frame: &RgbaImage,
+        format: wgpu::TextureFormat,
     ) -> (wgpu::Texture, wgpu::BindGroup, (u32, u32)) {
         let size = wgpu::Extent3d {
             width: frame.width(),
@@ -141,7 +152,7 @@ impl Renderer {
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            format,
             usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
             view_formats: &[],
         });
@@ -172,7 +183,7 @@ impl Renderer {
     fn upload(&mut self, frame: &RgbaImage) -> Result<()> {
         if self.texture_size != frame.dimensions() {
             let (texture, bind_group, size) =
-                Self::create_texture(&self.device, &self.texture_layout, frame);
+                Self::create_texture(&self.device, &self.texture_layout, frame, frame_format(self.config.format));
             self._texture = texture;
             self.bind_group = bind_group;
             self.texture_size = size;
@@ -451,8 +462,8 @@ impl App {
     fn current_frame(&mut self, w: u32, h: u32) -> Result<RgbaImage> {
         match &self.sim {
             Some(sim) => Ok(match &sim.p2 {
-                // the original's 900 × 500 view, stretched into the window by the renderer
-                None => happywheels_core::render::render_level_scene(&sim.level, &sim.world, 900, 500, sim.camera(), sim.sprites.as_ref(), sim.backdrop.as_ref()),
+                // the original's 900 × 500 view at its 2× resolution, stretched into the window by the renderer
+                None => happywheels_core::render::render_level_view(&sim.level, &sim.world, 1800, 1000, 2.0, sim.camera(), sim.sprites.as_ref(), sim.backdrop.as_ref()),
                 Some(p2) => render_split(&sim.level, &sim.world, sim.sprites.as_ref(), p2, sim.backdrop.as_ref(), w, h),
             }),
             None => self.menu.render(w, h),

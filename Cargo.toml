@@ -7,3 +7,13 @@ opt-level = 1
 [profile.release]
 lto = "thin"
 codegen-units = 1
+
+# the frame is drawn on the CPU: without these a debug build is far below 30 fps
+[profile.dev.package.happywheels-core]
+opt-level = 3
+[profile.dev.package.image]
+opt-level = 3
+[profile.dev.package.imageproc]
+opt-level = 3
+[profile.dev.package.box2d]
+opt-level = 3

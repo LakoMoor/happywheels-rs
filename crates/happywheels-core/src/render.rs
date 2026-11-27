@@ -30,13 +30,26 @@ pub fn render_level_sprites(level: &Level, world: &World, width: u32, height: u3
 
 /// [`render_level_sprites`] with a parallax backdrop (`Sprites::open_backdrop`) drawn behind the level.
 pub fn render_level_scene(level: &Level, world: &World, width: u32, height: u32, camera: [f32; 2], sprites: Option<&crate::sprites::Sprites>, backdrop: Option<&crate::sprites::Sprites>) -> RgbaImage {
+    render_level_view(level, world, width, height, 1.0, camera, sprites, backdrop)
+}
+
+/// [`render_level_scene`] with `zoom` image pixels per world pixel (the original renders its 900 × 500 view at 2×).
+#[allow(clippy::too_many_arguments)]
+pub fn render_level_view(level: &Level, world: &World, width: u32, height: u32, zoom: f32, camera: [f32; 2], sprites: Option<&crate::sprites::Sprites>, backdrop: Option<&crate::sprites::Sprites>) -> RgbaImage {
     let bg = level.info.background_color;
     let mut img = RgbaImage::from_pixel(width, height, Rgba([(bg >> 16) as u8, (bg >> 8) as u8, bg as u8, 255]));
     if let Some(b) = backdrop {
-        b.draw_backdrop(&mut img, camera);
+        if zoom == 1.0 {
+            b.draw_backdrop(&mut img, camera);
+        } else {
+            // the layers are blurred: drawing them at 1× and stretching costs far less
+            let mut small = RgbaImage::from_pixel((width as f32 / zoom) as u32, (height as f32 / zoom) as u32, img.get_pixel(0, 0).to_owned());
+            b.draw_backdrop(&mut small, camera);
+            stretch(&small, &mut img, zoom);
+        }
     }
     let (cx, cy) = (camera[0], camera[1]);
-    let to_screen = |x: f32, y: f32| ((x - cx) + width as f32 / 2.0, (y - cy) + height as f32 / 2.0);
+    let to_screen = |x: f32, y: f32| ((x - cx) * zoom + width as f32 / 2.0, (y - cy) * zoom + height as f32 / 2.0);
     for (i, s) in level.shapes.iter().enumerate() {
         if !world.shape_visible.get(i).copied().unwrap_or(true) { continue; }
         let col = colour(s);
@@ -70,7 +83,7 @@ pub fn render_level_scene(level: &Level, world: &World, width: u32, height: u32,
                 }
                 DrawShape::Circle { center, radius } => {
                     let (sx, sy) = to_screen(center[0], center[1]);
-                    draw_filled_circle_mut(&mut img, (sx as i32, sy as i32), radius as i32, col);
+                    draw_filled_circle_mut(&mut img, (sx as i32, sy as i32), (radius * zoom) as i32, col);
                 }
             }
         }
@@ -88,7 +101,7 @@ pub fn render_level_scene(level: &Level, world: &World, width: u32, height: u32,
                 }
                 DrawShape::Circle { center, radius } => {
                     let (sx, sy) = to_screen(center[0], center[1]);
-                    draw_filled_circle_mut(&mut img, (sx as i32, sy as i32), radius as i32, col);
+                    draw_filled_circle_mut(&mut img, (sx as i32, sy as i32), (radius * zoom) as i32, col);
                 }
             }
         }
@@ -114,15 +127,17 @@ pub fn render_level_scene(level: &Level, world: &World, width: u32, height: u32,
                     }
                     DrawShape::Circle { center, radius } => {
                         let (sx, sy) = to_screen(center[0], center[1]);
-                        draw_filled_circle_mut(&mut img, (sx as i32, sy as i32), radius as i32, col);
+                        draw_filled_circle_mut(&mut img, (sx as i32, sy as i32), (radius * zoom) as i32, col);
                     }
                 }
             }
         }
     }
     if let Some(sp) = sprites {
-        sp.draw_specials(&mut img, level, world, (width as f32 / 2.0 - cx, height as f32 / 2.0 - cy));
-        sp.draw(&mut img, world, (width as f32 / 2.0 - cx, height as f32 / 2.0 - cy));
+        sp.view.set(f64::from(zoom));
+        let offset = (width as f32 / (2.0 * zoom) - cx, height as f32 / (2.0 * zoom) - cy);
+        sp.draw_specials(&mut img, level, world, offset);
+        sp.draw(&mut img, world, offset);
     }
     // Blood: one dark red segment per particle (last → current position), like `BloodParticle.step`.
     if world.blood.setting >= 3 {
@@ -142,7 +157,7 @@ pub fn render_level_scene(level: &Level, world: &World, width: u32, height: u32,
         for p in &world.blood.sprites {
             if p.kind == crate::blood::ShardKind::Food(crate::blood::BLOOD) {
                 let (x, y) = to_screen(p.pos[0] as f32, p.pos[1] as f32);
-                draw_filled_circle_mut(&mut img, (x as i32, y as i32), 2, Rgba([0x99, 0x00, 0x00, 255]));
+                draw_filled_circle_mut(&mut img, (x as i32, y as i32), (2.0 * zoom) as i32, Rgba([0x99, 0x00, 0x00, 255]));
             }
         }
     }
@@ -150,7 +165,7 @@ pub fn render_level_scene(level: &Level, world: &World, width: u32, height: u32,
     for s in &world.blood.sparks {
         let (x0, y0) = to_screen(s.seg[0][0] as f32, s.seg[0][1] as f32);
         let (x1, y1) = to_screen(s.seg[1][0] as f32, s.seg[1][1] as f32);
-        imageproc::drawing::draw_line_segment_mut(&mut img, (x0, y0), (x1, y1), Rgba([0xFF, 0xFF, s.blue, 255]));
+        thick_line(&mut img, (x0, y0), (x1, y1), zoom, Rgba([0xFF, 0xFF, s.blue, 255]));
     }
     // Groups: children follow the group body (child coords assumed world-space at start).
     for (gi, g) in level.groups.iter().enumerate() {
@@ -172,6 +187,23 @@ pub fn render_level_scene(level: &Level, world: &World, width: u32, height: u32,
     img
 }
 
+/// Nearest-pixel enlargement of `small` into `img`: a filtered resize costs more than the rest of the frame in a browser.
+fn stretch(small: &RgbaImage, img: &mut RgbaImage, zoom: f32) {
+    if small.width() == 0 || small.height() == 0 {
+        return;
+    }
+    let at = |v: u32, limit: u32| ((v as f32 / zoom) as u32).min(limit - 1) as usize;
+    let columns: Vec<usize> = (0..img.width()).map(|x| at(x, small.width()) * 4).collect();
+    let (from, row) = (small.as_raw(), small.width() as usize * 4);
+    let stride = img.width() as usize * 4;
+    for (y, line) in img.chunks_exact_mut(stride).enumerate() {
+        let source = &from[at(y as u32, small.height()) * row..];
+        for (pixel, &x) in line.chunks_exact_mut(4).zip(&columns) {
+            pixel.copy_from_slice(&source[x..x + 4]);
+        }
+    }
+}
+
 /// A level shape as `getFlatSprite` draws it: fill `color` (≥ 0; −1 = none), a 1 px outline in `outlineColor` (≥ 0) and the whole sprite at `opacity`;
 /// fully transparent or colourless shapes are invisible.
 fn draw_shape(img: &mut RgbaImage, s: &crate::level::Shape, (px, py): (f32, f32), angle: f32, _col: Rgba<u8>, to_screen: &dyn Fn(f32, f32) -> (f32, f32)) {
@@ -189,7 +221,7 @@ fn draw_shape(img: &mut RgbaImage, s: &crate::level::Shape, (px, py): (f32, f32)
     let pts: Vec<(f32, f32)> = match s.kind {
         ShapeKind::Circle => {
             let (sx, sy) = to_screen(px, py);
-            let r = s.num("shapeWidth").unwrap_or(0.0) / 2.0;
+            let r = s.num("shapeWidth").unwrap_or(0.0) / 2.0 * (to_screen(1.0, 0.0).0 - to_screen(0.0, 0.0).0);
             paint(img, Outline::Circle((sx, sy), r), fill, line, alpha);
             return;
         }
@@ -354,7 +386,7 @@ fn metaball_blood(img: &mut RgbaImage, world: &World, to_screen: &dyn Fn(f32, f3
     if a.iter().all(|&v| v == 0.0) {
         return;
     }
-    let r = 2_i64;
+    let r = (2.0 * scale).round() as i64;
     let mut tmp = vec![0.0_f32; w * h];
     for _ in 0..3 {
         for y in 0..h {

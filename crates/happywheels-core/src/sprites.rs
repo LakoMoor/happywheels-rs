@@ -2,7 +2,7 @@
 //! name, position, rotation, scale and nested children down to texture leaves; dumped by `analysis/clip-dump.js` into
 //! `data/clip-c<N>.json`). Each frame the part clip takes the pose of its Box2D body. Here a part is drawn as
 //! `G = body_xf · rest_body_xf⁻¹ · rest_part_world` followed by the clip's own nested transforms; textures come from the
-//! `@0.3x` atlas (frame sizes relative to `origSize` give the pixel ratio).
+//! `@0.6x` atlas (frame sizes relative to `origSize` give the pixel ratio).
 
 use std::{
     collections::HashMap,
@@ -164,13 +164,26 @@ struct Binding {
     rest: M,
 }
 
+/// Atlas size used. The original defaults to the full-size one; this renderer samples bilinearly without mipmaps, so it takes the 0.6× one,
+/// which at the 2× view is close to one texel per pixel.
+const ATLAS: &str = "@0.6x";
+
 /// One drawn texture: its name and where the untrimmed texture's top-left, top-right and bottom-left corners land.
 pub type DrawnTexture = (String, [[f64; 2]; 3]);
 
+/// A blurred backdrop layer as rendered when its offset was `at`.
+struct Blurred {
+    at: (i64, i64),
+    image: RgbaImage,
+}
+
 pub struct Sprites {
+    blurred: std::cell::RefCell<Vec<Option<Blurred>>>,
     /// When set, every texture drawn is recorded here (compared with the original's display list in tests).
     pub trace: std::cell::RefCell<Option<Vec<DrawnTexture>>>,
     clip: Vec<Node>,
+    /// Image pixels per world pixel (0 = unset = 1).
+    pub view: std::cell::Cell<f64>,
     /// Layer of each part clip (`name`, or `npc/name`), bottom first.
     layers: HashMap<String, usize>,
     /// Hidden node names to show while the current binding is drawn.
@@ -259,7 +272,7 @@ impl Sprites {
         }
         let mut pages = Vec::new();
         for (folder, stem) in folders {
-            let (Some(json), Some(img)) = (source.string(&folder.join(format!("{stem}@0.3x.json"))), source.image(&folder.join(format!("{stem}@0.3x.png")))) else { continue };
+            let (Some(json), Some(img)) = (source.string(&folder.join(format!("{stem}{ATLAS}.json"))), source.image(&folder.join(format!("{stem}{ATLAS}.png")))) else { continue };
             let Ok(atlas) = serde_json::from_str::<AtlasFile>(&json) else { continue };
             pages.push((atlas.frames, img.to_rgba8()));
         }
@@ -269,7 +282,7 @@ impl Sprites {
         // Atlas `game/l` holds the runtime special-element art (spikes, ...).
         for g in ["l", "d", "r", "o", "c", "a", "n", "p", "q"] {
             let game = assets.join(format!("animate/game/{g}"));
-            if let (Some(json), Some(img)) = (source.string(&game.join(format!("{g}@0.3x.json"))), source.image(&game.join(format!("{g}@0.3x.png")))) {
+            if let (Some(json), Some(img)) = (source.string(&game.join(format!("{g}{ATLAS}.json"))), source.image(&game.join(format!("{g}{ATLAS}.png")))) {
                 if let Ok(atlas) = serde_json::from_str::<AtlasFile>(&json) {
                     pages.push((atlas.frames, img.to_rgba8()));
                 }
@@ -287,17 +300,17 @@ impl Sprites {
             let mut tries = vec![(dir.clone(), format!("character{other}"))];
             tries.extend(["a", "b", "c"].map(|sub| (dir.join(sub), sub.to_string())));
             for (folder, stem) in tries {
-                let Some(json) = source.string(&folder.join(format!("{stem}@0.3x.json"))) else { continue };
+                let Some(json) = source.string(&folder.join(format!("{stem}{ATLAS}.json"))) else { continue };
                 let Ok(atlas) = serde_json::from_str::<AtlasFile>(&json) else { continue };
                 if !missing.iter().any(|t| atlas.frames.contains_key(t)) {
                     continue;
                 }
-                let Some(img) = source.image(&folder.join(format!("{stem}@0.3x.png"))) else { continue };
+                let Some(img) = source.image(&folder.join(format!("{stem}{ATLAS}.png"))) else { continue };
                 missing.retain(|t| !atlas.frames.contains_key(t));
                 pages.push((atlas.frames, img.to_rgba8()));
             }
         }
-        Some(Self { trace: Default::default(), layers, shown: Default::default(), queue: Default::default(), clip, pages, bindings: Vec::new(), city: Vec::new(), hidden: Default::default(), show_wound: Default::default(), grind_mask: Default::default(), assets: source.clone(), npc: Default::default() })
+        Some(Self { blurred: Default::default(), view: Default::default(), trace: Default::default(), layers, shown: Default::default(), queue: Default::default(), clip, pages, bindings: Vec::new(), city: Vec::new(), hidden: Default::default(), show_wound: Default::default(), grind_mask: Default::default(), assets: source.clone(), npc: Default::default() })
     }
 
     /// Clip set of the NPC ragdolls: `NPCSprite1..12` (dumped from the oracle) with the atlas pages that hold their textures (game atlases and the
@@ -345,16 +358,16 @@ impl Sprites {
             if missing.is_empty() {
                 break;
             }
-            let Some(json) = source.string(&folder.join(format!("{stem}@0.3x.json"))) else { continue };
+            let Some(json) = source.string(&folder.join(format!("{stem}{ATLAS}.json"))) else { continue };
             let Ok(atlas) = serde_json::from_str::<AtlasFile>(&json) else { continue };
             if !missing.iter().any(|t| atlas.frames.contains_key(t)) {
                 continue;
             }
-            let Some(img) = source.image(&folder.join(format!("{stem}@0.3x.png"))) else { continue };
+            let Some(img) = source.image(&folder.join(format!("{stem}{ATLAS}.png"))) else { continue };
             missing.retain(|t| !atlas.frames.contains_key(t));
             pages.push((atlas.frames, img.to_rgba8()));
         }
-        Some(Self { trace: Default::default(), layers: Default::default(), shown: Default::default(), queue: Default::default(), clip, pages, bindings: Vec::new(), city: Vec::new(), hidden: Default::default(), show_wound: Default::default(), grind_mask: Default::default(), assets: source.clone(), npc: Default::default() })
+        Some(Self { blurred: Default::default(), view: Default::default(), trace: Default::default(), layers: Default::default(), shown: Default::default(), queue: Default::default(), clip, pages, bindings: Vec::new(), city: Vec::new(), hidden: Default::default(), show_wound: Default::default(), grind_mask: Default::default(), assets: source.clone(), npc: Default::default() })
     }
 
     /// Draws the NPC of special `sp` (frame 1 of every part, `shape` guides hidden): each part clip sits at its body's centre of mass with the body's
@@ -441,14 +454,14 @@ impl Sprites {
         for i in 1..=3 {
             let stem = format!("backgrounds_atlas_{i}");
             let folder = assets.join("animate/backgrounds").join(&stem);
-            let (Some(json), Some(img)) = (source.string(&folder.join(format!("{stem}@0.3x.json"))), source.image(&folder.join(format!("{stem}@0.3x.png")))) else { continue };
+            let (Some(json), Some(img)) = (source.string(&folder.join(format!("{stem}{ATLAS}.json"))), source.image(&folder.join(format!("{stem}{ATLAS}.png")))) else { continue };
             let Ok(atlas) = serde_json::from_str::<AtlasFile>(&json) else { continue };
             pages.push((atlas.frames, img.to_rgba8()));
         }
         if pages.is_empty() {
             return None;
         }
-        Some(Self { trace: Default::default(), layers: Default::default(), shown: Default::default(), queue: Default::default(), clip, pages, bindings: Vec::new(), city: Vec::new(), hidden: Default::default(), show_wound: Default::default(), grind_mask: Default::default(), assets: source.clone(), npc: Default::default() })
+        Some(Self { blurred: Default::default(), view: Default::default(), trace: Default::default(), layers: Default::default(), shown: Default::default(), queue: Default::default(), clip, pages, bindings: Vec::new(), city: Vec::new(), hidden: Default::default(), show_wound: Default::default(), grind_mask: Default::default(), assets: source.clone(), npc: Default::default() })
     }
 
     /// City backdrop (`bg='2'`): `city_bd1` (fixed sky/clouds) below two layers of baked buildings (`backdrop2`: multiplier .25, blur 5;
@@ -546,7 +559,7 @@ impl Sprites {
         let (cx, cy) = (f64::from(img.width()) / 2.0 - f64::from(camera[0]), f64::from(img.height()) / 2.0 - f64::from(camera[1]));
         // Flash `BlurFilter` strengths of the layers (sky has none); blur is applied as a gaussian with the variance of `quality` (3) box passes.
         const BLUR: [f32; 4] = [0.0, 7.0, 6.0, 3.0];
-        for ((layer, m), blur) in self.clip.iter().zip(MULTIPLIERS).zip(BLUR) {
+        for (index, ((layer, m), blur)) in self.clip.iter().zip(MULTIPLIERS).zip(BLUR).enumerate() {
             let g = local((cx * m).round(), (cy * m).round(), 0.0, 1.0, 1.0);
             if blur == 0.0 {
                 for child in &layer.k {
@@ -554,20 +567,41 @@ impl Sprites {
                 }
                 continue;
             }
-            let mut tmp = RgbaImage::new(img.width(), img.height());
-            for child in &layer.k {
-                self.draw_node(&mut tmp, child, g);
+            // Blurring a whole layer costs more than the rest of the frame, so each one is kept, rendered with a margin, and reused
+            // until the camera has moved the layer by more than that margin.
+            const MARGIN: i64 = 64;
+            let (ox, oy) = ((cx * m).round() as i64, (cy * m).round() as i64);
+            let size = (img.width() + 2 * MARGIN as u32, img.height() + 2 * MARGIN as u32);
+            let mut cache = self.blurred.borrow_mut();
+            if cache.len() <= index {
+                cache.resize_with(index + 1, || None);
             }
-            let sigma = (3.0 * (blur * blur - 1.0) / 12.0).sqrt();
-            let tmp = imageproc::filter::gaussian_blur_f32(&tmp, sigma);
-            for (x, y, p) in tmp.enumerate_pixels() {
+            let fits = |c: &Blurred| c.image.dimensions() == size && (c.at.0 - ox).abs() <= MARGIN && (c.at.1 - oy).abs() <= MARGIN;
+            if !cache[index].as_ref().is_some_and(fits) {
+                let mut tmp = RgbaImage::new(size.0, size.1);
+                let shifted = local((ox + MARGIN) as f64, (oy + MARGIN) as f64, 0.0, 1.0, 1.0);
+                for child in &layer.k {
+                    self.draw_node(&mut tmp, child, shifted);
+                }
+                // premultiplied, as Flash blurs: otherwise transparent black bleeds into the edges as a dark halo
+                for p in tmp.pixels_mut() {
+                    for i in 0..3 {
+                        p[i] = (u16::from(p[i]) * u16::from(p[3]) / 255) as u8;
+                    }
+                }
+                let sigma = (3.0 * (blur * blur - 1.0) / 12.0).sqrt();
+                cache[index] = Some(Blurred { at: (ox, oy), image: imageproc::filter::gaussian_blur_f32(&tmp, sigma) });
+            }
+            let Some(layer) = cache[index].as_ref() else { continue };
+            let (dx, dy) = (MARGIN - (ox - layer.at.0), MARGIN - (oy - layer.at.1));
+            for (x, y, d) in img.enumerate_pixels_mut() {
+                let p = layer.image.get_pixel((i64::from(x) + dx) as u32, (i64::from(y) + dy) as u32);
                 if p[3] == 0 {
                     continue;
                 }
                 let a = f32::from(p[3]) / 255.0;
-                let d = img.get_pixel_mut(x, y);
                 for i in 0..3 {
-                    d[i] = (f32::from(p[i]) * a + f32::from(d[i]) * (1.0 - a)) as u8;
+                    d[i] = (f32::from(p[i]) + f32::from(d[i]) * (1.0 - a)).min(255.0) as u8;
                 }
             }
         }
@@ -999,7 +1033,7 @@ impl Sprites {
     }
 
     pub fn draw_specials(&self, img: &mut RgbaImage, level: &crate::level::Level, world: &World, camera_offset: (f32, f32)) {
-        let cam = local(f64::from(camera_offset.0), f64::from(camera_offset.1), 0.0, 1.0, 1.0);
+        let cam = self.camera(camera_offset);
         self.draw_food_chunks(img, world, cam);
         self.draw_boombox_pieces(img, world, cam);
         self.draw_chair_pieces(img, world, cam);
@@ -1739,6 +1773,12 @@ impl Sprites {
         self.draw_shards(img, world, camera_offset);
     }
 
+    /// World px → image px for a view whose world-space offset is `offset`.
+    fn camera(&self, offset: (f32, f32)) -> M {
+        let s = if self.view.get() > 0.0 { self.view.get() } else { 1.0 };
+        local(f64::from(offset.0) * s, f64::from(offset.1) * s, 0.0, s, s)
+    }
+
     fn layer(&self, path: &[usize]) -> usize {
         let top = &self.clip[path[0]];
         let mut node = top;
@@ -1771,7 +1811,7 @@ impl Sprites {
                 for c in children {
                     self.extent(c, local(0.0, 0.0, 0.0, 1.0, 1.0), &mut ext);
                 }
-                let m = local(p.pos[0] - ext.0 / 2.0 + f64::from(camera_offset.0), p.pos[1] - ext.1 / 2.0 + f64::from(camera_offset.1), 0.0, 1.0, 1.0);
+                let m = mul(self.camera(camera_offset), local(p.pos[0] - ext.0 / 2.0, p.pos[1] - ext.1 / 2.0, 0.0, 1.0, 1.0));
                 for c in children {
                     self.draw_node(img, c, m);
                 }
@@ -1788,7 +1828,7 @@ impl Sprites {
             for c in children {
                 self.extent(c, local(0.0, 0.0, 0.0, 1.0, 1.0), &mut ext);
             }
-            let m = local(p.pos[0] - ext.0 / 2.0 + f64::from(camera_offset.0), p.pos[1] - ext.1 / 2.0 + f64::from(camera_offset.1), 0.0, 1.0, 1.0);
+            let m = mul(self.camera(camera_offset), local(p.pos[0] - ext.0 / 2.0, p.pos[1] - ext.1 / 2.0, 0.0, 1.0, 1.0));
             for c in children {
                 self.draw_node(img, c, m);
             }
@@ -1909,7 +1949,7 @@ impl Sprites {
                 placed = local(x * 62.5, y * 62.5, angle, 1.0, 1.0);
             }
         }
-        let g = mul(local(f64::from(camera_offset.0), f64::from(camera_offset.1), 0.0, 1.0, 1.0), mul(placed, mul(recentre, b.rest)));
+        let g = mul(self.camera(camera_offset), mul(placed, mul(recentre, b.rest)));
         let mut node = &self.clip[b.path[0]];
         for &i in &b.path[1..] {
             node = &node.k[i];
@@ -1930,7 +1970,7 @@ impl Sprites {
         let pogo = matches!(world.bike.as_ref(), Some(crate::vehicle::Vehicle::Pogo(_)));
         self.reveal(world, owner.or_else(|| world.character.as_ref().filter(|_| pogo)));
         // a body the mower is grinding is clipped by `targetMaskHolder`'s rect
-        self.set_grind_mask(world, b.body, local(f64::from(camera_offset.0), f64::from(camera_offset.1), 0.0, 1.0, 1.0));
+        self.set_grind_mask(world, b.body, self.camera(camera_offset));
         if let Some(name) = b.only {
             if let Some((child, parent)) = Self::nested(children, name, g) {
                 self.draw_node(img, child, parent);
