@@ -137,6 +137,15 @@ pub fn render_level_scene(level: &Level, world: &World, width: u32, height: u32,
             }
         }
     }
+    // Placeholder art: bitmap blood is drawn by the sprite layer; without it, show each drop as a dot.
+    if sprites.is_none() {
+        for p in &world.blood.sprites {
+            if p.kind == crate::blood::ShardKind::Food(crate::blood::BLOOD) {
+                let (x, y) = to_screen(p.pos[0] as f32, p.pos[1] as f32);
+                draw_filled_circle_mut(&mut img, (x as i32, y as i32), 2, Rgba([0x99, 0x00, 0x00, 255]));
+            }
+        }
+    }
     // Mower sparks: one yellow segment per spark (tail → head).
     for s in &world.blood.sparks {
         let (x0, y0) = to_screen(s.seg[0][0] as f32, s.seg[0][1] as f32);
@@ -390,5 +399,20 @@ mod tests {
         let img = render_level(&level, &w, 200, 400);
         assert_eq!(img.get_pixel(100, 300), &Rgba([0, 0, 255, 255])); // floor centre
         assert_eq!(img.get_pixel(100, 100), &Rgba([255, 0, 0, 255])); // ball centre
+    }
+}
+
+#[cfg(test)]
+mod placeholder_blood_tests {
+    use super::*;
+
+    #[test]
+    fn bitmap_blood_is_visible_without_original_art() {
+        let level = crate::level::parse("<levelXML><info v='1.99' x='1000' y='250' c='1' h='f' bg='0' bgc='16777215'/></levelXML>").unwrap();
+        let mut world = World::from_level(&level);
+        world.blood.line_blood = false;
+        world.blood.spawn_sprite(crate::blood::ShardKind::Food(crate::blood::BLOOD), [500.0, 200.0], [0.0, 0.0]);
+        let img = render_level_at(&level, &world, 100, 100, [500.0, 200.0]);
+        assert_eq!(img.get_pixel(50, 50), &Rgba([0x99, 0, 0, 255]));
     }
 }
