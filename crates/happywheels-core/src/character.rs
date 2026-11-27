@@ -346,7 +346,8 @@ impl Ragdoll {
             let body = b.create_body(&BodyDef {
                 position: Vec2::new(start.x + x / CHARACTER_SCALE, start.y + y / CHARACTER_SCALE),
                 angle: rot / (180.0 / std::f64::consts::PI),
-                allow_sleep: false,
+                // `AllowSleeping(false)` is called for the chest, head and pelvis only
+                allow_sleep: !matches!(part, Part::Chest | Part::Head | Part::Pelvis),
                 ..Default::default()
             });
             let mut d = if part == Part::Head {
@@ -391,7 +392,7 @@ impl Ragdoll {
         }
         let joint_ids = if defer { Vec::new() } else { Self::make_joints(b, guide, start, &bodies)? };
         let joints = LIMB_ORDER.iter().copied().zip(joint_ids).collect();
-        Some(Self { deferred: None, poses: PoseSet::Base, bodies, joints, pose: 0, cancel: false, broken: Vec::new(), grabbing: false, grips: [None; 2], group, head_chunk_radius: guide.get("headChunkShape").map_or(0.0, |g| g[3] * 5.0 / CHARACTER_SCALE), chest_chunk_radius: guide.get("chestChunkShape").map_or(0.0, |g| g[3] * 5.0 / CHARACTER_SCALE), pelvis_chunk_radius: guide.get("pelvisChunkShape").map_or(0.0, |g| g[3] * 5.0 / CHARACTER_SCALE), foot_guide: guide.get("footShape").copied().unwrap_or_default(), ref_scale, chunks: Vec::new(), chunk_names: Vec::new(), brain: None, heart: None, feet: [None; 2], dead: false, helmet_geo: (1..=4).map(|k| guide.get(&format!("helmetVert{k}")).map(|g| Vec2::new(g[0] / CHARACTER_SCALE, g[1] / CHARACTER_SCALE))).collect::<Option<Vec<_>>>().unwrap_or_default(), helmet_on: guide.get("helmetVert1").is_some(), helmet: None, sev: Vec::new(), sev_limbs: Vec::new(), ground: Vec::new(), pelvis_smashed: false, blood_flows: Vec::new(), tag: "Char3", voices: [None; 6], voice_until: 0, voice_prio: -1, intestines: None, spine: None, ligaments: [None, None, None, None], chain_len: [guide.get("intestineShape").map_or(0.0, |g| 2.0 * g[3] * ref_scale / CHARACTER_SCALE), guide.get("ligamentShape").map_or(0.0, |g| 2.0 * g[3] * ref_scale / CHARACTER_SCALE)], spine_anchor: guide.get("spineAnchor").map_or([0.0; 2], |g| [g[0], g[1]]), sev_guides: ["sevArm1Shape", "sevLeg1Shape", "sevLeg2Shape"].map(|n| guide.get(n).copied().unwrap_or_default()) })
+        Some(Self { deferred: None, poses: PoseSet::Base, bodies, joints, pose: 0, cancel: false, broken: Vec::new(), grabbing: false, grips: [None; 2], group, head_chunk_radius: guide.get("headChunkShape").map_or(0.0, |g| g[3] * 5.0 / CHARACTER_SCALE), chest_chunk_radius: guide.get("chestChunkShape").map_or(0.0, |g| g[3] * 5.0 / CHARACTER_SCALE), pelvis_chunk_radius: guide.get("pelvisChunkShape").map_or(0.0, |g| g[3] * 5.0 / CHARACTER_SCALE), foot_guide: guide.get("footShape").copied().unwrap_or_default(), ref_scale, chunks: Vec::new(), chunk_names: Vec::new(), brain: None, heart: None, feet: [None; 2], dead: false, helmet_geo: (1..=4).map(|k| guide.get(&format!("helmetVert{k}")).map(|g| Vec2::new(g[0] / CHARACTER_SCALE, g[1] / CHARACTER_SCALE))).collect::<Option<Vec<_>>>().unwrap_or_default(), helmet_on: guide.get("helmetVert1").is_some(), helmet: None, sev: Vec::new(), sev_limbs: Vec::new(), ground: Vec::new(), pelvis_smashed: false, blood_flows: Vec::new(), tag: "Char3", voices: [None; 6], voice_until: 0, voice_prio: -1, intestines: None, spine: None, ligaments: [None, None, None, None], chain_len: ["intestineShape", "ligamentShape"].map(|n| guide.get(n).map_or(0.0, |g| g[5] / CHARACTER_SCALE)), spine_anchor: guide.get("spineAnchor").map_or([0.0; 2], |g| [g[0], g[1]]), sev_guides: ["sevArm1Shape", "sevLeg1Shape", "sevLeg2Shape"].map(|n| guide.get(n).copied().unwrap_or_default()) })
     }
 
     /// `headSmash1`: the head body is destroyed (taking the neck joint with it) and replaced by four chunk balls on a
@@ -866,8 +867,8 @@ impl Ragdoll {
     }
 
     /// `i$.checkJoints`/`breakJoint`: a ligament whose main joint takes an impulse above 0.5 tears off the upper body: a small ball (3 px,
-    /// filter 2056/2056, the upper body's velocity) at the old anchor takes over as the joint's first body. APPROXIMATION: the original rewires
-    /// `m_body1` in place and keeps the accumulated impulse; here the joint is re-created (impulse restarts at 0).
+    /// filter 2056/2056, the upper body's velocity) at the old anchor takes over as the joint's first body. The original rewires
+    /// the joint in place (`m_body1`), keeping its impulse, its solver position and its island edges.
     fn check_ligaments(&mut self, world: &mut World) {
         let parts = [Part::UpperArm1, Part::UpperArm2, Part::UpperLeg1, Part::UpperLeg2];
         for (slot, up) in parts.into_iter().enumerate() {
@@ -877,7 +878,7 @@ impl Ragdoll {
                 continue;
             }
             let b = world.b2_mut();
-            let Some((anchor, len)) = b.distance_anchor1(main) else { continue };
+            let Some((anchor, _)) = b.distance_anchor1(main) else { continue };
             let upper = self.bodies[&up];
             let ball = b.create_body(&BodyDef { position: anchor, fixed_rotation: true, ..Default::default() });
             let mut d = ShapeDef::new(Geometry::Circle { local_position: Vec2::default(), radius: 3.0 / CHARACTER_SCALE });
@@ -889,13 +890,7 @@ impl Ragdoll {
             b.set_mass_from_shapes(ball);
             let v = b.body(upper).linear_velocity;
             b.body_mut(ball).linear_velocity = v;
-            let first = chain.bodies[0];
-            let p = b.body(first).xf.position;
-            let mut jd = DistanceJointDef::initialize(b.body(ball), ball, b.body(first), first, anchor, p);
-            jd.length = len;
-            jd.collide_connected = false;
-            b.destroy_joint(main);
-            chain.joints[0] = Some(b.create_distance_joint(&jd));
+            b.rewire_distance_joint(main, ball);
             chain.bodies.push(ball);
             chain.torn = true;
         }
@@ -1059,6 +1054,10 @@ impl Ragdoll {
     }
 
     fn break_side_effects(&mut self, world: &mut World, limb: Limb, force: f64) {
+        // `neckBreak` sets `dead`
+        if limb == Limb::Neck {
+            self.die(world);
+        }
         self.break_blood(world, limb);
         match limb {
             Limb::Elbow1 => self.vocal("Elbow1", 1),
@@ -1182,7 +1181,8 @@ impl Ragdoll {
 
     /// `currentPose` setter: switching to 0 schedules `cancelPose`.
     pub fn set_pose(&mut self, p: u8) {
-        if p != self.pose {
+        // `checkKeyStates` of a dead character only records the key string: no key can pose it any more
+        if p != self.pose && !(self.dead && p != 0) {
             self.pose = p;
             // original: setting the pose to 0 runs `cancelPose` at once, i.e. before whatever pose is set next in the same frame
             if p == 0 {
@@ -1208,6 +1208,9 @@ impl Ragdoll {
 
     /// Space key: `startGrab` (arms start looking for something to hold) / `releaseGrip` (joints destroyed).
     pub fn set_grab(&mut self, world: &mut World, pressed: bool) {
+        if pressed && self.dead {
+            return;
+        }
         if pressed {
             self.grabbing = true;
         } else if self.grabbing {
@@ -1276,6 +1279,9 @@ impl Ragdoll {
     /// right = pushup, up = superman, down = tuck; releasing the pair cancels poses 1/2 (left/right) or 3/4
     /// (up/down). Returns the new pose.
     pub fn keys(&mut self, left: bool, right: bool, up: bool, down: bool) -> u8 {
+        if self.dead {
+            return self.pose;
+        }
         let set = |this: &mut Self, p: u8| {
             if p != this.pose {
                 this.pose = p;

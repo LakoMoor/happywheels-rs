@@ -4165,3 +4165,95 @@ fn camera_at_60fps_matches_the_original() {
         }
     }
 }
+
+/// The built-in level against the original's own session (`analysis/level1-real.js`: `levelIndex` 1, the clip loaded by the game, the key schedule of
+/// the other real sessions): every dynamic body of the level, rider and vehicle, and the camera. `mine` gives rider and vehicle 6 m/s to the left
+/// before frame 5 (into the mine behind the start); `finish` moves them onto the finish block before frame 0.
+#[test]
+fn level1_matches_the_original() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    // the level's own dynamic bodies (10 blocks, 6 planks, 2 gears, 3 pistons) come before the rider's
+    const LEVEL_BODIES: usize = 21;
+    for (name, ch, shift, speed) in [("1", 1usize, None, None), ("2", 2, None, None), ("3", 3, None, None), ("4", 4, None, None), ("6", 6, None, None), ("7", 7, None, None), ("9", 9, None, None), ("11", 11, None, None), ("mine", 1, None, Some(-6.0)), ("finish", 1, Some([16996.0, -250.0]), None)] {
+        let doc: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(root.join(format!("tests/golden/level1-{name}.json"))).unwrap()).unwrap();
+        let mut w = World::level1();
+        assert!(w.spawn_bike(ch, happywheels_core::physics::LEVEL1_START), "spawn {name}");
+        let rider: Vec<_> = (0..w.b2().c.bodies.len()).filter(|&b| w.b2().c.bodies[b].alive && w.b2().c.bodies[b].mass > 0.0).skip(LEVEL_BODIES).collect();
+        let mut sounds = Vec::new();
+        for (i, frame) in doc["frames"].as_array().unwrap().iter().enumerate() {
+            if let (0, Some([dx, dy])) = (i, shift) {
+                for &id in &rider {
+                    let body = w.b2().body(id);
+                    let (at, angle) = (body.xf.position, body.sweep.a);
+                    w.b2_mut().set_xform(id, box2d::math::Vec2::new(at.x + dx / 62.5, at.y + dy / 62.5), angle);
+                    w.b2_mut().body_mut(id).wake_up();
+                }
+            }
+            if let (5, Some(vx)) = (i, speed) {
+                for &id in &rider {
+                    let body = w.b2_mut().body_mut(id);
+                    body.linear_velocity.x = vx;
+                    body.wake_up();
+                }
+            }
+            w.set_rider_keys(real_keys(i));
+            w.step();
+            if std::env::var("L1DBG").is_ok() && name == "mine" && (18..28).contains(&i) {
+                let all = w.take_sounds();
+                println!("s{i} {:?}", all.iter().map(|s| s.0.clone()).collect::<Vec<_>>());
+                sounds.extend(all.into_iter().filter(|s| s.0 == "MineExplosion").map(|s| (i, s.0)));
+                let order: Vec<usize> = (0..w.b2().c.bodies.len()).filter(|&b| w.b2().c.bodies[b].alive && w.b2().c.bodies[b].mass > 0.0).collect();
+                if i == 26 {
+                    let c = w.character.as_ref().unwrap();
+                    for (k, id) in order.iter().enumerate().skip(21) {
+                        println!("body {k} id {id} {:?}", c.bodies.iter().filter(|e| e.1 == id).map(|e| format!("{:?}", e.0)).collect::<Vec<_>>());
+                    }
+                }
+            }
+            sounds.extend(w.take_sounds().into_iter().filter(|s| s.0 == "Victory" || s.0 == "MineExplosion").map(|s| (i, s.0)));
+            let got: Vec<[f64; 3]> = w.b2().c.bodies.iter().filter(|b| b.mass > 0.0 && b.alive).map(|b| [b.xf.position.x * 62.5, b.xf.position.y * 62.5, b.sweep.a]).collect();
+            let want = frame.as_array().unwrap();
+            assert_eq!(got.len(), want.len(), "{name} frame {i}: body count");
+            if std::env::var("L1DBG").is_ok() && name == "mine" && (18..28).contains(&i) {
+                let bad: Vec<(usize, f64)> = got.iter().zip(want).enumerate().map(|(k, (g, o))| (k, (0..3).map(|j| (g[j] - o[j].as_f64().unwrap()).abs()).fold(0.0, f64::max))).filter(|e| e.1 > 1e-6).collect();
+                println!("f{i} n={} bad={:?}", got.len(), &bad[..bad.len().min(40)]);
+            }
+            for (k, (g, o)) in got.iter().zip(want).enumerate() {
+                let d = (0..3).map(|j| (g[j] - o[j].as_f64().unwrap()).abs()).fold(0.0, f64::max);
+                assert!(d < 2e-3, "{name} frame {i} body {k} (of {}): {g:?} want {o}", got.len());
+            }
+            if std::env::var("L1DBG").is_ok() && name == "mine" && (24..=25).contains(&i) {
+                let ref_: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(std::env::var("L1DBG").unwrap()).unwrap()).unwrap();
+                let v: serde_json::Value = serde_json::from_str(ref_["result"]["value"].as_str().unwrap()).unwrap();
+                let d = &v["dump"][i.to_string()];
+                let c = &w.b2().c;
+                let order: Vec<usize> = (0..c.bodies.len()).filter(|&b| c.bodies[b].alive && c.bodies[b].mass > 0.0).collect();
+                for (k, &id) in order.iter().enumerate() {
+                    let b = &c.bodies[id];
+                    let got = [b.mass, b.i, b.linear_velocity.x, b.linear_velocity.y, b.angular_velocity, b.shapes.len() as f64];
+                    let want: Vec<f64> = d["b"][k].as_array().unwrap().iter().map(|x| x.as_f64().unwrap()).collect();
+                    if got.iter().zip(&want).any(|(g, o)| (g - o).abs() > 1e-6) {
+                        println!("f{i} body {k}: port {got:?}\n        orig {want:?}");
+                    }
+                }
+                let index = |b: usize| order.iter().position(|&x| x == b).map_or(-1, |x| x as i64);
+                let mut ids: Vec<usize> = c.bodies.iter().filter(|b| b.alive).flat_map(|b| b.joints.iter().map(|j| j.0)).collect();
+                ids.sort();
+                ids.dedup();
+                let got: Vec<(i64, i64)> = ids.iter().map(|&j| (index(c.joints[j].body1), index(c.joints[j].body2))).collect();
+                let want: Vec<(i64, i64)> = d["j"].as_array().unwrap().iter().map(|j| (j[1].as_i64().unwrap(), j[2].as_i64().unwrap())).collect();
+                println!("f{i} joints port {got:?}\n      joints orig {want:?}");
+            }
+            let c = w.camera().unwrap();
+            let cam = &doc["cam"][i];
+            assert!((c.container[0] - cam[0].as_f64().unwrap()).abs() < 2e-3 && (c.container[1] - cam[1].as_f64().unwrap()).abs() < 2e-3, "{name} frame {i} camera {:?} want {cam}", c.container);
+        }
+        match name {
+            "mine" => assert_eq!(sounds, [(19, "MineExplosion".to_string())]),
+            "finish" => assert_eq!(sounds, [(12, "Victory".to_string())]),
+            "1" | "3" => assert!(sounds.is_empty(), "{name}: {sounds:?}"),
+            // the other riders' sessions were recorded without sounds
+            _ => {}
+        }
+    }
+}

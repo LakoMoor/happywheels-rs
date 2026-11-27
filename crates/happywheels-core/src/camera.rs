@@ -42,6 +42,11 @@ impl Default for Camera {
 }
 
 impl Camera {
+    /// `setLimits(left, right, top, bottom)` of the level's camera bounds.
+    pub fn set_limits(&mut self, left: f64, right: f64, top: f64, bottom: f64) {
+        self.limits = [-left, -(right - VIEW[0]), -top, -(bottom - VIEW[1])];
+    }
+
     /// Centre of the view in world px.
     pub fn center(&self) -> [f64; 2] {
         [VIEW[0] / 2.0 - self.container[0], VIEW[1] / 2.0 - self.container[1]]

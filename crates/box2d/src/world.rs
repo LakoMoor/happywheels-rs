@@ -914,10 +914,17 @@ impl World {
     /// `b2World.DestroyJoint`.
     pub fn destroy_joint(&mut self, id: usize) {
         let (b1, b2, collide) = (self.c.joints[id].body1, self.c.joints[id].body2, self.c.joints[id].collide_connected);
-        if !self.c.bodies[b1].joints.iter().any(|j| j.0 == id) {
+        if !self.c.bodies[b2].joints.iter().any(|j| j.0 == id) {
             return;
         }
-        self.c.bodies[b1].joints.retain(|j| j.0 != id);
+        if self.c.bodies[b1].joints.iter().any(|j| j.0 == id) {
+            self.c.bodies[b1].joints.retain(|j| j.0 != id);
+        } else {
+            // rewired (`rewire_distance_joint`): the first edge is still on the body the joint was created on
+            for b in &mut self.c.bodies {
+                b.joints.retain(|j| j.0 != id);
+            }
+        }
         self.c.bodies[b2].joints.retain(|j| j.0 != id);
         self.c.joint_order.retain(|&j| j != id);
         self.c.bodies[b1].wake_up();
@@ -1135,6 +1142,16 @@ impl World {
         match &j.kind {
             JointKind::Distance(d) => Some((self.c.bodies[j.body1].world_point(d.local_anchor1), d.length)),
             _ => None,
+        }
+    }
+
+    /// The original's in-place `m_body1 = body; m_localAnchor1.Set(0, 0)` on a live distance joint: the accumulated impulse and the joint's place in
+    /// the solver order stay, and so do its edges — islands still link the old first body with the second one, not the new one.
+    pub fn rewire_distance_joint(&mut self, id: usize, body: BodyId) {
+        let joint = &mut self.c.joints[id];
+        if let JointKind::Distance(d) = &mut joint.kind {
+            d.local_anchor1 = Vec2::default();
+            joint.body1 = body;
         }
     }
 

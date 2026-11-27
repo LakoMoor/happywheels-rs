@@ -14,6 +14,9 @@ use crate::level::{BodyRef, Level, Shape, ShapeKind};
 use crate::specials::{JointSpec, SimpleBody};
 
 pub const PHYS_SCALE: f32 = 62.5;
+mod level1;
+pub use level1::START as LEVEL1_START;
+
 const PS: f64 = 62.5;
 pub const TIME_STEP: f64 = 1.0 / 30.0;
 pub const ITERATIONS: usize = 10;
@@ -630,6 +633,9 @@ pub struct World {
     camera: Option<crate::camera::Camera>,
     camera_released: Option<BodyId>,
     camera_target: usize,
+    /// Level `cameraBounds` (x, y, width, height) when it is not the user-level default.
+    camera_bounds: Option<[f64; 4]>,
+    level1: Option<Box<level1::Level1>>,
     true_poses: Vec<box2d::world::Pose>,
     /// The 60 fps mode: poses to interpolate from and the factor shown last.
     sixty: Option<(Vec<box2d::world::Pose>, f64)>,
@@ -693,7 +699,6 @@ pub struct World {
 
 impl World {
     pub fn from_level(level: &Level) -> Self {
-        let version = level.info.version;
         // Original session: world bounds from the level (x -250, y -5250, 20500 x 15500), gravity (0, 10).
         let mut b = B2::new(Vec2::new(-250.0 / PS, -5250.0 / PS), Vec2::new(20250.0 / PS, 10250.0 / PS), Vec2::new(0.0, 10.0), true);
         let level_body = b.create_body(&BodyDef::default());
@@ -711,6 +716,19 @@ impl World {
         b.create_shape(level_body, &border(hx, hy, Vec2::new(-hx, (ch - sky) * 0.5 / PS)));
         b.create_shape(level_body, &border(hx, hy, Vec2::new((cw + bt * 0.5) / PS, (ch - sky) * 0.5 / PS)));
         b.create_shape(level_body, &border((bt + cw * 0.5) / PS, bt * 0.5 / PS, Vec2::new(cw * 0.5 / PS, -(bt * 0.5 + sky) / PS)));
+        Self::assemble(level, b, level_body)
+    }
+
+    /// A world with no level of its own (built-in levels add their bodies afterwards): bounds in metres, one static level body.
+    fn empty(lower: Vec2, upper: Vec2) -> Self {
+        let mut b = B2::new(lower, upper, Vec2::new(0.0, 10.0), true);
+        let level_body = b.create_body(&BodyDef::default());
+        let level = crate::level::parse("<levelXML><info v='1.99' x='400' y='100'/></levelXML>").expect("empty level");
+        Self::assemble(&level, b, level_body)
+    }
+
+    fn assemble(level: &Level, b: B2, level_body: BodyId) -> Self {
+        let version = level.info.version;
         let mut w = Self {
             b,
             level_body,
@@ -737,6 +755,8 @@ impl World {
             camera: None,
             camera_released: None,
             camera_target: 0,
+            camera_bounds: None,
+            level1: None,
             true_poses: Vec::new(),
             sixty: None,
             camera_focus_body: None,
@@ -2523,11 +2543,19 @@ impl World {
         Some(self.b.blend_poses(prev, *alpha))
     }
 
+    fn new_camera(&self) -> crate::camera::Camera {
+        let mut camera = crate::camera::Camera::default();
+        if let Some([x, y, width, height]) = self.camera_bounds {
+            camera.set_limits(x, x + width, y, y + height);
+        }
+        camera
+    }
+
     /// `Camera.step(dt)`; the particles' kill height and line offset come from it.
     pub fn step_camera(&mut self, dt: f64) {
         let Some((focus, magnet)) = self.camera_inputs() else { return };
         self.camera_focus_body = Some(focus.body);
-        let mut camera = self.camera.unwrap_or_default();
+        let mut camera = self.camera.unwrap_or_else(|| self.new_camera());
         let released = self.camera_released;
         let second = magnet.filter(|_| released.is_none()).map(|m| self.camera_body(m));
         let temp = released.map(|m| self.camera_body(m));
@@ -2556,7 +2584,7 @@ impl World {
     pub fn camera(&self) -> Option<crate::camera::Camera> {
         self.camera.or_else(|| {
             let (focus, magnet) = self.camera_inputs()?;
-            let mut camera = crate::camera::Camera::default();
+            let mut camera = self.new_camera();
             camera.step(focus, magnet.map(|m| self.camera_body(m)), None, 1.0);
             Some(camera)
         })
@@ -2620,6 +2648,14 @@ impl World {
                         crate::character::Part::Pelvis => doll.smash_pelvis(self),
                         crate::character::Part::LowerLeg1 => doll.smash_foot(self, 0),
                         _ => doll.smash_foot(self, 1),
+                    }
+                    // the vehicle classes' `headSmash1/chestSmash/pelvisSmash` overrides: the smash, then `eject()` (Santa has its own handler)
+                    let torso = matches!(part, crate::character::Part::Head | crate::character::Part::Chest | crate::character::Part::Pelvis);
+                    if torso && !matches!(self.bike, Some(crate::vehicle::Vehicle::Santa(_))) {
+                        if let Some(mut v) = self.bike.take() {
+                            v.rider_hurt(self, &mut doll, true, &[]);
+                            self.bike = Some(v);
+                        }
                     }
                 }
                 self.character = Some(doll);
@@ -2830,6 +2866,7 @@ impl World {
         }
         self.collect_rails(&events);
         self.finish_events(&events);
+        self.run_level1(&events);
         self.handle_events(events.clone());
         self.run_actions();
         self.run_fans();
@@ -2919,8 +2956,10 @@ impl World {
         }
         if self.joints_break && matches!(self.bike, Some(crate::vehicle::Vehicle::Family(_))) {
             if let Some(crate::vehicle::Vehicle::Family(mut f)) = self.bike.take() {
-                f.son.smash_basket(self, &events);
+                // contact buffers in the original's order: daughter, then son (body parts before the basket)
                 f.daughter.smashed(self, &events);
+                f.son.smashed(self, &events);
+                f.son.smash_basket(self, &events);
                 f.check_joints(self);
                 self.bike = Some(crate::vehicle::Vehicle::Family(f));
             }

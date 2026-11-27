@@ -4663,6 +4663,24 @@ impl Daughter {
     /// `frameSmash` (limit 50 on the frame shape): eject, then the frame body is replaced by fork / broken frame / seat bodies (density 2,
     /// zero filter) that keep its linear and angular velocity. Hitch, wheel and gear joints go with the body.
     pub fn smashed(&mut self, world: &mut World, events: &[box2d::world::ContactEvent]) {
+        // the body parts come before the frame shape in `contactImpulseDict`
+        let hits = world.doll_smash_hits(&self.doll, events);
+        for part in [Part::Head, Part::Chest, Part::Pelvis] {
+            if !hits.contains(&part) {
+                continue;
+            }
+            match part {
+                Part::Head => self.doll.smash_head(world),
+                Part::Chest => self.doll.smash_chest(world),
+                _ => self.doll.smash_pelvis(world),
+            }
+            self.eject(world);
+        }
+        for (leg, part) in [Part::LowerLeg1, Part::LowerLeg2].into_iter().enumerate() {
+            if hits.contains(&part) {
+                self.doll.smash_foot(world, leg);
+            }
+        }
         if self.frame_gone {
             return;
         }
@@ -4829,6 +4847,27 @@ impl Son {
             self.eject(world);
         }
         self.doll.apply_pose(world);
+    }
+
+    /// `headSmash1/chestSmash/pelvisSmash`: the base class's smash, then `eject()`; feet smash as in the base class.
+    pub fn smashed(&mut self, world: &mut World, events: &[box2d::world::ContactEvent]) {
+        let hits = world.doll_smash_hits(&self.doll, events);
+        for part in [Part::Head, Part::Chest, Part::Pelvis] {
+            if !hits.contains(&part) {
+                continue;
+            }
+            match part {
+                Part::Head => self.doll.smash_head(world),
+                Part::Chest => self.doll.smash_chest(world),
+                _ => self.doll.smash_pelvis(world),
+            }
+            self.eject(world);
+        }
+        for (leg, part) in [Part::LowerLeg1, Part::LowerLeg2].into_iter().enumerate() {
+            if hits.contains(&part) {
+                self.doll.smash_foot(world, leg);
+            }
+        }
     }
 
     fn refilter_parts(&self, world: &mut World, parts: &[Part]) {
@@ -5638,28 +5677,63 @@ impl Elf {
         }
     }
 
-    /// `eject`: legs off the wheel (`disableRunning` + `checkLegsOk`); the strap ends are handled by `Santa`.
+    /// `eject`: the joint limits come back and the legs leave the wheel; the strap ends are handled by `Santa`.
     fn eject(&mut self, world: &mut World) {
         if self.ejected {
             return;
         }
         self.ejected = true;
         self.doll.reset_joint_limits(world);
-        let b = world.b2_mut();
-        for f in &mut self.feet {
-            if let Some(id) = f.take() {
-                b.destroy_joint(id);
+        self.disable_running(world);
+    }
+
+    /// `kneeBreak1/2`, `hipBreak1/2`: that foot leaves the wheel (unless ejected); `torsoBreak`: both do.
+    fn limbs_broken(&mut self, world: &mut World, broken: &[Limb]) {
+        for limb in broken {
+            let foot = match limb {
+                Limb::Waist => {
+                    self.disable_running(world);
+                    continue;
+                }
+                Limb::Knee1 | Limb::Hip1 => 0,
+                Limb::Knee2 | Limb::Hip2 => 1,
+                _ => continue,
+            };
+            if !self.ejected {
+                if let Some(id) = self.feet[foot].take() {
+                    world.b2_mut().destroy_joint(id);
+                    self.check_legs_ok(world);
+                }
             }
         }
-        if let Some(w) = self.wheel.take() {
-            b.destroy_body(w);
+    }
+
+    /// `disableRunning` (also run by the `dead` setter).
+    fn disable_running(&mut self, world: &mut World) {
+        for f in &mut self.feet {
+            if let Some(id) = f.take() {
+                world.b2_mut().destroy_joint(id);
+            }
         }
-        if let Some(s) = self.stem.take() {
-            b.destroy_body(s);
+        self.check_legs_ok(world);
+    }
+
+    /// `checkLegsOk`: with no foot on the wheel the wheel and stem go; the pose is dropped either way.
+    fn check_legs_ok(&mut self, world: &mut World) {
+        if self.feet.iter().all(Option::is_none) {
+            let b = world.b2_mut();
+            if let Some(w) = self.wheel.take() {
+                b.destroy_body(w);
+            }
+            if let Some(s) = self.stem.take() {
+                b.destroy_body(s);
+            }
+            self.stem_wheel = None;
+            self.legs_ok = false;
         }
-        self.stem_wheel = None;
-        self.legs_ok = false;
+        // `currentPose = 0` runs `cancelPose` at once
         self.doll.set_pose(0);
+        self.doll.apply_pose(world);
     }
 }
 
@@ -6562,8 +6636,14 @@ impl Santa {
                 self.break_strap(world, n);
             }
         }
-        self.elf1.doll.check_joints(world);
-        self.elf2.doll.check_joints(world);
+        for elf in [&mut self.elf1, &mut self.elf2] {
+            let broken = elf.doll.check_joints(world);
+            elf.limbs_broken(world, &broken);
+            // the `dead` setter runs `disableRunning` (also for a death by smash earlier in this step)
+            if elf.doll.dead && elf.feet.iter().any(Option::is_some) {
+                elf.disable_running(world);
+            }
+        }
     }
 
     /// |m_impulse| of the first link of both chest straps (what `checkJoints` compares with 0.4); 0 once a strap is gone.

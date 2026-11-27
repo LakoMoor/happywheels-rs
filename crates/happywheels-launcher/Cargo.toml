@@ -1,0 +1,8 @@
+[package]
+name = "happywheels-launcher"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# `runtime_shaders`: compile the Metal shaders at start-up, so a full Xcode is not needed to build
+gpui = { version = "0.2.2", features = ["runtime_shaders"] }
