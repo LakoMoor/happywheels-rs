@@ -437,8 +437,8 @@ impl Sprites {
         let idx = (sp.num("charIndex").unwrap_or(1.0).max(1.0) as usize).min(self.clip.len()) - 1;
         let flip = if sp.flag("reverse").unwrap_or(false) { -1.0 } else { 1.0 };
         let root = &self.clip[idx];
-        // draw order of `createMovieClips`: arm2, arm1, head, chest, pelvis, leg2, leg1
-        for name in ["upperArm2", "lowerArm2", "upperArm1", "lowerArm1", "head", "chest", "pelvis", "upperLeg2", "lowerLeg2", "upperLeg1", "lowerLeg1"] {
+        // the original's display list: the far arm and leg, head and torso, the near leg and arm
+        for name in ["upperArm2", "lowerArm2", "upperLeg2", "lowerLeg2", "head", "chest", "pelvis", "upperLeg1", "lowerLeg1", "upperArm1", "lowerArm1"] {
             let Some(bi) = NAMES.iter().position(|n| *n == name) else { continue };
             let body = bodies[bi];
             if world.body_center_px(body).is_none() {
@@ -1256,6 +1256,15 @@ impl Sprites {
                         for k in &n.k {
                             if k.n != "light" {
                                 self.draw_node(img, k, tm);
+                                continue;
+                            }
+                            // `setLight`: disabled, trigger-fired, fixed turret or tracking
+                            let on = |name| sp.flag(name).unwrap_or(false);
+                            let frame = if on("startDeactivated") { 4 } else if on("triggerFiring") { 3 } else if on("fixedAngleTurret") { 2 } else { 1 };
+                            let kids = k.alt.get(&frame.to_string()).unwrap_or(&k.k);
+                            let lm = mul(tm, k.matrix());
+                            for light in kids {
+                                self.draw_node(img, light, lm);
                             }
                         }
                     } else {
@@ -1452,7 +1461,9 @@ impl Sprites {
                 };
                 if sp.kind == 24 {
                     let flip = if sp.flag("reverse").unwrap_or(false) { -1.0 } else { 1.0 };
-                    let m = mul(cam, mul(pose, local(0.0, 0.0, 0.0, flip, 1.0)));
+                    // an interactive toilet's `container` is moved so that the clip's origin is the body's centre of mass
+                    let off = world.special_bodies.get(i).copied().flatten().map_or_else(Default::default, |b| world.b2().body(b).sweep.local_center);
+                    let m = mul(cam, mul(pose, local(-off.x * 62.5, -off.y * 62.5, 0.0, flip, 1.0)));
                     let (back, base) = world.toilet_parts(world.special_bodies.get(i).copied().flatten());
                     for c in toilet {
                         for n in c.k.iter().filter(|n| (n.n != "back" || back) && (n.n != "base" || base)) {
@@ -1523,6 +1534,11 @@ impl Sprites {
                     let f = ty.min(clip.len().saturating_sub(1));
                     for n in clip.get(f).map(Vec::as_slice).unwrap_or(&[]) {
                         if n.n == "meter" {
+                            // its backing shows; the filling `bar` is empty until the cannon loads
+                            let mm = mul(m, n.matrix());
+                            for k in n.k.iter().filter(|k| k.n != "bar") {
+                                self.draw_node(img, k, mm);
+                            }
                             continue;
                         }
                         self.draw_node(img, n, m);
@@ -1535,7 +1551,12 @@ impl Sprites {
                 let Some(chest) = world.special_bodies.get(i).copied().flatten() else { continue };
                 let Some(bodies) = world.npc_bodies(chest) else { continue };
                 if let Some(npc) = self.npc.get_or_init(|| Self::open_npc(&self.assets).map(Box::new)) {
+                    // its blits belong to this clip set's trace
+                    *npc.trace.borrow_mut() = self.trace.borrow().is_some().then(Vec::new);
                     npc.draw_npc(img, sp, bodies, world, cam);
+                    if let (Some(all), Some(its)) = (self.trace.borrow_mut().as_mut(), npc.trace.borrow_mut().take()) {
+                        all.extend(its);
+                    }
                 }
                 continue;
             }
@@ -1647,7 +1668,7 @@ impl Sprites {
                 self.blit(img, "spike-clean.png", mul(m, mul(local(-half + 15.0 * k as f64, -25.0 - lc_y, 0.0, 1.0, 1.0), local(0.0, 0.0, 0.0, 0.333, 0.333))));
             }
             let width = 15.0 * n as f64 - 2.0;
-            self.blit(img, "spike-platform.png", mul(m, mul(local(0.0, 35.0 - lc_y, 0.0, 1.0, 1.0), local(-width / 2.0, -10.0, 0.0, width / 300.0, 1.0))));
+            self.blit(img, "spike-platform.png", mul(m, mul(local(0.0, 35.0 - lc_y, 0.0, 1.0, 1.0), local(-width / 2.0, -10.0, 0.0, width / 600.0, 0.5))));
             // Blood bitmap (`bmd`, 15n−2 × 50, centred on the clip like the row): one `spike_blood` frame per impale at the snapped spike x.
             {
                 #[derive(Deserialize)]
@@ -1725,7 +1746,15 @@ impl Sprites {
             let Some(b) = live else { return };
             let len = f64::from(sp.num("ropeLength").unwrap_or(350.0));
             let a = f64::from(world.body_angle(b));
-            for n in clip {
+            // bottom to top: the rope is moved below the clip (which keeps the fixed block), the ball above it
+            let layer = |n: &Node| match n.n.as_str() {
+                "rope" => 0,
+                "ball" => 2,
+                _ => 1,
+            };
+            let mut parts: Vec<&Node> = clip.iter().collect();
+            parts.sort_by_key(|n| layer(n));
+            for n in parts {
                 match n.n.as_str() {
                     "ball" => {
                         for k in &n.k {
@@ -1742,8 +1771,15 @@ impl Sprites {
                             }
                         }
                     }
-                    _ => {}
+                    _ => self.draw_node(img, n, mul(cam, local(x, y, 0.0, 1.0, 1.0))),
                 }
+            }
+            return;
+        }
+        if sp.kind == 1 && live.is_some() {
+            // a table with a body lowers `inner` to the centre of mass
+            for n in clip {
+                self.draw_node_at(img, n, mul(cam, pose), (n.n == "inner").then_some(-11.0), None);
             }
             return;
         }
@@ -1761,7 +1797,14 @@ impl Sprites {
                         self.draw_node(img, k, mul(cam, mul(pose, local(0.0, -lc_y, 0.0, 1.0, 1.0))));
                     }
                 }
-                "base" => self.draw_node(img, n, mul(cam, local(x, y, ang, 1.0, 1.0))),
+                // `glow` shows only between a hit and the pad coming back
+                "base" => {
+                    let m = mul(cam, mul(local(x, y, ang, 1.0, 1.0), n.matrix()));
+                    let lit = body.is_some_and(|b| world.spring_box_lit(b));
+                    for k in n.k.iter().filter(|k| k.n != "glow" || lit) {
+                        self.draw_node(img, k, m);
+                    }
+                }
                 _ => {}
             }
         }

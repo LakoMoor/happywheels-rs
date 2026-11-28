@@ -563,6 +563,14 @@ struct Mine {
     done: bool,
 }
 
+/// WreckingBall (`actions`): a motor on the pin keeps the swing going.
+#[derive(Clone, Copy)]
+struct Wrecker {
+    body: BodyId,
+    joint: usize,
+    speed: f64,
+}
+
 /// Jet engine special (`Jet.actions` / `explode`).
 struct Jet {
     body: BodyId,
@@ -626,6 +634,7 @@ pub struct World {
     /// Chunk bodies born from smashed food: (body, food type, chunk index).
     food_chunks: Vec<(BodyId, u8, u8)>,
     boomboxes: Vec<Boombox>,
+    wreckers: Vec<Wrecker>,
     spring_boxes: Vec<SpringBox>,
     paddles: Vec<Paddle>,
     plain_mines: Vec<PlainMine>,
@@ -753,7 +762,7 @@ impl World {
             foods: Vec::new(),
             food_chunks: Vec::new(),
             boomboxes: Vec::new(),
-            spring_boxes: Vec::new(),
+            wreckers: Vec::new(), spring_boxes: Vec::new(),
             paddles: Vec::new(),
             plain_mines: Vec::new(),
             chairs: Vec::new(),
@@ -1313,12 +1322,14 @@ impl World {
             self.b.create_revolute_joint(&d);
         }
         self.special_parts.push(parts);
-        for st in &sb.statics {
+        for (k, st) in sb.statics.iter().enumerate() {
             let mut d = st.clone();
             d.friction = sb.friction;
             d.restitution = sb.restitution;
             d.filter = Filter { group_index: st.filter.group_index, ..filter };
-            self.b.create_shape(self.level_body, &d);
+            // the paddle's blocker is a static body of its own: on the level body the pad's joint would switch its contact off
+            let on = if sp.kind == 35 && k == 1 { self.b.create_body(&BodyDef::default()) } else { self.level_body };
+            self.b.create_shape(on, &d);
         }
         match sb.joint {
             Some(JointSpec::Revolute { anchor, limits }) => {
@@ -1344,6 +1355,15 @@ impl World {
             self.b.c.report_results = true;
             let trigger = self.b.body(body).shapes[1];
             self.plain_mines.push(PlainMine { body, trigger, done: false });
+        }
+        if sp.kind == 7 {
+            if let Some(joint) = (0..self.b.c.joints.len()).find(|&j| self.b.c.joints[j].body2 == body && matches!(self.b.c.joints[j].kind, box2d::joints::JointKind::Revolute(_))) {
+                if let box2d::joints::JointKind::Revolute(r) = &mut self.b.joint_mut(joint).kind {
+                    r.max_motor_torque = 1e7;
+                }
+                let speed = 1000.0 * 1.75 / f64::from(sp.num("ropeLength").unwrap_or(350.0));
+                self.wreckers.push(Wrecker { body, joint, speed });
+            }
         }
         if sp.kind == 35 {
             if let Some(joint) = (0..self.b.c.joints.len()).find(|&j| self.b.c.joints[j].body2 == body && matches!(self.b.c.joints[j].kind, box2d::joints::JointKind::Revolute(_))) {
@@ -2652,9 +2672,6 @@ impl World {
             self.character = Some(doll);
         }
         self.frame += 1;
-        self.thrust_jets();
-        self.run_cannons();
-        self.run_mines();
         if matches!(self.bike, Some(crate::vehicle::Vehicle::Santa(_))) {
             if let Some(crate::vehicle::Vehicle::Santa(mut s)) = self.bike.take() {
                 s.elf_steps(self);
@@ -2662,9 +2679,6 @@ impl World {
             }
         }
         self.update_loops();
-        self.run_arrow_guns();
-        self.run_spring_boxes();
-        self.run_paddles();
         self.check_npc_joints();
         self.check_npc_vocals();
         self.b.step(TIME_STEP, ITERATIONS);
@@ -2958,6 +2972,14 @@ impl World {
         self.arrow_events(&events);
         self.spike_events(&events);
         self.npc_smashes(&events);
+        // `level.actions`: after the step and its contacts, so nothing acts before the first step
+        self.thrust_jets();
+        self.run_cannons();
+        self.run_mines();
+        self.run_arrow_guns();
+        self.run_spring_boxes();
+        self.run_paddles();
+        self.run_wreckers();
         if !self.external_particles {
             self.step_blood(1.0);
         }
@@ -4977,6 +4999,39 @@ impl World {
 
     /// `SpringBox.actions`: when armed and the delay counter is zero the pad is driven out (motor speed 10, limits 0..32 px) with a bounce sound; while armed the
     /// counter counts down. Afterwards the motor speed turns to -1 past 32 px and, back at 0, the joint is locked again and the contact listener restored.
+    /// `WreckingBall.actions`: below 0.3 rad and above 2.84 rad the motor is off and turned round for the way back; between them
+    /// it drives.
+    fn run_wreckers(&mut self) {
+        for k in 0..self.wreckers.len() {
+            let Wrecker { body, joint, speed } = self.wreckers[k];
+            if !self.b.c.bodies[body].alive {
+                continue;
+            }
+            let angle = self.b.revolute_angle(joint).unwrap_or(0.0);
+            let box2d::joints::JointKind::Revolute(r) = &mut self.b.joint_mut(joint).kind else { continue };
+            let turn = if angle < 0.3 { Some(speed.abs()) } else if angle > 2.84 { Some(-speed.abs()) } else { None };
+            match turn {
+                Some(next) if r.enable_motor => {
+                    r.enable_motor = false;
+                    r.motor_speed = next;
+                    self.wreckers[k].speed = next;
+                }
+                None if !r.enable_motor => {
+                    r.enable_motor = true;
+                    r.motor_speed = speed;
+                    let at = self.b.body(body).sweep.c;
+                    self.play("BallSwing", 1, at);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// Whether the spring box on `body` shows its glow: from the hit until the pad is locked again.
+    pub fn spring_box_lit(&self, body: BodyId) -> bool {
+        self.spring_boxes.iter().any(|s| s.body == body && (s.hit || s.active))
+    }
+
     fn run_spring_boxes(&mut self) {
         for k in 0..self.spring_boxes.len() {
             let (body, joint) = (self.spring_boxes[k].body, self.spring_boxes[k].joint);
