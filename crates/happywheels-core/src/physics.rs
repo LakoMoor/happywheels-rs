@@ -537,8 +537,8 @@ struct Spike {
     queue_add: Vec<BodyId>,
     queue_remove: Vec<BodyId>,
     sounds: u32,
-    /// Blood stamps on the spike bitmap: (x in the spike row's coordinates, `spike_blood` frame 1..=5).
-    blood: Vec<(f64, u8)>,
+    /// Blood stamps on the spike bitmap: (x in the spike row's coordinates, `spike_blood` frame 1..=5, juice colour of an impaled food item).
+    blood: Vec<(f64, u8, Option<u32>)>,
 }
 
 /// Arrow fired by an ArrowGun (`i3`): sensor tip + solid shaft; pins itself to material-6 / massless shapes with locked prismatic joints.
@@ -3766,7 +3766,7 @@ impl World {
         let at = self.b.body(body).sweep.c;
         self.shape_impale(other, true, Some(at), 0.01);
         let c = self.b.body(other).sweep.c;
-        self.blood.burst([c.x * PS, c.y * PS], Vec2::default(), 5.0, 15.0, 50);
+        self.pierce_burst(other, c, 50, 25);
         let l = self.b.body(body).local_point(c);
         let flip = if self.arrows[ai].reverse { -1.0 } else { 1.0 };
         let (rot, mirror) = (self.blood.rand() * std::f64::consts::TAU, if self.blood.rand() > 0.5 { -1.0 } else { 1.0 });
@@ -3781,7 +3781,27 @@ impl World {
 
     /// Whether `body` is a food item (its grinding sprays juice particles, not blood).
     pub(crate) fn is_food(&self, body: BodyId) -> bool {
-        self.foods.iter().any(|f| f.0 == body)
+        self.food_type(body).is_some()
+    }
+
+    fn food_type(&self, body: BodyId) -> Option<u8> {
+        self.foods.iter().find(|f| f.0 == body).map(|f| f.3)
+    }
+
+    /// What a weapon or spike throws from the point it enters `body`: `drops` of blood, or `bits` of fruit when it is a food item
+    /// (`createPointBurst(particleType, …)`), whose juice colour is returned.
+    fn pierce_burst(&mut self, body: BodyId, at: Vec2, drops: u32, bits: u32) -> Option<u32> {
+        const JUICE: [u32; 3] = [13_703_445, 15_695_667, 15_066_224];
+        match self.food_type(body) {
+            Some(ty) => {
+                self.shard_burst(crate::blood::ShardKind::Food(ty), at, 5.0, 15.0, bits);
+                Some(JUICE[usize::from(ty.min(2))])
+            }
+            None => {
+                self.blood.burst([at.x * PS, at.y * PS], Vec2::default(), 5.0, 15.0, drops);
+                None
+            }
+        }
     }
 
     pub fn frame(&self) -> u32 {
@@ -4685,15 +4705,15 @@ impl World {
                     // Harpoon.createPrisJoint on a new body: flesh (material bits 6) → shapeImpale + 50-particle blood burst at the tip + HarpoonFlesh1/2;
                     // anything else (solid or static) → HarpoonSolid1/2; each sound plays once per harpoon (the original keeps a handle until it ends)
                     let tip = self.b.body(body).world_point(Vec2::new(26.25 / PS, 0.0));
-                    let at = [tip.x * PS, tip.y * PS];
                     if self.b.shape_material(self.b.body(other).shapes[0]) & 6 != 0 {
                         // (without a point: any harpoon through the head kills)
                         self.shape_impale(other, true, None, 0.0);
-                        self.blood.burst(at, Vec2::default(), 5.0, 15.0, 50);
-                        if !self.blood.off {
+                        let juice = self.pierce_burst(other, tip, 50, 25);
+                        // fruit juice stains the shaft even with blood switched off
+                        if juice.is_some() || !self.blood.off {
                             // `HarpoonBloodMC.gotoAndStop(ceil(5·random))` drawn into the harpoon's 106×16 bitmap, once per new body
                             let frame = (self.blood.rand() * 5.0).floor().min(4.0);
-                            self.arrows[ai].blood.push((frame, 0.0, 0.0, 1.0));
+                            self.arrows[ai].blood.push((frame, f64::from(juice.unwrap_or(0)), 0.0, 1.0));
                         }
                         if self.arrows[ai].flesh_sounds & 1 == 0 {
                             self.arrows[ai].flesh_sounds |= 1;
@@ -4732,8 +4752,8 @@ impl World {
         let tip = self.b.body(arrow).world_point(Vec2::new(13.25 / PS, 0.0));
         if self.b.shape_material(self.b.body(other).shapes[0]) & 6 != 0 {
             self.shape_impale(other, true, Some(tip), 0.01);
-            self.blood.burst([tip.x * PS, tip.y * PS], Vec2::default(), 5.0, 15.0, 20);
-            if !self.blood.off {
+            // fruit leaves the arrow clean
+            if self.pierce_burst(other, tip, 20, 20).is_none() && !self.blood.off {
                 let frame = (self.blood.rand() * 5.0).floor().min(4.0);
                 self.arrows[ai].blood.push((frame, 0.0, 0.0, 1.0));
             }
@@ -4789,7 +4809,7 @@ impl World {
                 jd.motor_speed = 0.0;
                 let j = self.b.create_prismatic_joint(&jd);
                 self.spikes[si].pinned.push((other, j, 1));
-                self.blood.burst([at.x * PS, at.y * PS], Vec2::default(), 5.0, 15.0, 50);
+                let juice = self.pierce_burst(other, at, 50, 25);
                 // paintBlood: the impale point in the spike row's coordinates, snapped to the nearest spike (JS `%` keeps the dividend's sign)
                 let local = self.b.body(body).local_point(at);
                 let i = local.x * PS + self.spikes[si].half_width;
@@ -4802,8 +4822,8 @@ impl World {
                     -o
                 };
                 let frame = (5.0 * self.blood.rand()).ceil().clamp(1.0, 5.0) as u8;
-                if !self.blood.off {
-                    self.spikes[si].blood.push((i + o, frame));
+                if juice.is_some() || !self.blood.off {
+                    self.spikes[si].blood.push((i + o, frame, juice));
                 }
                 if self.spikes[si].sounds < 2 {
                     self.spikes[si].sounds += 1;
@@ -4822,7 +4842,7 @@ impl World {
         }
     }
 
-    /// Harpoon blood stamps (`HarpoonBloodMC` frame indices 0..4, in the first tuple field) of the harpoon whose body is `body`.
+    /// Harpoon blood stamps (`HarpoonBloodMC` frame indices 0..4 in the first tuple field, a juice colour or 0 in the second) of the harpoon whose body is `body`.
     pub fn harpoon_blood(&self, body: BodyId) -> &[(f64, f64, f64, f64)] {
         self.arrows.iter().find(|a| a.body == body && a.blade.is_none() && a.harpoon).map_or(&[], |a| a.blood.as_slice())
     }
@@ -4833,7 +4853,7 @@ impl World {
     }
 
     /// Blood stamps (x in the spike row, frame) of the spikes special whose body is `body`.
-    pub fn spike_blood(&self, body: BodyId) -> &[(f64, u8)] {
+    pub fn spike_blood(&self, body: BodyId) -> &[(f64, u8, Option<u32>)] {
         self.spikes.iter().find(|s| s.body == body).map_or(&[], |s| s.blood.as_slice())
     }
 
@@ -6741,11 +6761,11 @@ mod tests {
 
     #[test]
     fn specials_log_rests_and_soccer_ball_bounces_higher_than_a_plain_ball() {
-        // Log (kind 4, 200x20) dropped from y=300 onto the floor; soccer ball (kind 10, restitution .5)
+        // Log (kind 4, 36x200, lying down) dropped from y=300 onto the floor; soccer ball (kind 10, restitution .5)
         // vs. a plain restitution-.1 ball dropped from the same height.
         let level = crate::level::parse(&format!(
             "<levelXML><info v='1.99'/><shapes>{FLOOR}{BALL}</shapes><specials>\
-             <sp t='4' p0='400' p1='300' p2='200' p3='20' p4='0' p5='f' p6='f'/>\
+             <sp t='4' p0='400' p1='300' p2='36' p3='200' p4='90' p5='f' p6='f'/>\
              <sp t='10' p0='-400' p1='0'/></specials></levelXML>"
         ))
         .unwrap();
@@ -6759,9 +6779,9 @@ mod tests {
                 ball_top_after_bounce = ball_top_after_bounce.min(w.position_px(1).unwrap()[1]);
             }
         }
-        // log: 20 px tall resting on the floor top (490): centre y = 480
+        // log: 36 px thick resting on the floor top (490): centre y = 472
         let log_y = w.special_position_px(0).unwrap()[1];
-        assert!((log_y - 480.0).abs() < 4.0, "log y = {log_y}");
+        assert!((log_y - 472.0).abs() < 4.0, "log y = {log_y}");
         // soccer ball (r=10) rebounds noticeably; plain ball barely does
         assert!(soccer_top_after_bounce < ball_top_after_bounce - 20.0, "soccer {soccer_top_after_bounce} ball {ball_top_after_bounce}");
     }
@@ -7515,7 +7535,7 @@ mod tests {
     fn glass_break_matches_the_original() {
         let run = |strength: u32, vy: f64| {
             let xml = format!("<levelXML><info v='1.99'/><shapes>{FLOOR}</shapes><specials><sp t='18' p0='1000' p1='430' p2='100' p3='20' p4='0' p5='f' p6='{strength}' p7='f'/></specials></levelXML>");
-            let mut w = World::from_level(&crate::level::parse(&xml).unwrap());
+            let mut w = World::from_level(&crate::level::parse_unlimited(&xml).unwrap());
             let b = w.special_bodies[0].unwrap();
             w.b.body_mut(b).linear_velocity = Vec2::new(0.0, vy);
             let mut frames = Vec::new();
@@ -7696,7 +7716,7 @@ mod tests {
             <sh t='1' p0='1000' p1='300' p2='30' p3='30' p4='0' p5='f' p6='f' p7='1' p8='0' p9='-1' p10='100' p11='1' p12='0'/>\
             <sh t='1' p0='1020' p1='200' p2='24' p3='24' p4='0' p5='f' p6='f' p7='1' p8='0' p9='-1' p10='100' p11='1' p12='0'/></shapes>\
             <specials><sp t='6' p0='1000' p1='450' p2='0' p3='t' p4='6' p5='f'/></specials></levelXML>".replace("{FLOOR}", FLOOR);
-        let mut w = World::from_level(&crate::level::parse(&xml).unwrap());
+        let mut w = World::from_level(&crate::level::parse_unlimited(&xml).unwrap());
         let flesh = w.shape_bodies[1].unwrap();
         let shape = w.b.body(flesh).shapes[0];
         w.b.shape_mut(shape).material = 2;
@@ -7730,7 +7750,7 @@ mod tests {
         let xml = format!("<levelXML><info v='1.99'/><shapes>{FLOOR}\
             <sh t='1' p0='1000' p1='250' p2='20' p3='20' p4='0' p5='f' p6='f' p7='6' p8='0' p9='-1' p10='100' p11='1' p12='0'/></shapes>\
             <specials><sp t='18' p0='1000' p1='430' p2='100' p3='20' p4='0' p5='f' p6='10' p7='t'/></specials></levelXML>");
-        let mut w = World::from_level(&crate::level::parse(&xml).unwrap());
+        let mut w = World::from_level(&crate::level::parse_unlimited(&xml).unwrap());
         let pane = w.special_bodies[0].unwrap();
         w.b.body_mut(pane).linear_velocity = Vec2::new(0.0, 40.0);
         let ball = w.shape_bodies[1].unwrap();
@@ -7769,7 +7789,7 @@ mod tests {
         let xml = format!("<levelXML><info v='1.99'/><shapes>{FLOOR}\
             <sh t='1' p0='1000' p1='250' p2='20' p3='20' p4='0' p5='f' p6='f' p7='6' p8='0' p9='-1' p10='100' p11='1' p12='0'/></shapes>\
             <specials><sp t='18' p0='1000' p1='430' p2='100' p3='20' p4='0' p5='f' p6='10' p7='t'/></specials></levelXML>");
-        let mut w = World::from_level(&crate::level::parse(&xml).unwrap());
+        let mut w = World::from_level(&crate::level::parse_unlimited(&xml).unwrap());
         let pane = w.special_bodies[0].unwrap();
         w.b.body_mut(pane).linear_velocity = Vec2::new(0.0, 40.0);
         let ball = w.shape_bodies[1].unwrap();
@@ -7970,7 +7990,7 @@ mod tests {
     fn log_break_matches_the_original() {
         let run = |w: f64, h: f64| {
             let xml = format!("<levelXML><info v='1.99'/><shapes>{FLOOR}</shapes><specials><sp t='4' p0='1000' p1='380' p2='{w}' p3='{h}' p4='0' p5='f' p6='f'/></specials></levelXML>");
-            let mut world = World::from_level(&crate::level::parse(&xml).unwrap());
+            let mut world = World::from_level(&crate::level::parse_unlimited(&xml).unwrap());
             let log = world.special_bodies[0].unwrap();
             world.b.body_mut(log).linear_velocity = Vec2::new(0.0, 40.0);
             let mut frames = Vec::new();
@@ -8266,6 +8286,23 @@ mod tests {
         assert_eq!(w.food_chunks().len(), 4);
         assert!(w.food_chunks().iter().all(|c| w.b.c.bodies[c.0].alive));
         assert!(w.blood.sprites.iter().any(|p| matches!(p.kind, crate::blood::ShardKind::Food(2))), "juice particles were thrown");
+    }
+
+    /// Spikes entering fruit throw its pulp, not blood, and are stained with its juice (with blood off too).
+    #[test]
+    fn spikes_in_fruit_throw_pulp() {
+        let xml = "<levelXML><info v='1.99'/><shapes></shapes><specials><sp t='6' p0='1000' p1='400' p2='0' p3='t' p4='8' p5='f'/><sp t='32' p0='1000' p1='360' p2='0' p3='f' p4='t' p5='1'/></specials></levelXML>";
+        let mut w = World::from_level(&crate::level::parse(xml).unwrap());
+        w.blood.off = true;
+        let spikes = w.special_bodies[0].unwrap();
+        for _ in 0..20 {
+            w.step();
+            if !w.spike_blood(spikes).is_empty() {
+                break;
+            }
+        }
+        assert_eq!(w.spike_blood(spikes).first().map(|s| s.2), Some(Some(13_703_445)), "watermelon juice");
+        assert_eq!(w.blood.sprites.iter().filter(|p| matches!(p.kind, crate::blood::ShardKind::Food(0))).count(), 25);
     }
 
     /// A trash can built without trash is replaced by a hollow body at level load; the special's sprite pose must follow the live body and show

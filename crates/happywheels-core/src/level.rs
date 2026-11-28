@@ -291,6 +291,7 @@ fn parse_shape(sh: roxmltree::Node, vert_cache: &mut VertCache) -> Result<Shape>
     while let Some(v) = sh.attribute(format!("p{}", props.len()).as_str()) {
         props.push(v.to_owned());
     }
+    crate::editor::limit_attributes(false, t, props.iter_mut().enumerate());
     let mut data: VertData = (Vec::new(), Vec::new(), false);
     if matches!(kind, ShapeKind::Polygon | ShapeKind::Art) {
         if let Some(v) = sh.children().find(|n| n.has_tag_name("v")) {
@@ -332,7 +333,34 @@ fn parse_special(sp: roxmltree::Node) -> Result<Special> {
         }
         i += 1;
     }
+    crate::editor::limit_attributes(true, kind, props.iter_mut().enumerate().filter_map(|(i, p)| Some((i, p.as_mut()?))));
     Ok(Special { kind, props, texts })
+}
+
+/// [`parse`] with every shape's and special's parameters as written: for replaying goldens that were recorded from the original's
+/// classes with sizes its level loader would have limited (a floor wider than 5000 px, a 20 px thick log).
+pub fn parse_unlimited(xml: &str) -> Result<Level> {
+    let mut level = parse(xml)?;
+    let doc = roxmltree::Document::parse(xml).context("level XML")?;
+    let mut shapes = doc.descendants().filter(|n| n.has_tag_name("sh"));
+    let mut specials = doc.descendants().filter(|n| n.has_tag_name("sp"));
+    for shape in &mut level.shapes {
+        if let Some(node) = shapes.next() {
+            for (i, prop) in shape.props.iter_mut().enumerate() {
+                if let Some(raw) = node.attribute(format!("p{i}").as_str()) {
+                    *prop = raw.to_owned();
+                }
+            }
+        }
+    }
+    for special in &mut level.specials {
+        if let Some(node) = specials.next() {
+            for (i, prop) in special.props.iter_mut().enumerate() {
+                *prop = node.attribute(format!("p{i}").as_str()).map(str::to_owned);
+            }
+        }
+    }
+    Ok(level)
 }
 
 pub fn parse(xml: &str) -> Result<Level> {
@@ -536,5 +564,22 @@ mod tests {
     #[test]
     fn rejects_wrong_root() {
         assert!(parse("<x/>").is_err());
+    }
+}
+
+#[cfg(test)]
+mod limit_tests {
+    /// The running original loads `p4='8'` spikes as 20; shapes are held to their limits the same way.
+    #[test]
+    fn loaded_parameters_are_held_to_the_originals_limits() {
+        let level = super::parse(
+            "<levelXML><info v='1.99'/><shapes><sh t='1' p0='0' p1='0' p2='2' p3='300' p4='0' p5='t' p6='f' p7='0' p8='0' p9='-1' p10='100' p11='9'/></shapes><specials><sp t='6' p0='1000' p1='400' p2='0' p3='t' p4='8' p5='f'/></specials></levelXML>",
+        )
+        .unwrap();
+        assert_eq!(level.specials[0].num("numSpikes"), Some(20.0));
+        assert_eq!(level.specials[0].num("x"), Some(1000.0));
+        // width and height of a circle follow the last one set (5 px at least); density 0.1, collision 7
+        let props = &level.shapes[0].props;
+        assert_eq!((props[2].as_str(), props[3].as_str(), props[7].as_str(), props[11].as_str()), ("300", "300", "0.1", "7"));
     }
 }

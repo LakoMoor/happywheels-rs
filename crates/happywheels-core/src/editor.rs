@@ -728,6 +728,30 @@ fn read_shape(n: Node, grouped: bool, version: f64, shared: &mut [std::collectio
     Ok(item)
 }
 
+/// Runs a loaded object's numeric parameters through the property setters' limits, as the original does when it reads a level
+/// (a spike set has at least 20 spikes, a shape's density at least 0.1, …). Attributes within their limits keep their text.
+pub(crate) fn limit_attributes<'a>(special: bool, class: usize, attributes: impl Iterator<Item = (usize, &'a mut String)>) {
+    let Some(mut item) = Item::new(special, class, false) else { return };
+    let mut limited = Vec::new();
+    for (i, text) in attributes {
+        let Some((name, _, rule)) = item.spec().props.get(i) else { continue };
+        if matches!(rule, Rule::Clamp(..) | Rule::Size(..) | Rule::Both(..) | Rule::Strength | Rule::Opacity) && !text.is_empty() {
+            let value = flag_or_number(text);
+            if let Value::Num(read) = value {
+                item.set(name, value);
+                limited.push((i, read, text));
+            }
+        }
+    }
+    // read back after every setter has run: a circle's and a meteor's two dimensions set each other
+    for (i, read, text) in limited {
+        let kept = item.values[i].number();
+        if kept != read {
+            *text = kept.to_string();
+        }
+    }
+}
+
 fn read_special(n: Node, grouped: bool) -> Result<Item> {
     let class = number(n, "t").context("special without type")? as usize;
     let mut item = Item::new(true, class, grouped).context("unknown special type")?;

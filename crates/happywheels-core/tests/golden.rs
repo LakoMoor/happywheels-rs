@@ -786,7 +786,7 @@ fn ragdoll_smash_detection_scales_with_fall_height() {
 #[test]
 fn c10_family_rides_and_daughter_ejects() {
     use happywheels_core::vehicle::{Keys, Vehicle};
-    let level = level::parse(
+    let level = level::parse_unlimited(
         "<levelXML><info v='1.99' x='1000' y='250'/><shapes>\\
          <sh t='0' p0='4000' p1='425' p2='8000' p3='50' p4='0' p5='t' p6='f' p7='1' p8='0' p9='-1' p10='100' p11='1'/></shapes></levelXML>",
     )
@@ -863,7 +863,7 @@ fn c10_family_matches_original() {
 #[test]
 fn c8_santa_rides_and_ejects() {
     use happywheels_core::vehicle::{Keys, Vehicle};
-    let level = level::parse(
+    let level = level::parse_unlimited(
         "<levelXML><info v='1.99' x='1000' y='250'/><shapes>\
          <sh t='0' p0='4000' p1='425' p2='8000' p3='50' p4='0' p5='t' p6='f' p7='1' p8='0' p9='-1' p10='100' p11='1'/></shapes></levelXML>",
     )
@@ -953,7 +953,7 @@ fn c8_santa_matches_original() {
 #[test]
 fn c11_magnet_picks_up_and_releases() {
     use happywheels_core::vehicle::{Keys, Vehicle};
-    let level = level::parse(
+    let level = level::parse_unlimited(
         "<levelXML><info v='1.99' x='1000' y='250'/><shapes>\
          <sh t='0' p0='4000' p1='425' p2='8000' p3='50' p4='0' p5='t' p6='f' p7='1' p8='0' p9='-1' p10='100' p11='1'/>\
          <sh t='0' p0='1000' p1='385' p2='800' p3='30' p4='0' p5='f' p6='f' p7='1' p8='0' p9='-1' p10='100' p11='1'/></shapes></levelXML>",
@@ -1145,7 +1145,7 @@ fn head_smash_matches_original() {
     use happywheels_core::character::PART_ORDER;
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let v: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(root.join("tests/golden/smash.json")).unwrap()).unwrap();
-    let level = level::parse(
+    let level = level::parse_unlimited(
         "<levelXML><info v='1.99' x='1000' y='250'/><shapes>\
          <sh t='0' p0='4000' p1='425' p2='8000' p3='50' p4='0' p5='t' p6='f' p7='1' p8='0' p9='-1' p10='100' p11='1'/></shapes></levelXML>",
     )
@@ -1181,7 +1181,7 @@ fn head_smash_matches_original() {
 fn chest_pelvis_foot_smash_match_original() {
     use happywheels_core::character::PART_ORDER;
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let level = level::parse(
+    let level = level::parse_unlimited(
         "<levelXML><info v='1.99' x='1000' y='250'/><shapes>\
          <sh t='0' p0='4000' p1='425' p2='8000' p3='50' p4='0' p5='t' p6='f' p7='1' p8='0' p9='-1' p10='100' p11='1'/></shapes></levelXML>",
     )
@@ -1888,7 +1888,7 @@ fn limb_breaks_spew_blood_flows() {
 /// Bike wheel loop (behaviour only): accelerating on the ground asks for BikeLoop1 → 2 → 3 as the back wheel spins up, none in the air.
 #[test]
 fn bike_wheel_loop_follows_wheel_spin() {
-    let level = level::parse(
+    let level = level::parse_unlimited(
         "<levelXML><info v='1.99' x='1000' y='250'/><shapes>\
          <sh t='0' p0='4000' p1='425' p2='8000' p3='50' p4='0' p5='t' p6='f' p7='1' p8='0' p9='-1' p10='100' p11='1'/></shapes></levelXML>",
     )
@@ -1935,7 +1935,7 @@ fn heli_and_mower_loops_follow_the_controls() {
 /// Wheel loops of the other car-like vehicles (behaviour only): dirt bike, segway, cart and chair each ask for a BikeLoop while driving on the ground.
 #[test]
 fn other_vehicles_ask_for_wheel_loops() {
-    let level = level::parse(
+    let level = level::parse_unlimited(
         "<levelXML><info v='1.99' x='1000' y='250'/><shapes>\
          <sh t='0' p0='4000' p1='425' p2='8000' p3='50' p4='0' p5='t' p6='f' p7='1' p8='0' p9='-1' p10='100' p11='1'/></shapes></levelXML>",
     )
@@ -3606,7 +3606,7 @@ fn daughter_detach_plays_strap_snap() {
 #[test]
 fn santa_elf_wheels_make_step_sounds() {
     use happywheels_core::vehicle::Keys;
-    let level = level::parse(
+    let level = level::parse_unlimited(
         "<levelXML><info v='1.99' x='1000' y='250'/><shapes>\
          <sh t='0' p0='4000' p1='425' p2='8000' p3='50' p4='0' p5='t' p6='f' p7='1' p8='0' p9='-1' p10='100' p11='1'/></shapes></levelXML>",
     )

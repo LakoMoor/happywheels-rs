@@ -1133,10 +1133,9 @@ impl Sprites {
                 let frames = BLOOD.get_or_init(|| serde_json::from_str::<Frames>(include_str!("../data/game-HarpoonBloodMC.json")).map(|f| f.frames).unwrap_or_default());
                 // the 106×16 bitmap sits centred on the shaft
                 let sheet = mul(mul(cam, body_matrix(world, b)), local(-53.0, -8.0, 0.0, 1.0, 1.0));
-                for &(frame, ..) in world.harpoon_blood(b) {
-                    for k in frames.get(frame as usize).into_iter().flatten() {
-                        self.draw_node(img, k, sheet);
-                    }
+                for &(frame, juice, ..) in world.harpoon_blood(b) {
+                    let nodes = frames.get(frame as usize).map(Vec::as_slice).unwrap_or(&[]);
+                    self.draw_stain(img, nodes, sheet, (juice > 0.0).then_some(juice as u32));
                 }
             }
         }
@@ -1748,11 +1747,10 @@ impl Sprites {
                 }
                 static BLOOD: std::sync::OnceLock<Vec<Vec<Node>>> = std::sync::OnceLock::new();
                 let frames = BLOOD.get_or_init(|| serde_json::from_str::<Frames>(include_str!("../data/game-spike_blood.json")).map(|f| f.frames).unwrap_or_default());
-                for &(x, frame) in world.spike_blood(body) {
+                for &(x, frame, juice) in world.spike_blood(body) {
                     let sm = mul(m, local(x - width / 2.0, -25.0 - lc_y, 0.0, 1.0, 1.0));
-                    for n in frames.get(usize::from(frame).saturating_sub(1)).map(Vec::as_slice).unwrap_or(&[]) {
-                        self.draw_node(img, n, sm);
-                    }
+                    let nodes = frames.get(usize::from(frame).saturating_sub(1)).map(Vec::as_slice).unwrap_or(&[]);
+                    self.draw_stain(img, nodes, sm, juice);
                 }
             }
         }
@@ -2419,6 +2417,32 @@ impl Sprites {
         let m = mul(parent, n.matrix_with(n.x, y.unwrap_or(n.y), n.r, n.sx, sy.unwrap_or(n.sy)));
         for k in &n.k {
             self.draw_node(img, k, m);
+        }
+    }
+
+    /// A blood stain, or the same shape recoloured for fruit juice (`colorTransform.color` = juice, `alphaMultiplier` .75).
+    fn draw_stain(&self, img: &mut RgbaImage, nodes: &[Node], m: M, juice: Option<u32>) {
+        let Some(color) = juice else {
+            for n in nodes {
+                self.draw_node(img, n, m);
+            }
+            return;
+        };
+        let mut shape = RgbaImage::new(img.width(), img.height());
+        for n in nodes {
+            self.draw_node(&mut shape, n, m);
+        }
+        let rgb = [(color >> 16) as u8, (color >> 8) as u8, color as u8];
+        for (x, y, p) in shape.enumerate_pixels() {
+            let a = u32::from(p[3]) * 3 / 4;
+            if a == 0 {
+                continue;
+            }
+            let d = img.get_pixel_mut(x, y);
+            for c in 0..3 {
+                d[c] = ((u32::from(rgb[c]) * a + u32::from(d[c]) * (255 - a)) / 255) as u8;
+            }
+            d[3] = d[3].max(a as u8);
         }
     }
 
