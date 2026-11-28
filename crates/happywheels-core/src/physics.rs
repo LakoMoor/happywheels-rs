@@ -3113,6 +3113,10 @@ impl World {
         self.can_events(&events);
         self.passenger_contacts(&events);
         if let Some(mut doll) = self.character.take() {
+            // `handleContactBuffer` (grabbing) comes before `checkJoints`
+            let mut vehicle = self.bike.take();
+            doll.update_grab(self, &events, vehicle.as_mut());
+            self.bike = vehicle;
             if self.joints_break {
                 if matches!(self.bike, Some(crate::vehicle::Vehicle::Santa(_))) {
                     if let Some(crate::vehicle::Vehicle::Santa(mut s)) = self.bike.take() {
@@ -3131,7 +3135,6 @@ impl World {
                     }
                 }
             }
-            doll.update_grab(self);
             self.character = Some(doll);
         }
         if matches!(self.bike, Some(crate::vehicle::Vehicle::Heli(_))) {

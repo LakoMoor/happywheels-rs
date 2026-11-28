@@ -198,6 +198,8 @@ pub struct Ragdoll {
     pub(crate) eject_noted: bool,
     /// Grip joints of the two hands (`gripJoint1/2`).
     pub grips: [Option<usize>; 2],
+    /// Elbow break, elbow ligament, knee break and knee ligament limits a vehicle sets for as long as it is ridden (the pogo stick).
+    pub limit_override: Option<[f64; 4]>,
     /// Collision group of the character (`groupID`, −1 for the player, −2/−3 for sub-characters).
     pub group: i16,
     /// Radius of a head chunk in metres (`headChunkShape` width / 2 / 125) and the debris left by `smash_head`.
@@ -418,7 +420,7 @@ impl Ragdoll {
         }
         let joint_ids = if defer { Vec::new() } else { Self::make_joints(b, guide, start, &bodies)? };
         let joints = LIMB_ORDER.iter().copied().zip(joint_ids).collect();
-        Some(Self { masses: Default::default(), deferred: None, poses: PoseSet::Base, bodies, joints, pose: 0, cancel: false, broken: Vec::new(), grabbing: false, hands_open: false, eject_noted: false, grips: [None; 2], group, head_chunk_radius: guide.get("headChunkShape").map_or(0.0, |g| g[5] / 2.0 / CHARACTER_SCALE), chest_chunk_radius: guide.get("chestChunkShape").map_or(0.0, |g| g[5] / 2.0 / CHARACTER_SCALE), pelvis_chunk_radius: guide.get("pelvisChunkShape").map_or(0.0, |g| g[5] / 2.0 / CHARACTER_SCALE), foot_guide: guide.get("footShape").copied().unwrap_or_default(), ref_scale, chunks: Vec::new(), chunk_names: Vec::new(), brain: None, heart: None, feet: [None; 2], dead: false, helmet_geo: (1..=4).map(|k| guide.get(&format!("helmetVert{k}")).map(|g| Vec2::new(g[0] / CHARACTER_SCALE, g[1] / CHARACTER_SCALE))).collect::<Option<Vec<_>>>().unwrap_or_default(), helmet_on: guide.get("helmetVert1").is_some(), helmet: None, sev: Vec::new(), sev_limbs: Vec::new(), ground: Vec::new(), pelvis_smashed: false, blood_flows: Vec::new(), tag: "Char3", voices: [None; 6], voice_until: 0, voice_prio: -1, intestines: None, spine: None, ligaments: [None, None, None, None], chain_len: ["intestineShape", "ligamentShape"].map(|n| guide.get(n).map_or(0.0, |g| g[5] / CHARACTER_SCALE)), spine_anchor: guide.get("spineAnchor").map_or([0.0; 2], |g| [g[0], g[1]]), sev_guides: ["sevArm1Shape", "sevLeg1Shape", "sevLeg2Shape"].map(|n| guide.get(n).copied().unwrap_or_default()) })
+        Some(Self { masses: Default::default(), deferred: None, poses: PoseSet::Base, bodies, joints, pose: 0, cancel: false, broken: Vec::new(), grabbing: false, hands_open: false, eject_noted: false, grips: [None; 2], limit_override: None, group, head_chunk_radius: guide.get("headChunkShape").map_or(0.0, |g| g[5] / 2.0 / CHARACTER_SCALE), chest_chunk_radius: guide.get("chestChunkShape").map_or(0.0, |g| g[5] / 2.0 / CHARACTER_SCALE), pelvis_chunk_radius: guide.get("pelvisChunkShape").map_or(0.0, |g| g[5] / 2.0 / CHARACTER_SCALE), foot_guide: guide.get("footShape").copied().unwrap_or_default(), ref_scale, chunks: Vec::new(), chunk_names: Vec::new(), brain: None, heart: None, feet: [None; 2], dead: false, helmet_geo: (1..=4).map(|k| guide.get(&format!("helmetVert{k}")).map(|g| Vec2::new(g[0] / CHARACTER_SCALE, g[1] / CHARACTER_SCALE))).collect::<Option<Vec<_>>>().unwrap_or_default(), helmet_on: guide.get("helmetVert1").is_some(), helmet: None, sev: Vec::new(), sev_limbs: Vec::new(), ground: Vec::new(), pelvis_smashed: false, blood_flows: Vec::new(), tag: "Char3", voices: [None; 6], voice_until: 0, voice_prio: -1, intestines: None, spine: None, ligaments: [None, None, None, None], chain_len: ["intestineShape", "ligamentShape"].map(|n| guide.get(n).map_or(0.0, |g| g[5] / CHARACTER_SCALE)), spine_anchor: guide.get("spineAnchor").map_or([0.0; 2], |g| [g[0], g[1]]), sev_guides: ["sevArm1Shape", "sevLeg1Shape", "sevLeg2Shape"].map(|n| guide.get(n).copied().unwrap_or_default()) })
     }
 
     /// `headSmash1`: the head body is destroyed (taking the neck joint with it) and replaced by four chunk balls on a
@@ -724,6 +726,13 @@ impl Ragdoll {
     pub fn break_limit(&self, world: &World, limb: Limb) -> f64 {
         let ratio = |part: Part, def: f64| self.limit_mass(world, part) / def;
         let r = |v: f64| v.round();
+        if let Some([elbow, _, knee, _]) = self.limit_override {
+            match limb {
+                Limb::Elbow1 | Limb::Elbow2 => return elbow,
+                Limb::Knee1 | Limb::Knee2 => return knee,
+                _ => {}
+            }
+        }
         match limb {
             Limb::Neck => r(ratio(Part::Head, 0.05456) * 85.0),
             Limb::Waist => r(ratio(Part::Pelvis, 0.0735) * 180.0),
@@ -1324,6 +1333,10 @@ impl Ragdoll {
                     Limb::Knee1 => (2, Part::UpperLeg1, Part::LowerLeg1, (ratio(Part::LowerLeg1, 0.10218) * 95.0).round()),
                     _ => (3, Part::UpperLeg2, Part::LowerLeg2, (ratio(Part::LowerLeg1, 0.10218) * 95.0).round()),
                 };
+                let limit = match self.limit_override {
+                    Some(o) => o[if slot < 2 { 1 } else { 3 }],
+                    None => limit,
+                };
                 let joint = self.joints[&limb];
                 let anchor2 = match &world.b2().joint(joint).kind {
                     box2d::joints::JointKind::Revolute(r) => r.local_anchor2,
@@ -1431,10 +1444,10 @@ impl Ragdoll {
         }
     }
 
-    /// The `grabAction` part of the frame: a hand that is pressed against something (contact with a normal
-    /// impulse above 1e-8, the original's threshold for the lower-arm shapes) gets a revolute grip joint to
-    /// the other body at the hand's tip (locked, limits 0..0, unless the other body is static).
-    pub fn update_grab(&mut self, world: &mut World) {
+    /// The `grabAction` part of the frame: a hand whose forearm got a post-solve contact report this step (impulse above 1e-8, the
+    /// original's threshold; the strongest one wins) gets a revolute grip joint to the other body at the hand's tip (locked, limits 0..0,
+    /// unless the other body is static). A hand that reaches its own vehicle's handle boards it instead.
+    pub fn update_grab(&mut self, world: &mut World, events: &[box2d::world::ContactEvent], mut vehicle: Option<&mut crate::vehicle::Vehicle>) {
         if !self.grabbing {
             return;
         }
@@ -1444,28 +1457,15 @@ impl Ragdoll {
             }
             let arm = self.bodies[&part];
             let b = world.b2();
-            let mut hit = None;
-            'contacts: for &cid in b.body(arm).contacts.iter().rev() {
-                let c = b.c.contact_info(cid);
-                if c.manifold_count == 0 {
-                    continue;
-                }
-                let (s1, s2) = (&b.c.shapes[c.shape1], &b.c.shapes[c.shape2]);
-                if s1.shape.is_sensor || s2.shape.is_sensor {
-                    continue;
-                }
-                let other = if s1.body == arm { s2.body } else { s1.body };
-                if other == arm {
-                    continue;
-                }
-                for p in c.manifold.points.iter().take(c.manifold.point_count) {
-                    if p.normal_impulse > 1e-8 {
-                        hit = Some(other);
-                        break 'contacts;
-                    }
+            let Some(&hand) = b.body(arm).shapes.first() else { continue };
+            let mut hit: Option<(f64, BodyId)> = None;
+            for e in events.iter().filter(|e| e.kind == box2d::world::ContactEventKind::Result && (e.shape1 == hand || e.shape2 == hand)) {
+                let other = &b.c.shapes[if e.shape1 == hand { e.shape2 } else { e.shape1 }];
+                if e.normal_impulse > 1e-8 && other.body != arm && b.body(other.body).alive && hit.is_none_or(|(best, _)| e.normal_impulse > best) {
+                    hit = Some((e.normal_impulse, other.body));
                 }
             }
-            let Some(other) = hit else { continue };
+            let Some((_, other)) = hit else { continue };
             let tip = {
                 let body = b.body(arm);
                 let hy = match &b.c.shapes[body.shapes[0]].shape.kind {
@@ -1474,6 +1474,11 @@ impl Ragdoll {
                 };
                 body.world_point(Vec2::new(0.0, hy))
             };
+            // a hand that reaches the handle of the rider's own vehicle boards it instead of gripping
+            if vehicle.as_deref_mut().is_some_and(|v| v.board(world, self, k, tip)) {
+                return;
+            }
+            let b = world.b2();
             let mut d = RevoluteJointDef::initialize(b.body(other), other, b.body(arm), arm, tip);
             if !b.body(other).is_static {
                 d.enable_limit = true;

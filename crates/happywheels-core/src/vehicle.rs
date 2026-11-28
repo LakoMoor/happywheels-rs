@@ -418,6 +418,11 @@ pub enum Vehicle {
     Santa(Box<Santa>),
 }
 
+/// Both coordinates of `a` within `reach` of `b`.
+fn near(a: Vec2, b: Vec2, reach: f64) -> bool {
+    (a.x - b.x).abs() < reach && (a.y - b.y).abs() < reach
+}
+
 /// A polyline the original strokes with `graphics` (ropes, shocks, harness): world px, drawn in the layer of the clip `layer`
 /// (below it, or above it when `above`).
 #[derive(Debug, Clone)]
@@ -605,6 +610,18 @@ impl Vehicle {
         }
     }
 
+    /// The vehicle part of `grabAction`: hand `k` of an ejected rider, its tip at `tip`, takes hold of the vehicle again when it is within
+    /// 0.25 of the handle (the Segway, the shopping cart, the moped and the pogo stick; the others cannot be boarded again).
+    pub fn board(&mut self, world: &mut World, doll: &mut Ragdoll, k: usize, tip: Vec2) -> bool {
+        match self {
+            Vehicle::Segway(v) => v.board(world, doll, k, tip),
+            Vehicle::Cart(v) => v.board(world, doll, k, tip),
+            Vehicle::Dirt(v) => v.board(world, doll, k, tip),
+            Vehicle::Pogo(v) => v.board(world, doll, k, tip),
+            _ => false,
+        }
+    }
+
     pub fn keys(&mut self, world: &mut World, doll: &mut Ragdoll, k: Keys) {
         match self {
             Vehicle::Bike(b) => b.keys(world, doll, k),
@@ -757,6 +774,14 @@ impl Segway {
             _ => 0.0,
         };
         b.body(body).world_point(Vec2::new(0.0, y))
+    }
+
+    fn board(&mut self, world: &mut World, doll: &mut Ragdoll, k: usize, tip: Vec2) -> bool {
+        if !self.ejected || self.frame_smashed || doll.dead || !near(tip, world.b2().body(self.frame).world_point(self.hand_anchor), 0.25) {
+            return false;
+        }
+        self.re_attach(world, doll, k);
+        true
     }
 
     /// `reAttach` (original 31255, triggered from `grabAction` when an ejected rider's hand is within 0.25 of the handle): the rider
@@ -1012,21 +1037,6 @@ impl Segway {
             }
             // space
             if space {
-                if ejected {
-                    // `grabAction`: a hand pressed against the handle re-boards instead of gripping (approximated by proximity)
-                    if !self.frame_smashed && !doll.dead {
-                        for (k, (arm, shoulder, elbow)) in [(Part::LowerArm1, Limb::Shoulder1, Limb::Elbow1), (Part::LowerArm2, Limb::Shoulder2, Limb::Elbow2)].into_iter().enumerate() {
-                            if doll.broken.contains(&shoulder) || doll.broken.contains(&elbow) {
-                                continue;
-                            }
-                            let (t, h) = (Self::limb_tip(world, doll, arm), world.b2().body(self.frame).world_point(self.hand_anchor));
-                            if (t.x - h.x).abs() < 0.25 && (t.y - h.y).abs() < 0.25 {
-                                self.re_attach(world, doll, k);
-                                break;
-                            }
-                        }
-                    }
-                }
                 if self.ejected {
                     doll.set_grab(world, true);
                 } else {
@@ -1648,44 +1658,33 @@ impl DirtBike {
         b.body(body).world_point(Vec2::new(0.0, y))
     }
 
-    /// `grabAction` → `reAttach` (original 25865/25944): an ejected, living rider whose hand is within 0.25 of the handle (frame not smashed)
-    /// is seated again: neck −20..0°, elbows −90..0°, that hand's joint re-created, `reAttaching` started. Returns whether it re-attached.
-    fn try_re_attach(&mut self, world: &mut World, doll: &mut Ragdoll) -> bool {
-        if self.frame_smashed || doll.dead {
+    /// `reAttach` (original 25865/25944): neck −20..0°, elbows −90..0°, that hand's joint re-created, `reAttaching` started.
+    fn board(&mut self, world: &mut World, doll: &mut Ragdoll, k: usize, tip: Vec2) -> bool {
+        if !self.ejected || self.frame_smashed || doll.dead || !near(tip, world.b2().body(self.frame).world_point(self.anchors[1]), 0.25) {
             return false;
         }
-        for (k, (arm, shoulder, elbow)) in [(Part::LowerArm1, Limb::Shoulder1, Limb::Elbow1), (Part::LowerArm2, Limb::Shoulder2, Limb::Elbow2)].into_iter().enumerate() {
-            if doll.broken.contains(&shoulder) || doll.broken.contains(&elbow) {
-                continue;
-            }
-            let (t, h) = (Self::limb_tip(world, doll, arm), world.b2().body(self.frame).world_point(self.anchors[1]));
-            if (t.x - h.x).abs() < 0.25 && (t.y - h.y).abs() < 0.25 {
-                let deg = 180.0 / std::f64::consts::PI;
-                self.ejected = false;
-                doll.set_pose(0);
-                doll.set_grab(world, false);
-                for (limb, lo, hi) in [(Limb::Neck, -20.0, 0.0), (Limb::Elbow1, -90.0, 0.0), (Limb::Elbow2, -90.0, 0.0)] {
-                    doll.set_limits_now(world, limb, lo / deg, hi / deg);
-                }
-                self.joints[1 + k] = Some(world.b2_mut().create_revolute_joint(&self.hand_defs[k].clone()));
-                self.reattaching = true;
-                return true;
-            }
+        let deg = 180.0 / std::f64::consts::PI;
+        self.ejected = false;
+        doll.set_pose(0);
+        doll.set_grab(world, false);
+        for (limb, lo, hi) in [(Limb::Neck, -20.0, 0.0), (Limb::Elbow1, -90.0, 0.0), (Limb::Elbow2, -90.0, 0.0)] {
+            doll.set_limits_now(world, limb, lo / deg, hi / deg);
         }
-        false
+        self.joints[1 + k] = Some(world.b2_mut().create_revolute_joint(&self.hand_defs[k].clone()));
+        self.reattaching = true;
+        true
     }
 
     /// The `reAttaching` action (original 24609/24983, five joints): hands near the handle, the pelvis near its seat anchor with both hips bent
     /// past −0.87 rad (or broken), then (pelvis on) the feet near the foot anchor; every success re-creates the joint from its creation def.
     /// Re-seating the pelvis makes the thighs sensors again and starts the girl's own `reAttaching`.
     fn re_attaching(&mut self, world: &mut World, doll: &Ragdoll) {
-        let near = |a: Vec2, b: Vec2| (a.x - b.x).abs() < 0.25 && (a.y - b.y).abs() < 0.25;
         let mut n = 0;
         for k in 0..2 {
             let (arm, shoulder, elbow) = if k == 0 { (Part::LowerArm1, Limb::Shoulder1, Limb::Elbow1) } else { (Part::LowerArm2, Limb::Shoulder2, Limb::Elbow2) };
             if self.joints[1 + k].is_some() || doll.broken.contains(&elbow) || doll.broken.contains(&shoulder) {
                 n += 1;
-            } else if near(Self::limb_tip(world, doll, arm), world.b2().body(self.frame).world_point(self.anchors[1])) {
+            } else if near(Self::limb_tip(world, doll, arm), world.b2().body(self.frame).world_point(self.anchors[1]), 0.25) {
                 self.joints[1 + k] = Some(world.b2_mut().create_revolute_joint(&self.hand_defs[k].clone()));
                 n += 1;
             }
@@ -1696,7 +1695,7 @@ impl DirtBike {
             let pelvis = world.b2().body(doll.bodies[&Part::Pelvis]).xf.position;
             let seat = world.b2().body(self.frame).world_point(self.anchors[0]);
             let bent = |limb: Limb, w: &World| doll.broken.contains(&limb) || doll.joints.get(&limb).and_then(|&j| w.b2().revolute_angle(j)).is_some_and(|a| a < -0.87);
-            if near(pelvis, seat) && bent(Limb::Hip1, world) && bent(Limb::Hip2, world) {
+            if near(pelvis, seat, 0.25) && bent(Limb::Hip1, world) && bent(Limb::Hip2, world) {
                 self.joints[0] = Some(world.b2_mut().create_revolute_joint(&self.pelvis_def.clone()));
                 for part in [Part::UpperLeg1, Part::UpperLeg2] {
                     let b = world.b2_mut();
@@ -1715,7 +1714,7 @@ impl DirtBike {
                 let (leg, knee, hip) = if k == 0 { (Part::LowerLeg1, Limb::Knee1, Limb::Hip1) } else { (Part::LowerLeg2, Limb::Knee2, Limb::Hip2) };
                 if self.joints[3 + k].is_some() || doll.broken.contains(&knee) || doll.broken.contains(&hip) {
                     n += 1;
-                } else if near(Self::limb_tip(world, doll, leg), world.b2().body(self.frame).world_point(self.anchors[2])) {
+                } else if near(Self::limb_tip(world, doll, leg), world.b2().body(self.frame).world_point(self.anchors[2]), 0.25) {
                     self.joints[3 + k] = Some(world.b2_mut().create_revolute_joint(&self.foot_defs[k].clone()));
                     n += 1;
                 }
@@ -1891,9 +1890,7 @@ impl DirtBike {
             }
             if k.space {
                 if ejected {
-                    if !self.try_re_attach(world, doll) {
-                        doll.set_grab(world, true);
-                    }
+                    doll.set_grab(world, true);
                 } else {
                     self.boost = (self.boost + 2.0).min(50.0);
                     if self.boost < 50.0 {
@@ -2657,6 +2654,10 @@ pub struct Pogo {
     pub rod: BodyId,
     pogo: usize,
     joints: [Option<usize>; 4],
+    /// Creation defs of the hand and foot joints and their points on the frame, to climb on again.
+    defs: [RevoluteJointDef; 4],
+    anchors: [Vec2; 2],
+    reattaching: bool,
     com: Vec<BodyId>,
     prev_com: Vec2,
     pivot_angle: f64,
@@ -2745,18 +2746,13 @@ impl Pogo {
                     self.eject(world, doll);
                 }
             } else {
-                let off = |a, b| doll.broken.contains(&a) || doll.broken.contains(&b);
-                if off(Limb::Hip1, Limb::Knee1) && off(Limb::Hip2, Limb::Knee2) {
-                    let free = Filter { category_bits: 260, mask_bits: 270, group_index: 0 };
-                    let b = world.b2_mut();
-                    for s in [b.body(self.frame).shapes[0], b.body(self.rod).shapes[1]] {
-                        b.set_shape_filter(s, free);
-                    }
-                }
+                self.free_if_legless(world, doll);
             }
         }
     }
 
+    /// While riding: elbows break at 90 (ligament below 110), knees at 120 (below 140), whatever the mass.
+    const BREAK_LIMITS: [f64; 4] = [90.0, 110.0, 120.0, 140.0];
     const SCALE: f64 = CHARACTER_SCALE;
     const MAX_SPIN: f64 = 5.0;
     const UPRIGHT: f64 = -std::f64::consts::PI * 0.5;
@@ -2819,19 +2815,24 @@ impl Pogo {
         pd.enable_motor = true;
         pd.motor_speed = 0.0;
         let pogo = b.create_prismatic_joint(&pd);
-        let rev = |b: &mut box2d::world::World, b2: BodyId, p: Vec2, lo: f64, hi: f64| {
+        let def = |b: &mut box2d::world::World, b2: BodyId, p: Vec2, lo: f64, hi: f64| {
             let mut d = RevoluteJointDef::initialize(b.body(frame), frame, b.body(b2), b2, p);
             d.enable_limit = true;
             d.lower_angle = lo / deg;
             d.upper_angle = hi / deg;
-            b.create_revolute_joint(&d)
+            d
         };
         let hand = at("handleAnchor")?;
-        let hand1 = rev(b, doll.bodies[&Part::LowerArm1], hand, -100.0, 10.0);
-        let hand2 = rev(b, doll.bodies[&Part::LowerArm2], hand, -100.0, 10.0);
         let foot = at("footAnchor")?;
-        let foot1 = rev(b, doll.bodies[&Part::LowerLeg1], foot, -10.0, 10.0);
-        let foot2 = rev(b, doll.bodies[&Part::LowerLeg2], foot, -10.0, 10.0);
+        let defs = [
+            def(b, doll.bodies[&Part::LowerArm1], hand, -100.0, 10.0),
+            def(b, doll.bodies[&Part::LowerArm2], hand, -100.0, 10.0),
+            def(b, doll.bodies[&Part::LowerLeg1], foot, -10.0, 10.0),
+            def(b, doll.bodies[&Part::LowerLeg2], foot, -10.0, 10.0),
+        ];
+        let [hand1, hand2, foot1, foot2] = [0, 1, 2, 3].map(|k| b.create_revolute_joint(&defs[k]));
+        let anchors = [hand, foot].map(|p| b.body(frame).local_point(p));
+        doll.limit_override = Some(Self::BREAK_LIMITS);
         let com: Vec<BodyId> = [Part::Head, Part::Chest, Part::Pelvis, Part::UpperArm1, Part::LowerArm1, Part::UpperArm2, Part::LowerArm2, Part::UpperLeg1, Part::LowerLeg1, Part::UpperLeg2, Part::LowerLeg2]
             .iter()
             .map(|p| doll.bodies[p])
@@ -2841,6 +2842,9 @@ impl Pogo {
             rod,
             pogo,
             joints: [Some(hand1), Some(hand2), Some(foot1), Some(foot2)],
+            defs,
+            anchors,
+            reattaching: false,
             com: [vec![frame, rod], com].concat(),
             prev_com: Vec2::default(),
             pivot_angle: f64::NAN,
@@ -3055,6 +3059,10 @@ impl Pogo {
             }
         }
         doll.apply_pose(world);
+        // `actions` runs after `checkPose`: the riding pose comes back on the next frame
+        if self.reattaching {
+            self.re_attaching(world, doll);
+        }
         if self.jump_frames > 0 {
             self.jump_frames -= 1;
         }
@@ -3090,11 +3098,87 @@ impl Pogo {
         world.b2_mut().body_mut(self.frame).angular_velocity = w;
     }
 
+    /// `reAttach` (original 35609): the rider's riding limits and break limits again, frame and rod collide with the rider, that hand's joint,
+    /// `reAttaching` started.
+    fn board(&mut self, world: &mut World, doll: &mut Ragdoll, k: usize, tip: Vec2) -> bool {
+        if !self.ejected || self.frame_smashed || doll.dead || !near(tip, world.b2().body(self.frame).world_point(self.anchors[0]), 0.25) {
+            return false;
+        }
+        let deg = 180.0 / std::f64::consts::PI;
+        self.relaxing = false;
+        self.ejected = false;
+        doll.set_pose(0);
+        doll.set_grab(world, false);
+        doll.limit_override = Some(Self::BREAK_LIMITS);
+        for (limb, lo, hi) in [
+            (Limb::Hip1, -100.0, 0.0),
+            (Limb::Hip2, -100.0, 0.0),
+            (Limb::Shoulder1, -120.0, 0.0),
+            (Limb::Shoulder2, -120.0, 0.0),
+            (Limb::Elbow1, -60.0, 0.0),
+            (Limb::Elbow2, -60.0, 0.0),
+            (Limb::Neck, 0.0, 5.0),
+        ] {
+            if !doll.broken.contains(&limb) {
+                doll.set_limits_now(world, limb, lo / deg, hi / deg);
+            }
+        }
+        let mounted = Filter { category_bits: 260, mask_bits: 270, group_index: -1 };
+        let b = world.b2_mut();
+        for s in [b.body(self.frame).shapes[0], b.body(self.rod).shapes[0]] {
+            b.set_shape_filter(s, mounted);
+        }
+        self.free_if_legless(world, doll);
+        self.joints[k] = Some(world.b2_mut().create_revolute_joint(&self.defs[k].clone()));
+        self.reattaching = true;
+        true
+    }
+
+    /// `checkLegsBroken`: with both legs broken the frame and the nub collide with the rider's parts again.
+    fn free_if_legless(&self, world: &mut World, doll: &Ragdoll) {
+        let off = |a, b| doll.broken.contains(&a) || doll.broken.contains(&b);
+        if off(Limb::Hip1, Limb::Knee1) && off(Limb::Hip2, Limb::Knee2) {
+            let free = Filter { category_bits: 260, mask_bits: 270, group_index: 0 };
+            let b = world.b2_mut();
+            for s in [b.body(self.frame).shapes[0], b.body(self.rod).shapes[1]] {
+                b.set_shape_filter(s, free);
+            }
+        }
+    }
+
+    /// The `reAttaching` action (original `reAttaching` of the pogo rider): hands within 0.25 of the handle, feet within 0.2 of the foot
+    /// rest; once all four hold or cannot, the action ends and the riding pose (9) returns.
+    fn re_attaching(&mut self, world: &mut World, doll: &mut Ragdoll) {
+        if self.ejected || doll.dead {
+            self.reattaching = false;
+            return;
+        }
+        let limbs = [(Part::LowerArm1, Limb::Shoulder1, Limb::Elbow1), (Part::LowerArm2, Limb::Shoulder2, Limb::Elbow2), (Part::LowerLeg1, Limb::Hip1, Limb::Knee1), (Part::LowerLeg2, Limb::Hip2, Limb::Knee2)];
+        let mut n = 0;
+        for (slot, (part, root, middle)) in limbs.into_iter().enumerate() {
+            if self.joints[slot].is_some() || doll.broken.contains(&middle) || doll.broken.contains(&root) {
+                n += 1;
+                continue;
+            }
+            let (anchor, reach) = (self.anchors[slot / 2], if slot < 2 { 0.25 } else { 0.2 });
+            if near(Segway::limb_tip(world, doll, part), world.b2().body(self.frame).world_point(anchor), reach) {
+                self.joints[slot] = Some(world.b2_mut().create_revolute_joint(&self.defs[slot].clone()));
+                n += 1;
+            }
+        }
+        if n >= 4 {
+            self.reattaching = false;
+            doll.pose = 9;
+        }
+    }
+
     pub fn eject(&mut self, world: &mut World, doll: &mut Ragdoll) {
         if self.ejected {
             return;
         }
         self.ejected = true;
+        self.reattaching = false;
+        doll.limit_override = None;
         self.relaxing = true;
         if let Some(p) = Self::pogo_mut(world, self.pogo) {
             p.motor_speed = 0.0;
@@ -3131,6 +3215,10 @@ pub struct Cart {
     back_joint: usize,
     front_joint: usize,
     joints: [Option<usize>; 5],
+    /// Creation defs of those five joints and the points on the cart they hang from, to board it again.
+    defs: [RevoluteJointDef; 5],
+    anchors: [Vec2; 5],
+    reattaching: bool,
     pub ejected: bool,
     pub main_smashed: bool,
     /// The four loose pieces left by `mainSmash`.
@@ -3331,25 +3419,36 @@ impl Cart {
         };
         let back_shock_joint = prismatic(b, back_shock, "backWheelShape")?;
         let front_shock_joint = prismatic(b, front_shock, "frontWheelShape")?;
-        let rev = |b: &mut box2d::world::World, b1: BodyId, b2: BodyId, p: Vec2, limit: bool| {
+        let def = |b: &mut box2d::world::World, b1: BodyId, b2: BodyId, p: Vec2, limit: bool| {
             let mut d = RevoluteJointDef::initialize(b.body(b1), b1, b.body(b2), b2, p);
             d.max_motor_torque = 100000.0;
             d.enable_limit = limit;
+            d
+        };
+        let rev = |b: &mut box2d::world::World, b1: BodyId, b2: BodyId, p: Vec2, limit: bool| {
+            let d = def(b, b1, b2, p, limit);
             b.create_revolute_joint(&d)
         };
         rev(b, body, shaft, at("shaftAnchor")?, true);
         let pelvis = doll.bodies[&Part::Pelvis];
         let pp = b.body(pelvis).xf.position;
-        let frame_pelvis = rev(b, body, pelvis, pp, false);
+        let pelvis_def = def(b, body, pelvis, pp, false);
+        let frame_pelvis = b.create_revolute_joint(&pelvis_def);
         let back_joint = rev(b, back_shock, back_wheel, at("backWheelShape")?, false);
         let front_joint = rev(b, front_shock, front_wheel, at("frontWheelShape")?, false);
         let hand = at("handleAnchor")?;
-        let hand1 = rev(b, body, doll.bodies[&Part::LowerArm1], hand, false);
-        let hand2 = rev(b, body, doll.bodies[&Part::LowerArm2], hand, false);
+        let hand1_def = def(b, body, doll.bodies[&Part::LowerArm1], hand, false);
+        let hand1 = b.create_revolute_joint(&hand1_def);
+        let hand2_def = def(b, body, doll.bodies[&Part::LowerArm2], hand, false);
+        let hand2 = b.create_revolute_joint(&hand2_def);
         let (l1, l2) = (doll.bodies[&Part::UpperLeg1], doll.bodies[&Part::UpperLeg2]);
         let (p1, p2) = (b.body(l1).xf.position, b.body(l2).xf.position);
-        let leg1 = rev(b, body, l1, p1, false);
-        let leg2 = rev(b, body, l2, p2, false);
+        let leg1_def = def(b, body, l1, p1, false);
+        let leg1 = b.create_revolute_joint(&leg1_def);
+        let leg2_def = def(b, body, l2, p2, false);
+        let leg2 = b.create_revolute_joint(&leg2_def);
+        let anchors = [pp, hand, hand, p1, p2].map(|p| b.body(body).local_point(p));
+        let defs = [pelvis_def, hand1_def, hand2_def, leg1_def, leg2_def];
         rev(b, groceries[7], groceries[8], at("sausageAnchor1")?, false);
         rev(b, groceries[8], groceries[9], at("sausageAnchor2")?, false);
         doll.poses = PoseSet::Cart;
@@ -3368,6 +3467,9 @@ impl Cart {
             back_joint,
             front_joint,
             joints: [Some(frame_pelvis), Some(hand1), Some(hand2), Some(leg1), Some(leg2)],
+            defs,
+            anchors,
+            reattaching: false,
             ejected: false,
             main_smashed: false,
             pieces: Vec::new(),
@@ -3508,6 +3610,70 @@ impl Cart {
             }
         }
         doll.apply_pose(world);
+        if self.reattaching {
+            self.re_attaching(world, doll);
+        }
+    }
+
+    /// `reAttach` (original 27756): neck −10..10°, that hand's joint, the handle and shaft collide with the rider again (not the rest of
+    /// the cart), `reAttaching` started.
+    fn board(&mut self, world: &mut World, doll: &mut Ragdoll, k: usize, tip: Vec2) -> bool {
+        if !self.ejected || self.main_smashed || doll.dead || !near(tip, world.b2().body(self.body).world_point(self.anchors[1]), 0.25) {
+            return false;
+        }
+        let deg = 180.0 / std::f64::consts::PI;
+        self.ejected = false;
+        doll.set_pose(0);
+        doll.set_grab(world, false);
+        doll.set_limits_now(world, Limb::Neck, -10.0 / deg, 10.0 / deg);
+        let b = world.b2_mut();
+        self.joints[1 + k] = Some(b.create_revolute_joint(&self.defs[1 + k].clone()));
+        let shapes = [b.body(self.shaft).shapes[0], b.body(self.shaft).shapes[1]];
+        for (s, category_bits) in shapes.into_iter().zip([513, 260]) {
+            b.set_shape_filter(s, Filter { category_bits, mask_bits: 0xFFFF, group_index: -2 });
+        }
+        self.reattaching = true;
+        true
+    }
+
+    /// The `reAttaching` action (original 27597): hands near the handle, the pelvis near its seat while both knees are bent 0.25..0.5 rad
+    /// (or broken), then the thighs near their places; it ends once all five hold or cannot.
+    fn re_attaching(&mut self, world: &mut World, doll: &Ragdoll) {
+        if self.ejected || doll.dead {
+            self.reattaching = false;
+            return;
+        }
+        let mut n = 0;
+        for k in 0..2 {
+            let (arm, shoulder, elbow) = if k == 0 { (Part::LowerArm1, Limb::Shoulder1, Limb::Elbow1) } else { (Part::LowerArm2, Limb::Shoulder2, Limb::Elbow2) };
+            if self.joints[1 + k].is_some() || doll.broken.contains(&elbow) || doll.broken.contains(&shoulder) {
+                n += 1;
+            } else if near(Segway::limb_tip(world, doll, arm), world.b2().body(self.body).world_point(self.anchors[1 + k]), 0.25) {
+                self.joints[1 + k] = Some(world.b2_mut().create_revolute_joint(&self.defs[1 + k].clone()));
+                n += 1;
+            }
+        }
+        let bent = [Limb::Knee1, Limb::Knee2].into_iter().all(|knee| {
+            doll.broken.contains(&knee) || doll.joints.get(&knee).and_then(|&j| world.b2().revolute_angle(j)).is_some_and(|a| a < 0.5 && a > 0.25)
+        });
+        // slot 0 is the pelvis, 3 and 4 the thighs (these only once the pelvis sits)
+        for (slot, part) in [(0, Part::Pelvis), (3, Part::UpperLeg1), (4, Part::UpperLeg2)] {
+            if slot != 0 && self.joints[0].is_none() {
+                continue;
+            }
+            if self.joints[slot].is_some() {
+                n += 1;
+                continue;
+            }
+            let at = world.b2().body(doll.bodies[&part]).xf.position;
+            if bent && near(at, world.b2().body(self.body).world_point(self.anchors[slot]), 0.25) {
+                self.joints[slot] = Some(world.b2_mut().create_revolute_joint(&self.defs[slot].clone()));
+                n += 1;
+            }
+        }
+        if n >= 5 {
+            self.reattaching = false;
+        }
     }
 
     pub fn eject(&mut self, world: &mut World, doll: &mut Ragdoll) {
@@ -3515,6 +3681,7 @@ impl Cart {
             return;
         }
         self.ejected = true;
+        self.reattaching = false;
         doll.reset_joint_limits(world);
         let zero = Filter { category_bits: 260, mask_bits: 0xFFFF, group_index: 0 };
         let zero2 = Filter { group_index: -2, ..zero };

@@ -2218,7 +2218,7 @@ fn cart_smash_splits_body() {
     }
 }
 
-/// c2 segway: after an eject the hands are still at the handle, so pressing space re-boards (`reAttach`) and the other limbs follow.
+/// c2 segway: after an eject the hands are still at the handle, so holding space re-boards (`reAttach`) and the other limbs follow.
 #[test]
 fn segway_reattaches_when_hand_is_at_the_handle() {
     use happywheels_core::vehicle::{Keys, Vehicle};
@@ -2236,8 +2236,11 @@ fn segway_reattaches_when_hand_is_at_the_handle() {
     w.set_rider_keys(Keys { z: true, ..Default::default() });
     w.step();
     assert!(w.bike.as_ref().unwrap().ejected());
-    w.set_rider_keys(Keys { space: true, ..Default::default() });
-    w.step();
+    // boarding happens when a hand's contact is reported (`grabAction`), which may take a few frames
+    for _ in 0..30 {
+        w.set_rider_keys(Keys { space: true, ..Default::default() });
+        w.step();
+    }
     let Some(Vehicle::Segway(s)) = w.bike.as_ref() else { panic!() };
     assert!(s.is_reattached(), "space next to the handle should re-board");
     for _ in 0..60 {
@@ -2347,8 +2350,10 @@ fn dirt_bike_rider_reboards_at_the_handle() {
     };
     let (pos, ang) = (w.b2().body(arm).xf.position, w.b2().body(arm).sweep.a);
     w.b2_mut().set_xform(arm, box2d::math::Vec2::new(pos.x + handle.x - tip.x, pos.y + handle.y - tip.y), ang);
-    w.set_rider_keys(Keys { space: true, ..Default::default() });
-    w.step();
+    for _ in 0..10 {
+        w.set_rider_keys(Keys { space: true, ..Default::default() });
+        w.step();
+    }
     assert!(!w.bike.as_ref().unwrap().ejected(), "rider did not re-board");
 }
 
@@ -4164,6 +4169,50 @@ fn camera_at_60fps_matches_the_original() {
             assert_camera(&w, want, &format!("char {ch} tick {tick}"));
         }
     }
+}
+
+/// Ejecting and grabbing the vehicle again, in real sessions of the built-in level, for the four riders that can (`grabAction` → `reAttach`):
+/// `a` ejects at once, `b` after 40 frames of riding; space is held from then on.
+#[test]
+fn boarding_again_matches_the_original() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let mut report = Vec::new();
+    for ch in [2usize, 4, 5, 9] {
+        for name in ["a", "b"] {
+            let doc: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(root.join(format!("tests/golden/board-{ch}{name}.json"))).unwrap()).unwrap();
+            let sched = doc["sched"].as_array().unwrap();
+            let mut w = World::level1();
+            assert!(w.spawn_bike(ch, happywheels_core::physics::LEVEL1_START));
+            let (mut boarded, mut was_off) = (None, false);
+            let frames = doc["frames"].as_array().unwrap();
+            for (i, frame) in frames.iter().enumerate() {
+                let held = |key: &str| sched.iter().any(|e| (e[0].as_u64().unwrap()..e[1].as_u64().unwrap()).contains(&(i as u64)) && e[2].as_array().unwrap().iter().any(|k| k == key));
+                w.set_rider_keys(happywheels_core::vehicle::Keys { up: held("up"), down: held("down"), left: held("left"), right: held("right"), space: held("space"), shift: held("shift"), ctrl: held("ctrl"), z: held("z") });
+                w.step();
+                let off_it = w.bike.as_ref().is_some_and(|v| v.ejected());
+                if was_off && !off_it && boarded.is_none() {
+                    boarded = Some(i);
+                }
+                was_off = off_it;
+                let got: Vec<[f64; 3]> = w.b2().c.bodies.iter().filter(|b| b.mass > 0.0 && b.alive).map(|b| [b.xf.position.x * 62.5, b.xf.position.y * 62.5, b.sweep.a]).collect();
+                let want = frame.as_array().unwrap();
+                let off = got.len() != want.len() || got.iter().zip(want).any(|(g, o)| (0..3).any(|j| (g[j] - o[j].as_f64().unwrap()).abs() >= 2e-3));
+                if off {
+                    if std::env::var("BDBG").is_ok() {
+                        for (k, (g, o)) in got.iter().zip(want).enumerate() {
+                            if (0..3).any(|j| (g[j] - o[j].as_f64().unwrap()).abs() >= 2e-3) {
+                                println!("  body {k} id mass {:?}: {g:?} / {o}", w.b2().c.bodies.iter().filter(|b| b.mass > 0.0 && b.alive).nth(k).map(|b| b.mass));
+                            }
+                        }
+                    }
+                    report.push(format!("char {ch}{name}: frame {i} differs ({} bodies, {} in the original), boarded {boarded:?}", got.len(), want.len()));
+                    break;
+                }
+            }
+            println!("char {ch}{name}: boarded {boarded:?}");
+        }
+    }
+    assert!(report.is_empty(), "{}", report.join("\n"));
 }
 
 /// The built-in level against the original's own session (`analysis/level1-real.js`: `levelIndex` 1, the clip loaded by the game, the key schedule of
