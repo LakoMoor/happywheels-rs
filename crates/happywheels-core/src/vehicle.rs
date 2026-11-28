@@ -5881,8 +5881,12 @@ impl Girl {
     }
 
     pub fn check_joints(&mut self, world: &mut World) {
-        let broken = self.doll.check_joints(world);
-        self.limbs_broken(world, &broken);
+        for limb in crate::character::CHECK_ORDER {
+            if self.doll.check_joint(world, limb) {
+                self.limbs_broken(world, &[limb]);
+            }
+        }
+        self.doll.check_composites(world);
     }
 
     pub fn eject(&mut self, world: &mut World) {
@@ -7269,8 +7273,7 @@ impl Santa {
 
     /// `checkJoints`: Santa's limb breaks let go of the sleigh; straps snap above 0.4; the elves' limbs break too.
     pub fn check_joints(&mut self, world: &mut World, doll: &mut Ragdoll) {
-        let broken = doll.check_joints(world);
-        self.limbs_broken(world, doll, &broken);
+        doll.check_joints_with(world, |world, doll, limb| self.limbs_broken(world, doll, &[limb]));
         for n in [1u8, 2] {
             let (strapped, chain0) = if n == 1 { (self.elf1.strapped_in, self.strap_chest1[0]) } else { (self.elf2.strapped_in, self.strap_chest2[0]) };
             if strapped && world.b2().distance_impulse(chain0).is_some_and(|i| i.abs() > 0.4) {
@@ -7282,8 +7285,12 @@ impl Santa {
             if elf.doll.about_to_die(world) && elf.feet.iter().any(Option::is_some) {
                 elf.disable_running(world);
             }
-            let broken = elf.doll.check_joints(world);
-            elf.limbs_broken(world, &broken);
+            for limb in crate::character::CHECK_ORDER {
+                if elf.doll.check_joint(world, limb) {
+                    elf.limbs_broken(world, &[limb]);
+                }
+            }
+            elf.doll.check_composites(world);
             // the `dead` setter runs `disableRunning` (also for a death by smash earlier in this step)
             if elf.doll.dead && elf.feet.iter().any(Option::is_some) {
                 elf.disable_running(world);
