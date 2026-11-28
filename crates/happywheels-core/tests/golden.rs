@@ -2570,7 +2570,7 @@ fn sprites_draw_dirt_and_pogo_smash() {
             Some(happywheels_core::vehicle::Vehicle::Mower(b)) => b.smash(&mut w, &mut doll),
             Some(happywheels_core::vehicle::Vehicle::Chair(b)) => b.chair_smash(&mut w, &mut doll),
             Some(happywheels_core::vehicle::Vehicle::Heli(b)) => b.copter_smash(&mut w, &mut doll, box2d::math::Vec2::new(16.0, 6.0)),
-            Some(happywheels_core::vehicle::Vehicle::Family(f)) => f.dad.frame_smash(&mut w, &mut doll),
+            Some(happywheels_core::vehicle::Vehicle::Family(f)) => f.frame_smash(&mut w, &mut doll),
             Some(happywheels_core::vehicle::Vehicle::Cart(c)) => c.main_smash(&mut w, &mut doll),
             Some(happywheels_core::vehicle::Vehicle::Santa(s)) => s.sleigh_smash(&mut w, &mut doll),
             _ => panic!("unexpected vehicle"),

@@ -1721,7 +1721,10 @@ impl Sprites {
             // `DirtBike::pieces` follow the shape-target order [4, 3, 2, 5, 1, 0] of the creation order fork, tank, engine, middle, rear, seat.
             Some(crate::vehicle::Vehicle::Dirt(d)) => {
                 for (&body, name) in d.pieces.iter().zip(["rear", "middle", "engine", "seat", "tank", "fork"]) {
-                    self.draw_loose(img, world, camera_offset, name, body);
+                    // the original never adds the middle piece's clip to the stage: that body flies unseen
+                    if name != "middle" {
+                        self.draw_loose(img, world, camera_offset, name, body);
+                    }
                 }
             }
             // chairSmash debris: the rod is whichever debris body is neither the tank nor the jet (those two get cleared when they blow up).
@@ -2001,10 +2004,14 @@ impl Sprites {
             return;
         }
         // `skiSmash` on an intact sleigh re-centres the clip (`sleighMC.inner` follows the new local centre): keep it fixed to the body origin.
+        // `detachBasket` does the same to the son's basket when its walls are replaced.
         let recentre = match world.bike.as_ref() {
             Some(crate::vehicle::Vehicle::Santa(s)) if s.sleigh == b.body => {
                 let lc = world.b2().body(b.body).sweep.local_center;
                 local((s.sleigh_lc0.x - lc.x) * 62.5, (s.sleigh_lc0.y - lc.y) * 62.5, 0.0, 1.0, 1.0)
+            }
+            Some(crate::vehicle::Vehicle::Family(f)) if f.son.basket == b.body && !f.son.basket_gone => {
+                local(-f.son.centre_shift.x * 62.5, -f.son.centre_shift.y * 62.5, 0.0, 1.0, 1.0)
             }
             _ => local(0.0, 0.0, 0.0, 1.0, 1.0),
         };
@@ -2068,7 +2075,14 @@ impl Sprites {
             _ => None,
         };
         let mut frame = owner.map_or(1, |d| d.part_frame(&node.n));
-        if b.path.len() == 1 && node.n == "box3" && matches!(world.bike.as_ref(), Some(crate::vehicle::Vehicle::Cart(c)) if c.cola_open) {
+        // vehicle parts that switch to their second frame (`gotoAndStop(2)`)
+        let broken_part = match world.bike.as_ref() {
+            Some(crate::vehicle::Vehicle::Cart(c)) => node.n == "box3" && c.cola_open,
+            Some(crate::vehicle::Vehicle::Chair(c)) => node.n == "chair" && c.chair_smashed,
+            Some(crate::vehicle::Vehicle::Pogo(p)) => node.n == "rod" && p.frame_smashed,
+            _ => false,
+        };
+        if b.path.len() == 1 && broken_part {
             frame = 2;
         }
         let children = if frame > 1 { node.alt.get(&frame.to_string()).unwrap_or(&node.k) } else { &node.k };
@@ -2084,7 +2098,10 @@ impl Sprites {
                 self.draw_node(img, child, parent);
             }
         } else {
-            if let Some(name) = b.without {
+            // the basket of a son who has come off the dad's bike has lost its frame
+            let lost = matches!(world.bike.as_ref(), Some(crate::vehicle::Vehicle::Family(f)) if f.son.basket == b.body && !f.son.basket_gone && f.son.detached());
+            let without = b.without.or(lost.then_some("frame"));
+            if let Some(name) = without {
                 self.hidden.borrow_mut().push(name);
             }
             for child in children {
@@ -2102,7 +2119,8 @@ impl Sprites {
                         self.draw_node_at(img, child, g, None, Some(p.spring_scale(world)));
                         continue;
                     }
-                    // the moped's front rim turns with the frame, not with the wheel
+                    // the moped's front rim goes with the frame; until then it turns with the frame, not with the wheel
+                    Some(crate::vehicle::Vehicle::Dirt(d)) if node.n == "frontWheel" && child.n == "rim" && d.frame_smashed => continue,
                     Some(crate::vehicle::Vehicle::Dirt(d)) if node.n == "frontWheel" && child.n == "rim" => {
                         self.draw_node_turned(img, child, g, f64::from(world.body_angle(d.frame)));
                         continue;
@@ -2120,7 +2138,7 @@ impl Sprites {
                     _ => self.draw_node(img, child, g),
                 }
             }
-            if let Some(name) = b.without {
+            if let Some(name) = without {
                 self.hidden.borrow_mut().retain(|&n| n != name);
             }
         }

@@ -2885,7 +2885,11 @@ impl World {
                 }
                 Some(crate::vehicle::Vehicle::Family(mut f)) => {
                     // the c10 dad is a c3 bike with `frameSmashLimit` 100
+                    let whole = !f.dad.frame_smashed;
                     self.smash_bike_parts(&mut f.dad, &events, crate::vehicle::Family::DAD_FRAME_SMASH_LIMIT);
+                    if whole && f.dad.frame_smashed {
+                        f.children_detach(self);
+                    }
                     self.bike = Some(crate::vehicle::Vehicle::Family(f));
                 }
                 other => self.bike = other,
@@ -5678,7 +5682,11 @@ impl World {
         doll.tag = ["Char1", "Char2", "Char3", "Char4", "Char8", "Char11", "Char2", "Santa", "Char12", "Char4", "Heli"][index - 1];
         let vehicle = match index {
             1 => crate::vehicle::Chair::attach(self, &guide, start_px, &mut doll).map(crate::vehicle::Vehicle::Chair),
-            11 => crate::vehicle::Heli::attach(self, &guide, start_px, &mut doll).map(crate::vehicle::Vehicle::Heli),
+            11 => crate::vehicle::Heli::attach(self, &guide, start_px, &mut doll).map(|mut heli| {
+                // `create` paints once: the drawn rope has already taken a step when the level starts
+                heli.step_rope(self);
+                crate::vehicle::Vehicle::Heli(heli)
+            }),
             8 => crate::vehicle::Santa::attach(self, &guide, start_px, &mut doll).map(|s| crate::vehicle::Vehicle::Santa(Box::new(s))),
             7 => crate::vehicle::Grinder::attach(self, &guide, start_px, &mut doll).map(crate::vehicle::Vehicle::Grinder),
             4 => crate::vehicle::Cart::attach(self, &guide, start_px, &mut doll).map(crate::vehicle::Vehicle::Cart),

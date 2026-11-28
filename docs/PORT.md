@@ -864,3 +864,25 @@ Asset distribution: original art/audio is not shipped; screenshots that show ori
 - 2026-11-28 — correction to "editor stage 2": the original editor has no resize or rotate handles on the canvas (its arrow tool only selects and drags; sizes and angles change by keys and input fields), so nothing is missing there.
 
 - 2026-11-28 — LEVEL EDITOR, inside a group. A double click on a group lays its members out where it shows them and edits them alone, the other shapes staying visible; a double click on nothing or Escape rebuilds the group in its own frame (`editor_session/groups.rs`). Member positions and angles on opening and after rebuilding were compared with the original (`breakApart` / `rebuild` run on a group turned 40°). Fixed on the way: breaking a group apart no longer wraps angles into ±180 (the original writes 210). Differences: everything done inside is a single undo step; joints and triggers stay hidden and their tools are off inside; only groupable specials can be placed. Screenshot `screenshots/editor-web-group.png`.
+
+## 2026-11-28 — поломка техники сверена по спискам отрисовки
+
+`analysis/golden-wreck.py` вызывает в оригинале главный метод поломки каждой техники (все персонажи, кроме 7 — у его
+уницикла такого нет) и снимает список отрисовки через 1 и 10 кадров: `tests/golden/wreck{1,10}-c*.json`. Тест
+`wrecked_vehicles_are_drawn_like_the_original` проходит на всех десяти; для этого исправлено:
+
+- c1: коляска после поломки показывает второй кадр клипа; c9: так же шток пого.
+- c2: после поломки рамы линия амортизатора больше не рисуется.
+- c4/c6: частицы с генерируемыми текстурами сравниваются только по количеству (их положения случайны).
+- c5: средний кусок рамы оригинал не добавляет на сцену (тело летит невидимым); передний обод пропадает вместе с рамой;
+  пассажирка сбрасывается уже после уничтожения рамы, поэтому её ноги сразу перестают быть сенсорами.
+- c8: лыжи и стойка, ломающиеся вслед за санями, рождались не от саней, а от нового куска, занявшего их id;
+  обломок стойки состоит из трёх контуров, а не из двух.
+- c10: поломка рамы отца отцепляет коляску дочери и корзину сына; у корзины заменяются стенки, картинка остаётся
+  на месте, а каркас исчезает; при отцепке дочери включается задний контур её рамы (раньше — сиденье).
+- c11: нарисованный трос делает один шаг уже при создании уровня, как после `paint` в `create`.
+
+Скриншот: `screenshots/wrecked_vehicles.png`.
+
+Не сверено: поломки по порогам удара в живой игре (здесь методы вызваны напрямую), поломки пассажиров по отдельности,
+поломки при других начальных скоростях.

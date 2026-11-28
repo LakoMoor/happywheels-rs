@@ -11,6 +11,8 @@ enum Action {
     Head,
     Chest,
     Pelvis,
+    /// The vehicle's own breaking method.
+    Wreck,
 }
 
 fn port_list(c: usize, frames: usize, action: Action) -> Option<Vec<(String, [[f64; 2]; 3])>> {
@@ -24,7 +26,24 @@ fn port_list(c: usize, frames: usize, action: Action) -> Option<Vec<(String, [[f
         use happywheels_core::character::Limb;
         let mut doll = world.character.take().unwrap();
         let mut vehicle = world.bike.take().unwrap();
+        use happywheels_core::vehicle::Vehicle;
         match action {
+            Action::Wreck => match &mut vehicle {
+                Vehicle::Bike(v) => v.frame_smash(&mut world, &mut doll),
+                Vehicle::Segway(v) => v.frame_smash(&mut world, &mut doll),
+                Vehicle::Chair(v) => v.chair_smash(&mut world, &mut doll),
+                Vehicle::Dirt(v) => v.frame_smash(&mut world, &mut doll),
+                Vehicle::Mower(v) => v.smash(&mut world, &mut doll),
+                Vehicle::Pogo(v) => v.frame_smash(&mut world, &mut doll),
+                Vehicle::Cart(v) => v.main_smash(&mut world, &mut doll),
+                Vehicle::Heli(v) => {
+                    let at = world.b2().body(v.copter).sweep.c;
+                    v.copter_smash(&mut world, &mut doll, at);
+                }
+                Vehicle::Family(v) => v.frame_smash(&mut world, &mut doll),
+                Vehicle::Santa(v) => v.sleigh_smash(&mut world, &mut doll),
+                Vehicle::Grinder(_) => {}
+            },
             Action::Break => {
                 for (limb, over) in [(Limb::Neck, 5.0), (Limb::Waist, 10.0), (Limb::Elbow1, 1.0)] {
                     let force = doll.break_limit(&world, limb) + over;
@@ -96,6 +115,20 @@ fn smashed_riders_are_drawn_like_the_original() {
     }
 }
 
+/// Each vehicle's breaking method before the first frame (the grinder of c7 has none).
+#[test]
+fn wrecked_vehicles_are_drawn_like_the_original() {
+    let mut failed = Vec::new();
+    for c in [1, 2, 3, 4, 5, 6, 8, 9, 10, 11] {
+        for frames in [1, 10] {
+            if let Err(e) = std::panic::catch_unwind(|| compare(c, frames, &format!("wreck{frames}"), Action::Wreck)) {
+                failed.push(e.downcast_ref::<String>().cloned().unwrap_or_default());
+            }
+        }
+    }
+    assert!(failed.is_empty(), "{}", failed.join("\n"));
+}
+
 /// Known difference: the c10 daughter's chain gear is a pixel off.
 fn compare(c: usize, frames: usize, golden: &str, action: Action) {
         let Some(port) = port_list(c, frames, action) else { return };
@@ -103,7 +136,8 @@ fn compare(c: usize, frames: usize, golden: &str, action: Action) {
         let original: Vec<(String, [[f64; 2]; 3])> = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
         let mut used = vec![false; port.len()];
         let mut previous = None;
-        for (name, quad) in &original {
+        // "?" are the generated textures of debris particles, whose positions are random
+        for (name, quad) in original.iter().filter(|d| d.0 != "?") {
             let off = |other: &[[f64; 2]; 3]| quad.iter().flatten().zip(other.iter().flatten()).map(|(a, b)| (a - b).abs()).fold(0.0, f64::max);
             let nearest = (0..port.len()).filter(|&j| !used[j] && &port[j].0 == name).min_by(|&a, &b| off(&port[a].1).total_cmp(&off(&port[b].1)));
             let Some(j) = nearest.filter(|&j| off(&port[j].1) < 2.0) else {
@@ -116,5 +150,7 @@ fn compare(c: usize, frames: usize, golden: &str, action: Action) {
             previous = Some(j);
         }
         let extra: Vec<_> = port.iter().zip(&used).filter(|(_, &u)| !u).map(|(d, _)| &d.0).collect();
-        assert!(extra.is_empty(), "c{c}: drawn here only: {extra:?}");
+        // the debris particles' textures have names here and none there: as many must be left over as were unnamed
+        let unnamed = original.iter().filter(|d| d.0 == "?").count();
+        assert!(extra.len() == unnamed, "c{c}: {} drawn here only, {unnamed} particles there: {:?}", extra.len(), &extra[..extra.len().min(6)]);
 }

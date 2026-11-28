@@ -451,7 +451,7 @@ impl Vehicle {
         let center = |id: BodyId| Some(world.b2().body(id)).filter(|b| b.alive).map(|b| b.sweep.c);
         let anchor = |id: usize| joint_anchor(world, id, false);
         match self {
-            Vehicle::Segway(s) => shock_line(world, center(s.stand), s.shock, 3.0, 0xd1d8e0, "wheel").into_iter().collect(),
+            Vehicle::Segway(s) if !s.frame_smashed => shock_line(world, center(s.stand), s.shock, 3.0, 0xd1d8e0, "wheel").into_iter().collect(),
             Vehicle::Cart(c) if !c.main_smashed => [(c.back_shock_joint, c.back_shock), (c.front_shock_joint, c.front_shock)]
                 .into_iter()
                 .filter_map(|(j, body)| shock_line(world, anchor(j), body, 3.0, 0x0c160d, "backWheel"))
@@ -1485,9 +1485,6 @@ impl DirtBike {
             world.shard_burst(crate::blood::ShardKind::Metal, at, 5.0, 50.0, 50);
         }
         self.eject(world, doll);
-        if let Some(g) = self.girl.as_mut() {
-            g.eject(world);
-        }
         let zero = Filter { category_bits: 260, mask_bits: 0xFFFF, group_index: 0 };
         let b = world.b2_mut();
         // frame shapes in creation order: rear, middle, engine, seat, tank, fork
@@ -1523,6 +1520,11 @@ impl DirtBike {
         // paint order: rear, middle, engine, seat, tank, fork
         self.pieces = [4usize, 3, 2, 5, 1, 0].iter().map(|&k| bodies[k]).collect();
         b.destroy_body(self.frame);
+        // the passenger is thrown off once the frame is gone, which lets her legs collide at once
+        if let Some(g) = self.girl.as_mut() {
+            g.frame_gone = true;
+            g.eject(world);
+        }
     }
 
     /// Limb-break reactions (class with `boostVal`, original 25774): shoulder/elbow → that hand's joint, hip/knee → that foot's;
@@ -4790,7 +4792,8 @@ impl Daughter {
             }
             b.refilter(s);
         }
-        let end = b.body(self.frame).shapes[0];
+        // the rear quad, a sensor while she is hitched
+        let end = b.body(self.frame).shapes[4];
         b.shape_mut(end).is_sensor = false;
         b.refilter(end);
         // `playAreaSoundInstance("StrapSnap1", frameBody)`
@@ -4896,7 +4899,7 @@ impl Daughter {
 /// basket (three quads, density 1, collides with nothing of the dad's group) that is welded to the dad's frame by a
 /// locked revolute (breaks at reaction 100 → `detachBasket`), with his hands on the basket and his pelvis on a short
 /// prismatic joint (0..0.25 m along 25° off vertical). Shift/z eject him (impulse 0.75 perpendicular to the basket).
-/// NOT ported: basket smash (limit 3), the crate2* replacement shapes after `detachBasket`, sounds.
+/// NOT ported: sounds.
 pub struct Son {
     pub doll: Ragdoll,
     pub basket: BodyId,
@@ -4904,7 +4907,10 @@ pub struct Son {
     pelvis: Option<usize>,
     hands: [Option<usize>; 2],
     basket_shapes: Vec<box2d::world::ShapeId>,
-    basket_shape1: box2d::world::ShapeId,
+    /// The replacement walls of `detachBasket`.
+    spare_walls: Vec<Vec<Vec2>>,
+    /// How far the basket's centre of mass moved when its walls were replaced (body-local m): the picture stays put.
+    pub centre_shift: Vec2,
     pub ejected: bool,
     /// `basketSmash` happened: the basket body is gone.
     pub basket_gone: bool,
@@ -4935,6 +4941,7 @@ impl Son {
             shapes.push(b.create_shape(basket, &d));
         }
         b.set_mass_from_shapes(basket);
+        let spare_walls = ["crate2Right", "crate2Bottom", "crate2Left"].iter().map(|prefix| (1..=4).map(|i| at(&format!("{prefix}{i}"))).collect::<Option<Vec<Vec2>>>()).collect::<Option<Vec<_>>>()?;
         doll.finish_joints(world);
         for (limb, lo, hi) in [(Limb::Knee1, 50.0, 150.0), (Limb::Knee2, 50.0, 150.0), (Limb::Elbow1, -160.0, -20.0), (Limb::Elbow2, -160.0, -20.0), (Limb::Neck, -10.0, 10.0)] {
             doll.set_limits(world, limb, lo / deg, hi / deg);
@@ -4962,7 +4969,7 @@ impl Son {
         pd.lower_translation = 0.0;
         pd.upper_translation = 0.25;
         let pelvis = b.create_prismatic_joint(&pd);
-        Some(Self { doll, basket, connecting: Some(connecting), pelvis: Some(pelvis), hands, basket_shape1: shapes[0], basket_shapes: shapes, ejected: false, basket_gone: false })
+        Some(Self { doll, basket, connecting: Some(connecting), pelvis: Some(pelvis), hands, basket_shapes: shapes, spare_walls, centre_shift: Vec2::default(), ejected: false, basket_gone: false })
     }
 
     pub fn keys(&mut self, world: &mut World, k: Keys) {
@@ -5060,8 +5067,8 @@ impl Son {
         if self.basket_gone || self.basket_shapes.is_empty() {
             return;
         }
-        let s1 = self.basket_shape1;
-        let hit = events.iter().find(|e| e.kind == box2d::world::ContactEventKind::Result && (e.shape1 == s1 || e.shape2 == s1) && e.normal_impulse > 3.0);
+        // one handler is registered on all three walls
+        let hit = events.iter().find(|e| e.kind == box2d::world::ContactEventKind::Result && (self.basket_shapes.contains(&e.shape1) || self.basket_shapes.contains(&e.shape2)) && e.normal_impulse > 3.0);
         if hit.is_none() {
             return;
         }
@@ -5077,7 +5084,13 @@ impl Son {
         world.play("BasketSmash", 1, c);
     }
 
-    /// `detachBasket` (physical part): the hitch and the three basket shapes go; the rider leaves the group filter.
+    /// `detachBasket`: the hitch breaks, the rider leaves the group filter, and the walls are replaced by ones that
+    /// collide with everything.
+    /// `detached`: the basket is no longer welded to the dad's bike.
+    pub fn detached(&self) -> bool {
+        self.connecting.is_none()
+    }
+
     pub fn detach(&mut self, world: &mut World) {
         let Some(id) = self.connecting.take() else { return };
         world.b2_mut().destroy_joint(id);
@@ -5087,6 +5100,19 @@ impl Son {
         if !self.ejected {
             self.refilter_parts(world, &Self::ALL);
         }
+        let b = world.b2_mut();
+        let before = b.body(self.basket).sweep.local_center;
+        for wall in &self.spare_walls {
+            let mut d = ShapeDef::new(Geometry::Polygon(wall.clone()));
+            d.density = 1.0;
+            d.friction = 0.3;
+            d.restitution = 0.1;
+            d.filter = Filter { category_bits: 260, mask_bits: 0xFFFF, group_index: 0 };
+            self.basket_shapes.push(b.create_shape(self.basket, &d));
+        }
+        b.set_mass_from_shapes(self.basket);
+        let after = b.body(self.basket).sweep.local_center;
+        self.centre_shift = Vec2::new(after.x - before.x, after.y - before.y);
     }
 
     pub fn eject(&mut self, world: &mut World) {
@@ -5315,6 +5341,8 @@ pub struct Girl {
     leg_contacts: [i32; 2],
     listening: bool,
     legs_free_pending: bool,
+    /// The bike's frame is smashed (`!guy.tankShape`): nothing is left for her legs to be stuck in.
+    frame_gone: bool,
     pub ejected: bool,
 }
 
@@ -5360,7 +5388,7 @@ impl Girl {
         let foot = at("footAnchor")?;
         let f1 = rev(b, guy_frame, doll.bodies[&Part::LowerLeg1], foot);
         let f2 = rev(b, guy_frame, doll.bodies[&Part::LowerLeg2], foot);
-        Some(Self { doll, frame_pelvis: Some(frame_pelvis), torso_hands: [Some(h1), Some(h2)], frame_feet: [Some(f1), Some(f2)], seat_shape, hand_defs, torso_anchor, reattaching: false, leg_contacts: [0; 2], listening: true, legs_free_pending: false, ejected: false })
+        Some(Self { doll, frame_pelvis: Some(frame_pelvis), torso_hands: [Some(h1), Some(h2)], frame_feet: [Some(f1), Some(f2)], seat_shape, hand_defs, torso_anchor, reattaching: false, leg_contacts: [0; 2], listening: true, legs_free_pending: false, frame_gone: false, ejected: false })
     }
 
     pub fn start_re_attach(&mut self) {
@@ -5551,12 +5579,15 @@ impl Girl {
             b.destroy_joint(j);
         }
         self.release_guy(world);
-        // the rider's frame has a tank shape (dirt bike) → the legs wait for their `legsFree` contacts instead of freeing at once
+        // with the frame there the legs wait until their contacts with the seat end
+        if self.frame_gone {
+            self.leg_contacts = [0; 2];
+            self.check_legs_free();
+        }
     }
 }
 
 /// The c10 family: the dad's bike (class of c3 at ref scale 50) towing the daughter's trailer bike.
-/// NOT ported yet: the son in the basket, helmet/frame smash, `detachFrame`, kid joint breaks.
 pub struct Family {
     pub dad: Bike,
     pub daughter: Daughter,
@@ -5570,6 +5601,21 @@ impl Family {
         self.dad.keys(world, doll, k);
         self.daughter.keys(world, k);
         self.son.keys(world, k);
+    }
+
+    /// `frameSmash`: the dad's bike breaks, and the daughter's frame and the son's basket come off it.
+    pub fn frame_smash(&mut self, world: &mut World, doll: &mut Ragdoll) {
+        if self.dad.frame_smashed {
+            return;
+        }
+        self.dad.frame_smash(world, doll);
+        self.children_detach(world);
+    }
+
+    /// What the dad's broken frame does to the children (the hitch joints themselves went with the frame body).
+    pub fn children_detach(&mut self, world: &mut World) {
+        self.daughter.detach(world);
+        self.son.detach(world);
     }
 
     pub fn check_joints(&mut self, world: &mut World) {
@@ -5937,6 +5983,9 @@ pub struct Santa {
     broken_sleigh: Vec<Vec<Vec2>>,
     broken_ski: Vec<Vec<Vec2>>,
     pub sleigh_gone: bool,
+    /// The sleigh body as it was when destroyed: the skis and the stem breaking afterwards are born from it, and its id
+    /// may by then belong to one of the new pieces.
+    wreck: Option<box2d::world::Body>,
     pub wheels_gone: bool,
     /// Pieces born from smashes (broken sleigh / ski).
     pub debris: Vec<BodyId>,
@@ -6102,12 +6151,13 @@ impl Santa {
             front_shape: front_shape?,
             ski_shape,
             stem_shapes,
-            broken_stem: vec![poly("stem1_", 4)?, poly("stem2_", 4)?],
+            broken_stem: vec![poly("stem1_", 4)?, poly("stem2_", 4)?, poly("stem3_", 4)?],
             stem_gone: false,
             new_base: poly("newbase_", 5)?,
             broken_sleigh: (1..=7).map(|i| (1..=6).filter_map(|j| at(&format!("broken_{i}_{j}"))).collect()).collect(),
             broken_ski: (1..=3).map(|i| (1..=6).filter_map(|j| at(&format!("ski_{i}_{j}"))).collect()).collect(),
             sleigh_gone: false,
+            wreck: None,
             wheels_gone: false,
             debris: Vec::new(),
             debris_names: Vec::new(),
@@ -6392,7 +6442,7 @@ impl Santa {
             return;
         }
         self.wheels_gone = true;
-        let src = world.b2().body(self.sleigh).clone();
+        let src = self.sleigh_state(world);
         for w in self.wheels {
             world.b2_mut().destroy_body(w);
         }
@@ -6416,18 +6466,21 @@ impl Santa {
             }
             self.anti_grav.extend(pieces);
         }
-        let c = world.b2().body(self.sleigh).sweep.c;
-        world.play("SkiSmash", 1, c);
+        world.play("SkiSmash", 1, src.sweep.c);
     }
 
-    /// `stemSmash(impulse, sound)`: one body with the stem1/stem2 polygons is born at the sleigh's pose and velocity; while the sleigh is intact its three
+    fn sleigh_state(&self, world: &World) -> box2d::world::Body {
+        self.wreck.clone().unwrap_or_else(|| world.b2().body(self.sleigh).clone())
+    }
+
+    /// `stemSmash(impulse, sound)`: one body with the three stem polygons is born at the sleigh's pose and velocity; while the sleigh is intact its three
     /// stem shapes go and the chest straps' first links are re-attached to the new body (same anchors and length).
     pub fn stem_smash(&mut self, world: &mut World, sound: bool) {
         if self.stem_gone {
             return;
         }
         self.stem_gone = true;
-        let src = world.b2().body(self.sleigh).clone();
+        let src = self.sleigh_state(world);
         let zero = Filter { category_bits: 260, mask_bits: 0xFFFF, group_index: 0 };
         let b = world.b2_mut();
         let piece = b.create_body(&BodyDef { position: src.xf.position, angle: src.sweep.a, ..Default::default() });
@@ -6492,6 +6545,7 @@ impl Santa {
         let src = world.b2().body(self.sleigh).clone();
         world.b2_mut().destroy_body(self.sleigh);
         self.sleigh_gone = true;
+        self.wreck = Some(src.clone());
         let broken = self.broken_sleigh.clone();
         let pieces = self.spawn_pieces(world, &src, &broken);
         self.debris_names.extend((1..=pieces.len()).map(|i| format!("sleigh{i}")));
