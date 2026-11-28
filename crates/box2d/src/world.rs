@@ -1039,6 +1039,16 @@ impl World {
         }
     }
 
+    /// `SetFilterData` on every shape first, then `Refilter` on each: pairs between two of them are judged by both new filters.
+    pub fn set_shape_filters(&mut self, changes: &[(ShapeId, crate::shape::Filter)]) {
+        for &(s, f) in changes {
+            self.c.shapes[s].shape.filter = f;
+        }
+        for &(s, _) in changes {
+            self.refilter(s);
+        }
+    }
+
     /// `SetFilterData` + `Refilter`.
     pub fn set_shape_filter(&mut self, s: ShapeId, f: crate::shape::Filter) {
         self.c.shapes[s].shape.filter = f;

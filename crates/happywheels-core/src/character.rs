@@ -111,6 +111,9 @@ pub enum Limb {
 
 const LIMB_ORDER: [Limb; 10] = [Limb::Neck, Limb::Waist, Limb::Shoulder1, Limb::Shoulder2, Limb::Elbow1, Limb::Elbow2, Limb::Hip1, Limb::Hip2, Limb::Knee1, Limb::Knee2];
 
+/// The order of `checkJoints`: the waist before the neck.
+pub(crate) const CHECK_ORDER: [Limb; 10] = [Limb::Waist, Limb::Neck, Limb::Shoulder1, Limb::Shoulder2, Limb::Elbow1, Limb::Elbow2, Limb::Hip1, Limb::Hip2, Limb::Knee1, Limb::Knee2];
+
 /// Pose table of the original (`supermanPose`, `tuckPose`, `pushupPose`, `archPose`, …): per joint
 /// `(target offset above the lower limit, speed gain)`; `setJoint` drives the motor towards `lower + offset`.
 fn pose_table(set: PoseSet, pose: u8) -> &'static [(Limb, f64, f64)] {
@@ -773,24 +776,43 @@ impl Ragdoll {
         })
     }
 
-    pub fn check_joints(&mut self, world: &mut World) -> Vec<Limb> {
-        let mut now = Vec::new();
-        for limb in LIMB_ORDER {
-            if self.broken.contains(&limb) {
-                continue;
-            }
-            let Some(&id) = self.joints.get(&limb) else { continue };
-            let limit = self.break_limit(world, limb);
-            let Some((force, gap)) = world.b2().revolute_reaction(id) else { continue };
-            if force > limit || gap > 0.5 {
-                world.b2_mut().destroy_joint(id);
-                self.broken.push(limb);
-                now.push(limb);
-                self.break_side_effects(world, limb, force.max(if gap > 0.5 { 1000.0 } else { 0.0 }));
-            }
+    /// `checkRevJoint` of one limb: breaks it when its reaction force exceeds the limit or its anchors drifted apart.
+    pub(crate) fn check_joint(&mut self, world: &mut World, limb: Limb) -> bool {
+        if self.broken.contains(&limb) {
+            return false;
         }
+        let Some(&id) = self.joints.get(&limb) else { return false };
+        let limit = self.break_limit(world, limb);
+        let Some((force, gap)) = world.b2().revolute_reaction(id) else { return false };
+        if !(force > limit || gap > 0.5) {
+            return false;
+        }
+        self.broken.push(limb);
+        self.break_side_effects(world, limb, force.max(if gap > 0.5 { 1000.0 } else { 0.0 }));
+        true
+    }
+
+    /// The composites' `checkJoints` (spine, intestines, ligaments), after the limbs.
+    pub(crate) fn check_composites(&mut self, world: &mut World) {
         self.check_chains(world);
         self.check_ligaments(world);
+    }
+
+    pub fn check_joints(&mut self, world: &mut World) -> Vec<Limb> {
+        self.check_joints_with(world, |_, _, _| {})
+    }
+
+    /// `check_joints` with the break callbacks: `broke` runs right after each break, before the next joint is looked at (the original's
+    /// overrides of `torsoBreak`, `elbowBreak1`, … eject or let go of the vehicle there and then).
+    pub fn check_joints_with(&mut self, world: &mut World, mut broke: impl FnMut(&mut World, &mut Self, Limb)) -> Vec<Limb> {
+        let mut now = Vec::new();
+        for limb in CHECK_ORDER {
+            if self.check_joint(world, limb) {
+                now.push(limb);
+                broke(world, self, limb);
+            }
+        }
+        self.check_composites(world);
         now
     }
 
@@ -833,6 +855,7 @@ impl Ragdoll {
         jd.max_motor_torque = 4.0;
         jd.lower_angle = lo / deg - rel;
         jd.upper_angle = hi / deg - rel;
+        b.destroy_joint(id);
         let new_joint = b.create_revolute_joint(&jd);
         self.joints.insert(limb, new_joint);
         self.sev.push(stump);
@@ -1259,9 +1282,20 @@ impl Ragdoll {
     }
 
     fn break_side_effects(&mut self, world: &mut World, limb: Limb, force: f64) {
-        // `neckBreak` sets `dead`
+        // `neckBreak` sets `dead` before the joint goes
         if limb == Limb::Neck {
             self.die(world);
+        }
+        // a shoulder or hip below its snap limit is severed: the stump is born first, then the joint goes (in `sever`)
+        let severing = match limb {
+            Limb::Shoulder1 | Limb::Shoulder2 => force <= (self.limit_mass(world, Part::UpperArm1) / 0.07019 * 90.0).round(),
+            Limb::Hip1 | Limb::Hip2 => force <= (self.limit_mass(world, Part::UpperLeg1) / 0.14914 * 110.0).round(),
+            _ => false,
+        };
+        if !severing {
+            if let Some(&id) = self.joints.get(&limb) {
+                world.b2_mut().destroy_joint(id);
+            }
         }
         self.break_blood(world, limb);
         match limb {
@@ -1300,9 +1334,17 @@ impl Ragdoll {
                 }
             }
             Limb::Waist => {
-                for p in [Part::Pelvis, Part::UpperLeg1, Part::UpperLeg2, Part::LowerLeg1, Part::LowerLeg2] {
-                    self.refilter_part(world, p, lower);
+                self.refilter_part(world, Part::Pelvis, lower);
+                for p in [Part::UpperLeg1, Part::UpperLeg2] {
+                    // a thigh of an already severed leg (group −3) is left alone
+                    let b = world.b2_mut();
+                    if b.body(self.bodies[&p]).shapes.first().copied().is_some_and(|s| b.shape_mut(s).filter.group_index != -3) {
+                        self.refilter_part(world, p, lower);
+                    }
                 }
+                let b = world.b2_mut();
+                let calves: Vec<_> = [Part::LowerLeg1, Part::LowerLeg2].iter().filter_map(|p| b.body(self.bodies[p]).shapes.first().map(|&s| (s, lower))).collect();
+                b.set_shape_filters(&calves);
                 let (torso, gut) = ((ratio(Part::Pelvis, 0.0735) * 180.0).round(), (ratio(Part::Pelvis, 0.0735) * 260.0).round());
                 if force < gut && self.intestines.is_none() {
                     let n = ((force - torso) / ((gut - torso) / 8.0)).ceil() as usize + 1;

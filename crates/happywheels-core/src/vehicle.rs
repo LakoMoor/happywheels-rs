@@ -388,11 +388,11 @@ impl Bike {
         for j in [self.frame_pelvis.take(), self.frame_hands[0].take(), self.frame_hands[1].take(), self.gear_feet[0].take(), self.gear_feet[1].take()].into_iter().flatten() {
             b.destroy_joint(j);
         }
-        for body in [self.front_wheel, self.back_wheel, self.frame] {
-            let shapes: Vec<_> = b.body(body).shapes.iter().rev().copied().collect(); // shape list is newest-first
-            for s in shapes {
-                b.set_shape_filter(s, zero);
-            }
+        let wheels = [self.front_wheel, self.back_wheel].map(|w| (b.body(w).shapes[0], zero));
+        b.set_shape_filters(&wheels);
+        let shapes: Vec<_> = b.body(self.frame).shapes.iter().rev().copied().collect(); // shape list is newest-first
+        for s in shapes {
+            b.set_shape_filter(s, zero);
         }
         for part in [Part::UpperLeg1, Part::UpperLeg2, Part::LowerLeg1, Part::LowerLeg2] {
             let s = b.body(doll.bodies[&part]).shapes[0];
@@ -1490,11 +1490,11 @@ impl Chair {
         for j in self.straps.iter_mut().filter_map(Option::take) {
             b.destroy_joint(j);
         }
-        for body in [self.small_wheel, self.big_wheel, self.chair] {
-            let shapes: Vec<_> = b.body(body).shapes.iter().rev().copied().collect();
-            for s in shapes {
-                b.set_shape_filter(s, zero);
-            }
+        let wheels = [self.small_wheel, self.big_wheel].map(|w| (b.body(w).shapes[0], zero));
+        b.set_shape_filters(&wheels);
+        let shapes: Vec<_> = b.body(self.chair).shapes.iter().rev().copied().collect();
+        for s in shapes {
+            b.set_shape_filter(s, zero);
         }
         for part in [Part::LowerArm1, Part::LowerArm2] {
             let s = b.body(doll.bodies[&part]).shapes[0];
@@ -3125,9 +3125,8 @@ impl Pogo {
         }
         let mounted = Filter { category_bits: 260, mask_bits: 270, group_index: -1 };
         let b = world.b2_mut();
-        for s in [b.body(self.frame).shapes[0], b.body(self.rod).shapes[0]] {
-            b.set_shape_filter(s, mounted);
-        }
+        let shapes = [b.body(self.frame).shapes[0], b.body(self.rod).shapes[0]].map(|s| (s, mounted));
+        b.set_shape_filters(&shapes);
         self.free_if_legless(world, doll);
         self.joints[k] = Some(world.b2_mut().create_revolute_joint(&self.defs[k].clone()));
         self.reattaching = true;
@@ -3140,9 +3139,8 @@ impl Pogo {
         if off(Limb::Hip1, Limb::Knee1) && off(Limb::Hip2, Limb::Knee2) {
             let free = Filter { category_bits: 260, mask_bits: 270, group_index: 0 };
             let b = world.b2_mut();
-            for s in [b.body(self.frame).shapes[0], b.body(self.rod).shapes[1]] {
-                b.set_shape_filter(s, free);
-            }
+            let shapes = [b.body(self.frame).shapes[0], b.body(self.rod).shapes[1]].map(|s| (s, free));
+            b.set_shape_filters(&shapes);
         }
     }
 
@@ -3189,10 +3187,8 @@ impl Pogo {
         for j in self.joints.iter_mut().filter_map(Option::take) {
             b.destroy_joint(j);
         }
-        for body in [self.frame, self.rod] {
-            let s = b.body(body).shapes[0];
-            b.set_shape_filter(s, zero);
-        }
+        let shapes = [self.frame, self.rod].map(|body| (b.body(body).shapes[0], zero));
+        b.set_shape_filters(&shapes);
     }
 }
 
@@ -3689,10 +3685,8 @@ impl Cart {
         for j in self.joints.iter_mut().filter_map(Option::take) {
             b.destroy_joint(j);
         }
-        for w in [self.front_wheel, self.back_wheel] {
-            let s = b.body(w).shapes[0];
-            b.set_shape_filter(s, zero2);
-        }
+        let wheels = [self.front_wheel, self.back_wheel].map(|w| (b.body(w).shapes[0], zero2));
+        b.set_shape_filters(&wheels);
         self.shocks(world, Some(false), Some((0.0, 0.0)), 0.0);
         let b = world.b2_mut();
         let shapes: Vec<_> = b.body(self.body).shapes.iter().rev().copied().collect();
@@ -5080,8 +5074,13 @@ impl Daughter {
     }
 
     pub fn check_joints(&mut self, world: &mut World) {
-        let broken = self.doll.check_joints(world);
-        self.limbs_broken(world, &broken);
+        // each override (`hipBreak1`, …) runs right after its own break
+        for limb in crate::character::CHECK_ORDER {
+            if self.doll.check_joint(world, limb) {
+                self.limbs_broken(world, &[limb]);
+            }
+        }
+        self.doll.check_composites(world);
         if let Some(id) = self.connecting {
             if let Some((force, gap)) = world.b2().revolute_reaction(id) {
                 if force > 400.0 || gap > 0.5 {
@@ -5364,8 +5363,13 @@ impl Son {
     }
 
     pub fn check_joints(&mut self, world: &mut World) {
-        let broken = self.doll.check_joints(world);
-        self.limbs_broken(world, &broken);
+        // each override (`hipBreak1`, …) runs right after its own break
+        for limb in crate::character::CHECK_ORDER {
+            if self.doll.check_joint(world, limb) {
+                self.limbs_broken(world, &[limb]);
+            }
+        }
+        self.doll.check_composites(world);
         if let Some(id) = self.connecting {
             if let Some((force, gap)) = world.b2().revolute_reaction(id) {
                 if force > 100.0 || gap > 0.5 {
@@ -5583,8 +5587,13 @@ impl Kid {
 
     /// `checkJoints`: the kid's limbs, then `checkRevJoint(frameSeatJoint, 200, detachSeat)`.
     pub fn check_joints(&mut self, world: &mut World) {
-        let broken = self.doll.check_joints(world);
-        self.limbs_broken(world, &broken);
+        // each override (`hipBreak1`, …) runs right after its own break
+        for limb in crate::character::CHECK_ORDER {
+            if self.doll.check_joint(world, limb) {
+                self.limbs_broken(world, &[limb]);
+            }
+        }
+        self.doll.check_composites(world);
         if let Some(id) = self.frame_seat {
             if let Some((force, gap)) = world.b2().revolute_reaction(id) {
                 if force > Self::DETACH_LIMIT || gap > 0.5 {

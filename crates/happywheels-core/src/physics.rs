@@ -3126,13 +3126,13 @@ impl World {
                         self.bike = Some(crate::vehicle::Vehicle::Santa(s));
                     }
                 } else {
-                    let broken = doll.check_joints(self);
-                    if !broken.is_empty() {
-                        if let Some(mut v) = self.bike.take() {
-                            v.rider_hurt(self, &mut doll, false, &broken);
-                            self.bike = Some(v);
+                    let mut vehicle = self.bike.take();
+                    doll.check_joints_with(self, |world, doll, limb| {
+                        if let Some(v) = vehicle.as_mut() {
+                            v.rider_hurt(world, doll, false, &[limb]);
                         }
-                    }
+                    });
+                    self.bike = vehicle;
                 }
             }
             self.character = Some(doll);
@@ -5124,9 +5124,10 @@ impl World {
                 }
                 if self.mines[mi].path_clear {
                     hovering = true;
-                    let p = Vec2::new(n.x / 30.0, n.y / 30.0);
-                    let len = h.sqrt();
-                    let m = Vec2::new(a.x / len, a.y / len);
+                    // `v * (1/30)` and `b2Vec2.Normalize` multiply by a reciprocal; dividing rounds differently
+                    let p = Vec2::new(n.x * (1.0 / 30.0), n.y * (1.0 / 30.0));
+                    let inv = 1.0 / h.sqrt();
+                    let m = Vec2::new(a.x * inv, a.y * inv);
                     let f = Vec2::new(-m.y, m.x);
                     let dot = p.x * f.x + p.y * f.y;
                     if dot.abs() > seek {
