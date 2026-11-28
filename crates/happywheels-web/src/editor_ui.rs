@@ -54,6 +54,11 @@ impl EditorUi {
         match kind {
             0 => self.editor.pointer_down(p, shift),
             1 => self.editor.pointer_move(p),
+            // hovering matters only to the NPC poser
+            3 => {
+                self.dirty |= self.editor.is_posing() && self.editor.pose_move(p);
+                return;
+            }
             _ => self.editor.pointer_up(p),
         }
         self.dirty = true;

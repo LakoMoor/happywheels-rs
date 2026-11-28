@@ -9,6 +9,7 @@ use image::{Rgba, RgbaImage};
 use imageproc::drawing::{draw_filled_circle_mut, draw_hollow_circle_mut, draw_line_segment_mut};
 
 pub mod groups;
+pub mod posing;
 pub mod vertices;
 
 /// What a trigger can do to one kind of object: the action's name and its parameters.
@@ -294,6 +295,7 @@ pub struct Editor {
     pub shift: bool,
     pub alt: bool,
     pub vertex_edit: Option<vertices::VertexEdit>,
+    pub posing: Option<posing::Posing>,
     group_edit: Option<Box<groups::GroupEdit>>,
     undo: Vec<Document>,
     redo: Vec<Document>,
@@ -311,7 +313,7 @@ impl Default for Editor {
 
 impl Editor {
     pub fn new(doc: Document) -> Editor {
-        Editor { doc, selection: Vec::new(), tool: Tool::Arrow, shape_kind: 0, special_kind: 0, sliding: false, drawing: Vec::new(), snap: SNAP, shift: false, alt: false, vertex_edit: None, group_edit: None, undo: Vec::new(), redo: Vec::new(), drag: None, clipboard: Vec::new(), series: None }
+        Editor { doc, selection: Vec::new(), tool: Tool::Arrow, shape_kind: 0, special_kind: 0, sliding: false, drawing: Vec::new(), snap: SNAP, shift: false, alt: false, vertex_edit: None, posing: None, group_edit: None, undo: Vec::new(), redo: Vec::new(), drag: None, clipboard: Vec::new(), series: None }
     }
 
     pub fn set_tool(&mut self, tool: Tool) {
@@ -321,6 +323,7 @@ impl Editor {
         }
         if tool != self.tool {
             self.vertex_edit = None;
+            self.close_poser();
             self.tool = tool;
             self.drawing.clear();
             self.selection.clear();
@@ -348,6 +351,7 @@ impl Editor {
     }
 
     pub fn undo(&mut self) {
+        self.close_poser();
         if let Some(d) = self.undo.pop() {
             self.redo.push(std::mem::replace(&mut self.doc, d));
             self.selection.clear();
@@ -357,6 +361,7 @@ impl Editor {
     }
 
     pub fn redo(&mut self) {
+        self.close_poser();
         if let Some(d) = self.redo.pop() {
             self.undo.push(std::mem::replace(&mut self.doc, d));
             self.selection.clear();
@@ -422,12 +427,18 @@ impl Editor {
 
     /// The arrow tool opens a polygon's or art shape's vertices by a double click.
     pub fn double_click(&mut self, p: Point) {
-        if self.vertex_edit.is_some() {
+        if self.posing.is_some() {
+            // the poser covers the window: any double click ends it
+            self.close_poser();
+        } else if self.vertex_edit.is_some() {
             self.vertex_double_click(p);
         } else if self.tool == Tool::Arrow {
             match self.under(p).first() {
                 Some(&Ref::Shape(i)) if self.doc.shapes[i].vertices.is_some() => self.open_vertex_edit(i),
                 Some(&Ref::Group(i)) => self.open_group(i),
+                Some(&Ref::Special(i)) => {
+                    self.open_poser(i);
+                }
                 Some(_) => {}
                 None => self.close_group(),
             }
@@ -437,6 +448,9 @@ impl Editor {
     pub fn pointer_down(&mut self, p: Point, shift: bool) {
         self.series = None;
         self.shift = shift;
+        if self.posing.is_some() {
+            return self.pose_down(p);
+        }
         if self.vertex_edit.is_some() {
             return self.vertex_pointer_down(p, shift);
         }
@@ -473,6 +487,10 @@ impl Editor {
     }
 
     pub fn pointer_move(&mut self, p: Point) {
+        if self.posing.is_some() {
+            self.pose_move(p);
+            return;
+        }
         if self.vertex_edit.is_some() {
             return self.vertex_pointer_move(p);
         }
@@ -494,6 +512,9 @@ impl Editor {
     }
 
     pub fn pointer_up(&mut self, p: Point) {
+        if self.posing.is_some() {
+            return self.pose_up();
+        }
         if self.vertex_edit.is_some() {
             return self.vertex_pointer_up(p);
         }
@@ -1416,8 +1437,20 @@ impl Editor {
                 (xml, level, world)
             });
         }
-        let mut img = match &preview.built {
-            Some((_, level, world)) => crate::render::render_level_view(level, world, view.width, view.height, view.zoom as f32, [view.camera[0] as f32, view.camera[1] as f32], sprites, None),
+        // the posed NPC is drawn by the poser instead
+        let hidden = match (self.posed_special(), sprites) {
+            (Some(Ref::Special(i)), Some(_)) => Some(i + self.surroundings().map_or(0, |o| o.specials.len())),
+            _ => None,
+        };
+        let mut img = match &mut preview.built {
+            Some((_, level, world)) => {
+                let body = hidden.and_then(|i| world.special_bodies.get_mut(i).and_then(Option::take));
+                let img = crate::render::render_level_view(level, world, view.width, view.height, view.zoom as f32, [view.camera[0] as f32, view.camera[1] as f32], sprites, None);
+                if let (Some(i), Some(b)) = (hidden, body) {
+                    world.special_bodies[i] = Some(b);
+                }
+                img
+            }
             None => RgbaImage::from_pixel(view.width, view.height, Rgba([255, 255, 255, 255])),
         };
         let outline = |img: &mut RgbaImage, points: &[Point], closed: bool, colour: Rgba<u8>| {
@@ -1497,6 +1530,19 @@ impl Editor {
         outline(&mut img, &self.drawing, false, blue);
         for &p in &self.drawing {
             ring(&mut img, p, SNAP, blue);
+        }
+        if let (Some(posing), Some(holder), Some(sprites)) = (&self.posing, self.holder(), sprites) {
+            // a grey sheet (0x999999 at .35) over the whole canvas, the character on top of it
+            let ((l, t), (r, b)) = (view.screen([0.0, 0.0]), view.screen([20_000.0, 10_000.0]));
+            for (x, y, px) in img.enumerate_pixels_mut() {
+                if (x as f32) >= l && (x as f32) < r && (y as f32) >= t && (y as f32) < b {
+                    for c in 0..3 {
+                        px[c] = (f32::from(px[c]) * 0.65 + 153.0 * 0.35) as u8;
+                    }
+                }
+            }
+            let (x, y) = view.screen(holder.at);
+            sprites.draw_poser(&mut img, &posing.poser, &holder, [f64::from(x), f64::from(y)], view.zoom, posing.see_through);
         }
         img
     }

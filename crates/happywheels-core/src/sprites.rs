@@ -211,6 +211,8 @@ pub struct Sprites {
     /// Asset root (kept for the lazily opened NPC clips) and those clips (`NPCSprite1..12` as top-level nodes `npc1..12`).
     assets: SpriteAssets,
     npc: std::cell::OnceCell<Option<Box<Sprites>>>,
+    /// The editor's NPC poser clips, opened the same way.
+    poser_clips: std::cell::OnceCell<Option<Box<Sprites>>>,
     /// The built-in level's own artwork (a backdrop opened by `open_level1_from`).
     level1: Option<Box<crate::level1_art::Level1Art>>,
 }
@@ -326,13 +328,12 @@ impl Sprites {
                 pages.push((atlas.frames, img.to_rgba8()));
             }
         }
-        Some(Self { blurred: Default::default(), view: Default::default(), trace: Default::default(), layers, shown: Default::default(), queue: Default::default(), clip, pages, bindings: Vec::new(), city: Vec::new(), hidden: Default::default(), show_wound: Default::default(), grind_mask: Default::default(), assets: source.clone(), npc: Default::default(), level1: None })
+        Some(Self { blurred: Default::default(), view: Default::default(), trace: Default::default(), layers, shown: Default::default(), queue: Default::default(), clip, pages, bindings: Vec::new(), city: Vec::new(), hidden: Default::default(), show_wound: Default::default(), grind_mask: Default::default(), assets: source.clone(), npc: Default::default(), poser_clips: Default::default(), level1: None })
     }
 
     /// Clip set of the NPC ragdolls: `NPCSprite1..12` (dumped from the oracle) with the atlas pages that hold their textures (game atlases and the
     /// character atlases).
     fn open_npc(source: &SpriteAssets) -> Option<Self> {
-        let assets = source.root();
         #[derive(Deserialize)]
         struct File {
             k: Vec<Node>,
@@ -356,6 +357,12 @@ impl Sprites {
             let f: File = serde_json::from_str(s).ok()?;
             clip.push(Node { n: format!("npc{}", i + 1), x: 0.0, y: 0.0, r: 0.0, sx: 1.0, sy: 1.0, t: None, k: f.k, alt: HashMap::new(), hidden: false, kx: 0.0, ky: 0.0 });
         }
+        Self::with_character_pages(source, clip)
+    }
+
+    /// A clip set drawn with the game's and the characters' atlas pages, as many of them as its textures need.
+    fn with_character_pages(source: &SpriteAssets, clip: Vec<Node>) -> Option<Self> {
+        let assets = source.root();
         let mut missing = Vec::new();
         Self::textures(&clip, &mut missing);
         let mut folders: Vec<(PathBuf, String)> = Vec::new();
@@ -383,7 +390,44 @@ impl Sprites {
             missing.retain(|t| !atlas.frames.contains_key(t));
             pages.push((atlas.frames, img.to_rgba8()));
         }
-        Some(Self { blurred: Default::default(), view: Default::default(), trace: Default::default(), layers: Default::default(), shown: Default::default(), queue: Default::default(), clip, pages, bindings: Vec::new(), city: Vec::new(), hidden: Default::default(), show_wound: Default::default(), grind_mask: Default::default(), assets: source.clone(), npc: Default::default(), level1: None })
+        Some(Self { blurred: Default::default(), view: Default::default(), trace: Default::default(), layers: Default::default(), shown: Default::default(), queue: Default::default(), clip, pages, bindings: Vec::new(), city: Vec::new(), hidden: Default::default(), show_wound: Default::default(), grind_mask: Default::default(), assets: source.clone(), npc: Default::default(), poser_clips: Default::default(), level1: None })
+    }
+
+    /// The clips of the editor's NPC poser, one top node per character type (`data/editor-npc.json`).
+    fn open_poser_clips(source: &SpriteAssets) -> Option<Self> {
+        let types: std::collections::BTreeMap<u32, Vec<Node>> = serde_json::from_str(include_str!("../data/editor-npc.json")).ok()?;
+        let clip = types.into_iter().map(|(i, k)| Node { n: format!("npc{i}"), x: 0.0, y: 0.0, r: 0.0, sx: 1.0, sy: 1.0, t: None, k, alt: HashMap::new(), hidden: false, kx: 0.0, ky: 0.0 }).collect();
+        Self::with_character_pages(source, clip)
+    }
+
+    /// The posed character: the holder at screen point `at` (zoomed by `zoom`), each draggable clip where the poser puts it.
+    pub(crate) fn draw_poser(&self, img: &mut RgbaImage, poser: &crate::poser::Poser, holder: &crate::editor_session::posing::Holder, at: [f64; 2], zoom: f64, see_through: bool) {
+        let Some(clips) = self.poser_clips.get_or_init(|| Self::open_poser_clips(&self.assets).map(Box::new)) else { return };
+        let Some(character) = (holder.char_index as usize).checked_sub(1).and_then(|i| clips.clip.get(i)) else { return };
+        let root = mul(local(at[0], at[1], holder.angle.to_radians(), zoom, zoom), local(0.0, 0.0, 0.0, holder.scale[0], holder.scale[1]));
+        for (order, node) in character.k.iter().enumerate() {
+            match (0..9).find(|&i| poser.clip(i).order == order as i64) {
+                Some(i) => {
+                    let ([x, y], degrees) = poser.placement(i);
+                    let m = mul(root, local(x, y, degrees.to_radians(), node.sx, node.sy));
+                    for child in &node.k {
+                        clips.draw_node(img, child, m);
+                    }
+                }
+                // chest and pelvis
+                None if see_through && matches!(node.n.as_str(), "chest" | "pelvis") => {
+                    let mut layer = RgbaImage::new(img.width(), img.height());
+                    clips.draw_node(&mut layer, node, root);
+                    for (under, over) in img.pixels_mut().zip(layer.pixels()) {
+                        let a = 0.4 * f32::from(over[3]) / 255.0;
+                        for c in 0..3 {
+                            under[c] = (f32::from(under[c]) * (1.0 - a) + f32::from(over[c]) * a) as u8;
+                        }
+                    }
+                }
+                None => clips.draw_node(img, node, root),
+            }
+        }
     }
 
     /// Draws the NPC of special `sp` (frame 1 of every part, `shape` guides hidden): each part clip sits at its body's centre of mass with the body's
@@ -477,7 +521,7 @@ impl Sprites {
         if pages.is_empty() {
             return None;
         }
-        Some(Self { blurred: Default::default(), view: Default::default(), trace: Default::default(), layers: Default::default(), shown: Default::default(), queue: Default::default(), clip, pages, bindings: Vec::new(), city: Vec::new(), hidden: Default::default(), show_wound: Default::default(), grind_mask: Default::default(), assets: source.clone(), npc: Default::default(), level1: None })
+        Some(Self { blurred: Default::default(), view: Default::default(), trace: Default::default(), layers: Default::default(), shown: Default::default(), queue: Default::default(), clip, pages, bindings: Vec::new(), city: Vec::new(), hidden: Default::default(), show_wound: Default::default(), grind_mask: Default::default(), assets: source.clone(), npc: Default::default(), poser_clips: Default::default(), level1: None })
     }
 
     /// The backdrop a level asks for (`bg`), or the artwork of the built-in level.

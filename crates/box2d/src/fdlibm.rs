@@ -106,3 +106,48 @@ pub fn cos(x: f64) -> f64 {
     };
     v.0 + v.1
 }
+
+/// `Math.acos` as V8 computes it (fdlibm `e_acos.c`).
+pub fn acos(x: f64) -> f64 {
+    const PI: f64 = std::f64::consts::PI;
+    const PIO2_HI: f64 = std::f64::consts::FRAC_PI_2;
+    const PIO2_LO: f64 = 6.123_233_995_736_766e-17;
+    const P: [f64; 6] = [1.666_666_666_666_666_6e-1, -3.255_658_186_224_009e-1, 2.012_125_321_348_629_3e-1, -4.005_553_450_067_941e-2, 7.915_349_942_898_145e-4, 3.479_331_075_960_212e-5];
+    const Q: [f64; 4] = [-2.403_394_911_734_414, 2.020_945_760_233_505_7, -6.882_839_716_054_533e-1, 7.703_815_055_590_194e-2];
+    let ratio = |z: f64| {
+        let p = z * (P[0] + z * (P[1] + z * (P[2] + z * (P[3] + z * (P[4] + z * P[5])))));
+        let q = 1.0 + z * (Q[0] + z * (Q[1] + z * (Q[2] + z * Q[3])));
+        p / q
+    };
+    let high = (x.to_bits() >> 32) as u32;
+    let magnitude = high & 0x7fff_ffff;
+    let negative = high >> 31 != 0;
+    if magnitude >= 0x3ff0_0000 {
+        return if x == 1.0 {
+            0.0
+        } else if x == -1.0 {
+            PI + 2.0 * PIO2_LO
+        } else {
+            f64::NAN
+        };
+    }
+    if magnitude < 0x3fe0_0000 {
+        if magnitude <= 0x3c60_0000 {
+            return PIO2_HI + PIO2_LO;
+        }
+        let r = ratio(x * x);
+        return PIO2_HI - (x - (PIO2_LO - x * r));
+    }
+    if negative {
+        let z = (1.0 + x) * 0.5;
+        let s = z.sqrt();
+        let w = ratio(z) * s - PIO2_LO;
+        return PI - 2.0 * (s + w);
+    }
+    let z = (1.0 - x) * 0.5;
+    let s = z.sqrt();
+    let df = f64::from_bits(s.to_bits() & 0xffff_ffff_0000_0000);
+    let c = (z - df * df) / (s + df);
+    let w = ratio(z) * s + c;
+    2.0 * (df + w)
+}

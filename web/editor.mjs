@@ -60,6 +60,7 @@ export class EditorPanel {
       if (this.down) game.editor_pointer(0, ...this.last, event.shiftKey);
     });
     this.canvas.addEventListener('pointermove', event => {
+      if (this.editing() && !this.down && !this.panning) game.editor_pointer(3, ...position(event), event.shiftKey);
       if (!this.editing() || !this.last) return;
       const p = position(event);
       game.editor_modifiers(event.shiftKey, event.altKey);

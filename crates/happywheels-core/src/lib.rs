@@ -10,6 +10,7 @@ pub mod level;
 mod level1_art;
 pub mod menu;
 pub mod physics;
+pub mod poser;
 pub mod render;
 pub mod specials;
 pub mod sprites;
