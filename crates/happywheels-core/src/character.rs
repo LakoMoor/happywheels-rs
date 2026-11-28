@@ -1338,20 +1338,15 @@ impl Ragdoll {
         }
     }
 
-    /// `resetJointLimits`: restores the base joint limits (relative to each joint's reference angle).
+    /// `resetJointLimits`: restores the base joint limits (see [`Self::set_limits_now`]).
     pub fn reset_joint_limits(&self, world: &mut World) {
         let deg = 180.0 / std::f64::consts::PI;
-        let b = world.b2_mut();
         for (k, (_, _, _, lo, hi)) in JOINTS.iter().enumerate() {
             // a broken limb's entry may be gone (a dropped stump)
             if self.broken.contains(&LIMB_ORDER[k]) {
                 continue;
             }
-            let id = self.joints[&LIMB_ORDER[k]];
-            if let box2d::joints::JointKind::Revolute(r) = &mut b.joint_mut(id).kind {
-                r.lower_angle = lo / deg - r.reference_angle;
-                r.upper_angle = hi / deg - r.reference_angle;
-            }
+            self.set_limits_now(world, LIMB_ORDER[k], lo / deg, hi / deg);
         }
     }
 
@@ -1361,6 +1356,20 @@ impl Ragdoll {
         if let box2d::joints::JointKind::Revolute(r) = &mut world.b2_mut().joint_mut(id).kind {
             r.lower_angle = lo - r.reference_angle;
             r.upper_angle = hi - r.reference_angle;
+        }
+    }
+
+    /// `set_limits` for a joint already in motion (`resetJointLimits`, `reAttach`). The original recovers the reference angle there as
+    /// `angle2 - angle1 - GetJointAngle()`, which rounds differently from the stored one by an ulp or two.
+    pub fn set_limits_now(&self, world: &mut World, limb: Limb, lo: f64, hi: f64) {
+        let id = self.joints[&limb];
+        let b = world.b2_mut();
+        let joint = b.joint(id);
+        let between = b.body(joint.body2).sweep.a - b.body(joint.body1).sweep.a;
+        if let box2d::joints::JointKind::Revolute(r) = &mut b.joint_mut(id).kind {
+            let reference = between - (between - r.reference_angle);
+            r.lower_angle = lo - reference;
+            r.upper_angle = hi - reference;
         }
     }
 

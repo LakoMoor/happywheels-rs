@@ -4167,9 +4167,8 @@ fn camera_at_60fps_matches_the_original() {
 }
 
 /// The built-in level against the original's own session (`analysis/level1-real.js`: `levelIndex` 1, the clip loaded by the game, the key schedule of
-/// the other real sessions): every dynamic body of the level, rider and vehicle, and the camera. Characters 5 and 10 are compared for 200 and 230 frames:
-/// after that their smashed families drift past the tolerance from rounding noise of 1e-11 px. `mine` gives rider and vehicle 6 m/s to the left
-/// before frame 5 (into the mine behind the start); `finish` moves them onto the finish block before frame 0.
+/// the other real sessions): every dynamic body of the level, rider and vehicle, and the camera, 300 frames per character. `mine` gives rider and
+/// vehicle 6 m/s to the left before frame 5 (into the mine behind the start); `finish` moves them onto the finish block before frame 0.
 #[test]
 fn level1_matches_the_original() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");

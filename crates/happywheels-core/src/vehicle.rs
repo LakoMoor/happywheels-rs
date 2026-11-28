@@ -768,7 +768,7 @@ impl Segway {
         doll.pose = 0;
         doll.set_grab(world, false);
         for (limb, lo, hi) in [(Limb::Hip1, -50.0, 10.0), (Limb::Hip2, -50.0, 10.0), (Limb::Elbow1, -60.0, 0.0), (Limb::Elbow2, -60.0, 0.0), (Limb::Neck, 0.0, 20.0)] {
-            doll.set_limits(world, limb, lo / deg, hi / deg);
+            doll.set_limits_now(world, limb, lo / deg, hi / deg);
         }
         let b = world.b2_mut();
         let f = Filter { category_bits: 514, mask_bits: 0xFFFF, group_index: 0 };
@@ -1665,7 +1665,7 @@ impl DirtBike {
                 doll.set_pose(0);
                 doll.set_grab(world, false);
                 for (limb, lo, hi) in [(Limb::Neck, -20.0, 0.0), (Limb::Elbow1, -90.0, 0.0), (Limb::Elbow2, -90.0, 0.0)] {
-                    doll.set_limits(world, limb, lo / deg, hi / deg);
+                    doll.set_limits_now(world, limb, lo / deg, hi / deg);
                 }
                 self.joints[1 + k] = Some(world.b2_mut().create_revolute_joint(&self.hand_defs[k].clone()));
                 self.reattaching = true;
