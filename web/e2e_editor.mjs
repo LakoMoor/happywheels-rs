@@ -107,6 +107,23 @@ await dbl(100, 60);
 const edited = await save();
 console.log('EDITED', edited.match(/<v [^>]*>/)?.[0], edited !== xml);
 
+// group the floor and the polygon, step inside, move the polygon, step out
+await tap(100, 60);
+await tap(200, 450);
+await mouse('mousePressed', at(690, 345), { modifiers: 8 }); await mouse('mouseReleased', at(690, 345), { modifiers: 8 });
+await click('[data-command="group"]');
+await tap(100, 60);
+await dbl(200, 450);
+await tap(690, 345);
+for (let i = 0; i < 4; i++) await press(38, 'ArrowUp', 'ArrowUp', 8);
+await sleep(200);
+shot = await send('Page.captureScreenshot', { format: 'png' });
+writeFileSync(join(out, 'editor-group.png'), Buffer.from(shot.result.data, 'base64'));
+console.log('GROUP', await evaluate('document.querySelector("#ed-selected").textContent'));
+await dbl(100, 60);
+const grouped = await save();
+console.log('GROUPED', grouped.match(/<groups>[\s\S]*<\/groups>/)?.[0]);
+
 await press(84, 't', 'KeyT');
 await sleep(2500);
 console.log('TEST', await status());
@@ -114,9 +131,9 @@ shot = await send('Page.captureScreenshot', { format: 'png' });
 writeFileSync(join(out, 'editor-test.png'), Buffer.from(shot.result.data, 'base64'));
 await press(84, 't', 'KeyT');
 await sleep(500);
-console.log('BACK', await status(), (await save()) === edited);
+console.log('BACK', await status(), (await save()) === grouped);
 await press(90, 'z', 'KeyZ', 2);
-console.log('UNDO changed', (await save()) !== edited);
+console.log('UNDO changed', (await save()) !== grouped);
 await click('#editor-toggle');
 await sleep(500);
 console.log('CLOSE', await status());

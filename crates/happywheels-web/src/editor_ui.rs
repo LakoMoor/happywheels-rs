@@ -170,7 +170,7 @@ impl EditorUi {
     }
 
     pub fn xml(&self) -> String {
-        self.editor.doc.to_xml()
+        self.editor.document().to_xml()
     }
 
     /// `what`: 0 choose action `value`, 1 add an action, 2 remove it, 3 set parameter `param`, 4 remove the target.
@@ -199,6 +199,7 @@ impl EditorUi {
         serde_json::json!({
             "tool": Tool::ALL.iter().position(|&t| t == e.tool),
             "selected": e.selection.len(),
+            "editingGroup": e.editing_group(),
             "editingVertices": e.vertex_edit.as_ref().map(|v| v.selected.len()),
             "targets": e.trigger_targets().iter().map(|t| serde_json::json!({ "label": t.label, "choices": t.choices, "actions": t.actions })).collect::<Vec<_>>(),
             "properties": e.properties().iter().map(|(n, v)| (n.clone(), value(v))).collect::<Vec<_>>(),

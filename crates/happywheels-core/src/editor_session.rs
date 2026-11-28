@@ -8,6 +8,7 @@ use crate::editor::{Document, Group, Item, Joint, Ref, Target, Trigger, Value, V
 use image::{Rgba, RgbaImage};
 use imageproc::drawing::{draw_filled_circle_mut, draw_hollow_circle_mut, draw_line_segment_mut};
 
+pub mod groups;
 pub mod vertices;
 
 /// What a trigger can do to one kind of object: the action's name and its parameters.
@@ -293,6 +294,7 @@ pub struct Editor {
     pub shift: bool,
     pub alt: bool,
     pub vertex_edit: Option<vertices::VertexEdit>,
+    group_edit: Option<Box<groups::GroupEdit>>,
     undo: Vec<Document>,
     redo: Vec<Document>,
     drag: Option<Drag>,
@@ -309,10 +311,14 @@ impl Default for Editor {
 
 impl Editor {
     pub fn new(doc: Document) -> Editor {
-        Editor { doc, selection: Vec::new(), tool: Tool::Arrow, shape_kind: 0, special_kind: 0, sliding: false, drawing: Vec::new(), snap: SNAP, shift: false, alt: false, vertex_edit: None, undo: Vec::new(), redo: Vec::new(), drag: None, clipboard: Vec::new(), series: None }
+        Editor { doc, selection: Vec::new(), tool: Tool::Arrow, shape_kind: 0, special_kind: 0, sliding: false, drawing: Vec::new(), snap: SNAP, shift: false, alt: false, vertex_edit: None, group_edit: None, undo: Vec::new(), redo: Vec::new(), drag: None, clipboard: Vec::new(), series: None }
     }
 
     pub fn set_tool(&mut self, tool: Tool) {
+        // joints and triggers cannot live inside a group
+        if self.group_edit.is_some() && matches!(tool, Tool::Joint | Tool::Trigger) {
+            return;
+        }
         if tool != self.tool {
             self.vertex_edit = None;
             self.tool = tool;
@@ -419,10 +425,11 @@ impl Editor {
         if self.vertex_edit.is_some() {
             self.vertex_double_click(p);
         } else if self.tool == Tool::Arrow {
-            if let Some(&Ref::Shape(i)) = self.under(p).first() {
-                if self.doc.shapes[i].vertices.is_some() {
-                    self.open_vertex_edit(i);
-                }
+            match self.under(p).first() {
+                Some(&Ref::Shape(i)) if self.doc.shapes[i].vertices.is_some() => self.open_vertex_edit(i),
+                Some(&Ref::Group(i)) => self.open_group(i),
+                Some(_) => {}
+                None => self.close_group(),
             }
         }
     }
@@ -520,6 +527,7 @@ impl Editor {
             }
             8 | 46 => self.delete(),
             13 => self.finish_drawing(false),
+            27 if self.drawing.is_empty() && self.selection.is_empty() => self.close_group(),
             27 => {
                 self.drawing.clear();
                 self.selection.clear();
@@ -852,6 +860,9 @@ impl Editor {
 
     /// `RefGroup.build`: the group sits at the centre of its members' bounds, which keep their canvas coordinates.
     pub fn group(&mut self) {
+        if self.group_edit.is_some() {
+            return;
+        }
         let members: Vec<Ref> = self.selection.iter().copied().filter(|&r| self.groupable(r)).collect();
         if members.is_empty() {
             return;
@@ -897,7 +908,7 @@ impl Editor {
                 set_position(&mut item, to);
                 if item.get("angle").is_some() {
                     let a = number(&item, "angle") + g.angle;
-                    item.set("angle", Value::Num(a));
+                    groups::set_unbound(&mut item, "angle", a);
                 }
                 released.push(item);
             }
@@ -923,7 +934,15 @@ impl Editor {
     }
 
     fn place_special(&mut self, class: usize, p: Point) {
-        let Some(mut item) = Item::new(true, class, false) else { return };
+        let Some(mut item) = Item::new(true, class, self.group_edit.is_some()) else { return };
+        if self.group_edit.is_some() {
+            // only what a group can hold: always groupable kinds, or kinds that can be made scenery
+            if item.get("interactive").is_some() {
+                item.set("interactive", Value::Bool(false));
+            } else if !GROUPABLE.contains(&class) {
+                return;
+            }
+        }
         self.checkpoint();
         set_position(&mut item, p);
         self.doc.specials.push(item);
@@ -1376,7 +1395,21 @@ impl Editor {
     /// The window: the level drawn by the game's renderer (nothing simulated), and over it what only the editor shows —
     /// the start point, joints, triggers, the selection and the outline being drawn.
     pub fn render(&self, view: View, preview: &mut Preview, sprites: Option<&crate::sprites::Sprites>) -> RgbaImage {
-        let xml = self.doc.to_xml();
+        // inside a group: the other shapes of the level stay visible behind its members
+        let shown = match self.surroundings() {
+            Some(outer) => {
+                let mut doc = self.doc.clone();
+                doc.shapes.splice(0..0, outer.shapes.iter().cloned());
+                doc.specials.splice(0..0, outer.specials.iter().cloned());
+                doc.groups = outer.groups.clone();
+                if let Some(g) = self.editing_group() {
+                    doc.groups.remove(g);
+                }
+                std::borrow::Cow::Owned(doc)
+            }
+            None => std::borrow::Cow::Borrowed(&self.doc),
+        };
+        let xml = shown.to_xml();
         if preview.built.as_ref().is_none_or(|b| b.0 != xml) {
             preview.built = crate::level::parse(&xml).ok().map(|level| {
                 let world = crate::physics::World::from_level(&level);
@@ -1662,6 +1695,51 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn editing_inside_a_group_matches_the_original_rebuild() {
+        let xml = "<levelXML><info v='1.99' x='300' y='5100' c='1' f='f' h='f' bg='0' bgc='16777215'/><groups>\
+            <g x='2000' y='1500' r='40' ox='-1100' oy='-1000' s='f' f='f' o='100' im='f' fr='f'>\
+            <sh t='0' p0='1000' p1='1000' p2='200' p3='50' p4='30' p5='t' p6='f' p7='1' p8='0' p9='-1' p10='100' p11='1'/>\
+            <sh t='1' p0='1300' p1='1100' p2='80' p3='80' p4='-170' p5='t' p6='f' p7='1' p8='0' p9='-1' p10='100' p11='1'/></g></groups></levelXML>";
+        let mut e = Editor::new(Document::parse(xml).unwrap());
+        let before = e.doc.to_xml();
+        e.open_group(0);
+        // where the original lays the members out
+        for (item, want) in e.doc.shapes.iter().zip([[1923.3955556881024, 1435.7212390313462, 70.0], [2088.9301276551414, 1705.1619662492058, -130.0]]) {
+            assert!((position(item)[0] - want[0]).abs() < 1e-6 && (position(item)[1] - want[1]).abs() < 1e-6, "{:?}", position(item));
+            assert!((number(item, "angle") - want[2]).abs() < 1e-6);
+        }
+        assert_eq!(e.document().to_xml(), before);
+        // move the first 50 px right and turn the second by 15°, as was done to the original
+        e.selection = vec![Ref::Shape(0)];
+        e.nudge([50.0, 0.0]);
+        e.selection = vec![Ref::Shape(1)];
+        e.rotate(15.0);
+        e.close_group();
+        let g = &e.doc.groups[0];
+        assert!((position(&g.shapes[0])[0] - 1038.30).abs() < 0.005 && (position(&g.shapes[0])[1] - 967.86).abs() < 0.005, "{:?}", position(&g.shapes[0]));
+        assert!((number(&g.shapes[1], "angle") + 155.0).abs() < 1e-6, "{}", number(&g.shapes[1], "angle"));
+        let saved = e.doc.to_xml();
+        assert!(saved.contains("p0=\"1038.30\" p1=\"967.86\""), "{saved}");
+        e.undo();
+        assert_eq!(e.doc.to_xml(), before);
+    }
+
+    #[test]
+    fn an_emptied_group_disappears() {
+        let mut e = two_boxes();
+        e.set_tool(Tool::Arrow);
+        e.selection = vec![Ref::Shape(0), Ref::Shape(1)];
+        e.group();
+        e.double_click([960.0, 1000.0]);
+        assert_eq!((e.editing_group(), e.doc.shapes.len()), (Some(0), 2));
+        e.selection = vec![Ref::Shape(0), Ref::Shape(1)];
+        e.delete();
+        assert!(e.document().groups.is_empty());
+        e.double_click([100.0, 100.0]);
+        assert_eq!((e.editing_group(), e.doc.groups.len()), (None, 0));
     }
 
     #[test]

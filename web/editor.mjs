@@ -244,6 +244,9 @@ export class EditorPanel {
     this.panel.querySelector('#ed-selected').textContent = state.editingVertices !== null
       ? `Editing vertices (${state.editingVertices} selected): drag to move, Enter inserts, Backspace removes, double-click empty space to finish.`
       : state.selected ? `${state.selected} selected` : 'Nothing selected';
+    if (state.editingGroup !== null) {
+      this.panel.querySelector('#ed-selected').textContent += ' — inside a group; double-click empty space or press Escape to finish.';
+    }
     this.properties.replaceChildren(...state.properties.map(([name, value]) => field(name, value, v => set(name, v))));
     this.showTargets(state.targets);
     this.info.replaceChildren(...INFO.map(([key, label]) => {
