@@ -407,19 +407,19 @@ pub fn parse(xml: &str) -> Result<Level> {
                 offset: [f(g, "ox").unwrap_or(0.0), f(g, "oy").unwrap_or(0.0)],
                 sleeping: flag(g, "s"),
                 foreground: flag(g, "f"),
-                opacity: f(g, "o").unwrap_or(100.0),
+                opacity: f(g, "o").unwrap_or(100.0).clamp(0.0, 100.0),
                 immovable: flag(g, "im"),
                 fixed_rotation: flag(g, "fr"),
                 ..Default::default()
             };
             if flag(g, "v") {
                 group.vehicle = Some(VehicleProps {
-                    space_action: f(g, "sb").unwrap_or(0.0) as i32,
-                    shift_action: f(g, "sh").unwrap_or(0.0) as i32,
-                    ctrl_action: f(g, "ct").unwrap_or(0.0) as i32,
-                    acceleration: f(g, "a").unwrap_or(0.0),
-                    leaning: f(g, "l").unwrap_or(0.0),
-                    pose: f(g, "cp").unwrap_or(0.0) as i32,
+                    space_action: f(g, "sb").unwrap_or(0.0).trunc().clamp(0.0, 3.0) as i32,
+                    shift_action: f(g, "sh").unwrap_or(0.0).trunc().clamp(0.0, 3.0) as i32,
+                    ctrl_action: f(g, "ct").unwrap_or(0.0).trunc().clamp(0.0, 3.0) as i32,
+                    acceleration: f(g, "a").unwrap_or(0.0).trunc().clamp(1.0, 10.0),
+                    leaning: f(g, "l").unwrap_or(0.0).trunc().clamp(0.0, 10.0),
+                    pose: f(g, "cp").unwrap_or(0.0).trunc().clamp(0.0, 3.0) as i32,
                     lock_joints: flag(g, "lo"),
                 });
             }
@@ -437,17 +437,27 @@ pub fn parse(xml: &str) -> Result<Level> {
         for j in js.children().filter(|n| n.has_tag_name("j")) {
             let sliding = j.attribute("t") == Some("1");
             // NB: the original writes `ul ='…'` / `ua ='…'` with a space before `=`; XML allows it.
-            let (upper, lower, force) = if sliding {
-                (f(j, "ul"), f(j, "ll"), f(j, "fo"))
-            } else {
-                (f(j, "ua"), f(j, "la"), f(j, "tq"))
-            };
+            // the original's joint object: its starting values, and the setters its reader goes through (limits are `parseInt`ed)
+            let mut kept = crate::editor::Joint::new(sliding);
+            let (upper, lower, force) = if sliding { ("ul", "ll", "fo") } else { ("ua", "la", "tq") };
+            if let Some(v) = f(j, upper) {
+                kept.set_upper(f64::from(v).trunc());
+            }
+            if let Some(v) = f(j, lower) {
+                kept.set_lower(f64::from(v).trunc());
+            }
+            if let Some(v) = f(j, force) {
+                kept.set_force(f64::from(v));
+            }
+            if let Some(v) = f(j, "sp") {
+                kept.set_speed(f64::from(v));
+            }
             level.joints.push(Joint {
                 sliding,
-                upper: upper.unwrap_or(0.0),
-                lower: lower.unwrap_or(0.0),
-                force: force.unwrap_or(0.0),
-                speed: f(j, "sp").unwrap_or(0.0),
+                upper: kept.upper as f32,
+                lower: kept.lower as f32,
+                force: kept.force as f32,
+                speed: kept.speed as f32,
                 axis_angle: f(j, "a").unwrap_or(0.0),
                 pos: [f(j, "x").unwrap_or(0.0), f(j, "y").unwrap_or(0.0)],
                 body1: BodyRef::parse(j.attribute("b1").unwrap_or("-1")),
@@ -462,18 +472,18 @@ pub fn parse(xml: &str) -> Result<Level> {
         for t in ts.children().filter(|n| n.has_tag_name("t")) {
             let mut trig = Trigger {
                 pos: [f(t, "x").unwrap_or(0.0), f(t, "y").unwrap_or(0.0)],
-                size: [f(t, "w").unwrap_or(0.0), f(t, "h").unwrap_or(0.0)],
+                size: ["w", "h"].map(|side| f(t, side).unwrap_or(100.0).clamp(5.0, 5000.0).round()),
                 angle: f(t, "a").unwrap_or(0.0),
-                triggered_by: f(t, "b").unwrap_or(0.0) as i32,
+                triggered_by: f(t, "b").unwrap_or(1.0).trunc().clamp(1.0, 6.0) as i32,
                 type_index: f(t, "t").unwrap_or(0.0) as i32,
-                repeat_type: f(t, "r").unwrap_or(0.0) as i32,
+                repeat_type: f(t, "r").unwrap_or(1.0).trunc().clamp(1.0, 4.0) as i32,
                 start_disabled: flag(t, "sd"),
-                repeat_interval: f(t, "i"),
-                delay: f(t, "d"),
+                repeat_interval: f(t, "i").map(|v| v.clamp(0.1, 30.0)),
+                delay: f(t, "d").map(|v| v.clamp(0.0, 30.0)),
                 sound_index: t.attribute("s").and_then(|s| s.parse().ok()),
-                sound_location: f(t, "l").unwrap_or(1.0) as i32,
-                sound_volume: f(t, "v").unwrap_or(1.0),
-                sound_pan: f(t, "p").unwrap_or(0.0),
+                sound_location: f(t, "l").unwrap_or(1.0).clamp(1.0, 2.0) as i32,
+                sound_volume: f(t, "v").unwrap_or(1.0).clamp(0.0, 1.0),
+                sound_pan: f(t, "p").unwrap_or(0.0).clamp(-1.0, 1.0),
                 targets: Vec::new(),
             };
             for c in t.children().filter(|c| c.is_element()) {
@@ -609,5 +619,26 @@ mod name_tests {
             let names = super::special_property_names(kind);
             assert_eq!(class.props.iter().map(|p| p.0.as_str()).collect::<Vec<_>>(), names, "{}", class.name);
         }
+    }
+}
+
+#[cfg(test)]
+mod object_limit_tests {
+    #[test]
+    fn joints_triggers_and_vehicles_are_held_to_the_originals_limits() {
+        let level = super::parse(
+            "<levelXML><info v='1.99'/><groups><g x='0' y='0' r='0' ox='0' oy='0' o='500' v='t' sb='9' sh='-1' ct='2' a='40' l='-3' cp='7' lo='f'/></groups>\
+             <joints><j t='0' x='0' y='0' b1='0' b2='-1' l='t' ua='-10' la='400' m='t' tq='1000000' sp='-99'/><j t='1' x='0' y='0' b1='0' b2='-1' a='90' l='f'/></joints>\
+             <triggers><t x='0' y='0' w='1' h='9000' a='0' b='9' t='1' r='9' i='99' d='99'/></triggers></levelXML>",
+        )
+        .unwrap();
+        let j = &level.joints[0];
+        assert_eq!((j.upper, j.lower, j.force, j.speed), (0.0, -180.0, 100_000.0, -20.0));
+        let slider = &level.joints[1];
+        assert_eq!((slider.upper, slider.lower, slider.force, slider.speed), (100.0, -100.0, 50.0, 3.0));
+        let t = &level.triggers[0];
+        assert_eq!((t.size, t.triggered_by, t.repeat_type, t.repeat_interval, t.delay), ([5.0, 5000.0], 6, 4, Some(30.0), Some(30.0)));
+        let v = level.groups[0].vehicle.as_ref().unwrap();
+        assert_eq!((level.groups[0].opacity, v.space_action, v.shift_action, v.acceleration, v.leaning, v.pose), (100.0, 3, 0, 10.0, 0.0, 3));
     }
 }
