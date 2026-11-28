@@ -2060,6 +2060,10 @@ impl Mower {
         for i in (0..self.targets.len()).rev() {
             let (target, rising) = self.targets[i];
             if self.contact_count.get(&target).copied().unwrap_or(0) <= 0 {
+                if let Some(mut doll) = world.character.take() {
+                    self.remove_from_rider(world, &mut doll, target);
+                    world.character = Some(doll);
+                }
                 let b = world.b2_mut();
                 b.destroy_body(target);
                 b.destroy_body(rising);
@@ -2073,6 +2077,13 @@ impl Mower {
                 (jt.body1, jt.body2)
             };
             self.targets.push((target, rising));
+        }
+    }
+
+    /// `removeBody` of the rider for a ground body, with the mower's reaction to the joint it breaks (`elbowBreak1` and so on).
+    fn remove_from_rider(&mut self, world: &mut World, doll: &mut Ragdoll, target: BodyId) {
+        if let Some(limb) = doll.remove_body(world, target) {
+            self.limbs_broken(world, doll, &[limb]);
         }
     }
 
@@ -2163,6 +2174,7 @@ impl Mower {
         // original start of `mowerSmash`: everything being ground is destroyed with its rising body, sprays stop, the grind loop ends
         for (target, rising) in std::mem::take(&mut self.targets) {
             world.npc_remove_body(target);
+            self.remove_from_rider(world, doll, target);
             let b = world.b2_mut();
             b.destroy_body(target);
             b.destroy_body(rising);

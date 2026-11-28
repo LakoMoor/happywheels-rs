@@ -1,6 +1,6 @@
 //! Joints left and the rider's ejection after limb breaks, for every character, against the running original
 //! (`analysis/golden-reactions.js` -> `tests/golden/reactions.json`).
-use happywheels_core::character::Limb;
+use happywheels_core::character::{Limb, Part};
 use happywheels_core::physics::World;
 use std::collections::BTreeMap;
 
@@ -125,6 +125,63 @@ fn smashes_with_stumps_leave_what_the_original_leaves() {
                 steps.push((world.b2().joint_count(), vehicle.ejected(), loose(&world)));
             }
             if steps != case.steps {
+                wrong.push(format!("c{c} {:?}: original {:?}, here {steps:?}", case.seq, case.steps));
+            }
+        }
+    }
+    assert!(wrong.is_empty(), "{} differ:\n{}", wrong.len(), wrong.join("\n"));
+}
+
+#[derive(serde::Deserialize)]
+struct Removal {
+    seq: [String; 5],
+    /// `[joints, bodies, distance joints, ejected]` before and after the removal.
+    steps: Vec<(usize, usize, usize, bool)>,
+}
+
+/// `removeBody` as the mower calls it on a torn-off upper limb of its rider, for every character and ligament state.
+#[test]
+fn removing_a_torn_off_limb_leaves_what_the_original_leaves() {
+    let golden: BTreeMap<usize, Vec<Removal>> = serde_json::from_str(include_str!("../../../tests/golden/remove-body.json")).unwrap();
+    let level = happywheels_core::level::parse(LEVEL).unwrap();
+    let mut wrong = Vec::new();
+    for (&c, cases) in &golden {
+        for case in cases {
+            let [root, how, hinge, before, upper] = &case.seq;
+            let mut world = World::from_level(&level);
+            assert!(world.spawn_bike(c, level.info.start));
+            let mut doll = world.character.take().unwrap();
+            let mut vehicle = world.bike.take().unwrap();
+            let state = |w: &World, ejected: bool| {
+                let b = &w.b2().c;
+                // joint ids stay in the arena: the live ones are those the bodies still list
+                let live: std::collections::BTreeSet<usize> = b.bodies.iter().filter(|b| b.alive).flat_map(|b| b.joints.iter().map(|j| j.0)).collect();
+                let distance = live.iter().filter(|&&j| matches!(w.b2().joint(j).kind, box2d::joints::JointKind::Distance(_))).count();
+                (w.b2().joint_count(), b.bodies.iter().filter(|b| b.alive).count(), distance, ejected)
+            };
+            let force = |doll: &happywheels_core::character::Ragdoll, w: &World, l: Limb, hard: bool| if hard { 1e9 } else { doll.break_limit(w, l) + 1.0 };
+            for (name, hard) in [(root, how == "N"), (hinge, before == "H")].into_iter().take(if before.is_empty() { 1 } else { 2 }) {
+                let l = limb(name);
+                let f = force(&doll, &world, l, hard);
+                doll.break_limb(&mut world, l, f);
+                vehicle.rider_hurt(&mut world, &mut doll, false, &[l]);
+            }
+            let mut steps = vec![state(&world, vehicle.ejected())];
+            let part = match upper.as_str() {
+                "upperArm1Body" => Part::UpperArm1,
+                "upperArm2Body" => Part::UpperArm2,
+                "upperLeg1Body" => Part::UpperLeg1,
+                _ => Part::UpperLeg2,
+            };
+            let body = doll.bodies[&part];
+            if let Some(l) = doll.remove_body(&mut world, body) {
+                vehicle.rider_hurt(&mut world, &mut doll, false, &[l]);
+            }
+            world.b2_mut().destroy_body(body);
+            steps.push(state(&world, vehicle.ejected()));
+            // the two worlds do not hold the same number of static bodies: compare how the counts change
+            let shape = |s: &[(usize, usize, usize, bool)]| (s[0].0, s[1].0, s[1].1 as i64 - s[0].1 as i64, s[0].2, s[1].2, s[0].3, s[1].3);
+            if shape(&steps) != shape(&case.steps) {
                 wrong.push(format!("c{c} {:?}: original {:?}, here {steps:?}", case.seq, case.steps));
             }
         }

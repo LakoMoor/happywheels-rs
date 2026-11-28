@@ -248,6 +248,21 @@ pub struct Ragdoll {
 /// Called after each joint a smash breaks.
 pub type BreakHook<'a> = dyn FnMut(&mut World, &mut Ragdoll, Limb) + 'a;
 
+/// The 3 px ball a ligament hangs on after leaving its upper body: at the old anchor, with that body's velocity.
+fn ligament_ball(b: &mut box2d::world::World, anchor: Vec2, upper: BodyId) -> BodyId {
+    let ball = b.create_body(&BodyDef { position: anchor, fixed_rotation: true, ..Default::default() });
+    let mut d = ShapeDef::new(Geometry::Circle { local_position: Vec2::default(), radius: 3.0 / CHARACTER_SCALE });
+    d.density = 1.0;
+    d.friction = 0.3;
+    d.restitution = 0.1;
+    d.filter = Filter { category_bits: 2056, mask_bits: 2056, group_index: 0 };
+    b.create_shape(ball, &d);
+    b.set_mass_from_shapes(ball);
+    let v = b.body(upper).linear_velocity;
+    b.body_mut(ball).linear_velocity = v;
+    ball
+}
+
 /// A string of fixed-rotation balls joined by rigid distance joints between two bodies (original classes `h` and `e1`): `joints[0]` ties the
 /// first end, `joints.last()` the second; only those two can tear (impulse above 1.5).
 #[derive(Debug, Clone)]
@@ -950,20 +965,11 @@ impl Ragdoll {
             }
             let b = world.b2_mut();
             let Some((anchor, _)) = b.distance_anchor1(main) else { continue };
-            let upper = self.bodies[&up];
-            let ball = b.create_body(&BodyDef { position: anchor, fixed_rotation: true, ..Default::default() });
-            let mut d = ShapeDef::new(Geometry::Circle { local_position: Vec2::default(), radius: 3.0 / CHARACTER_SCALE });
-            d.density = 1.0;
-            d.friction = 0.3;
-            d.restitution = 0.1;
-            d.filter = Filter { category_bits: 2056, mask_bits: 2056, group_index: 0 };
-            b.create_shape(ball, &d);
-            b.set_mass_from_shapes(ball);
-            let v = b.body(upper).linear_velocity;
-            b.body_mut(ball).linear_velocity = v;
+            let ball = ligament_ball(b, anchor, self.bodies[&up]);
             b.rewire_distance_joint(main, ball);
             chain.bodies.push(ball);
             chain.torn = true;
+            world.play("LigTear2", 1, anchor);
         }
     }
 
@@ -1143,12 +1149,62 @@ impl Ragdoll {
             Part::Head => &[0],
             Part::Chest => &[1, 2, 4],
             Part::Pelvis => &[5],
+            // a torn-off upper limb only stops bleeding (it keeps its listeners: it has none)
+            Part::UpperArm1 => return self.stop_flows(world, &[6]),
+            Part::UpperArm2 => return self.stop_flows(world, &[7]),
+            Part::UpperLeg1 => return self.stop_flows(world, &[8]),
+            Part::UpperLeg2 => return self.stop_flows(world, &[9]),
             _ => return,
         };
         if !self.ground.contains(&part) {
             self.ground.push(part);
         }
         self.stop_flows(world, kinds);
+    }
+
+    /// `CharacterB2D.removeBody`: the mower is about to destroy `body`. It reaches the character only through an upper limb that
+    /// has come off (the shape then names the character; a severed leg's new shape does not, and a ground head, chest or pelvis no
+    /// longer does): the elbow or knee breaks without a ligament, the stump stops bleeding and an older ligament lets go of the
+    /// limb. Returns the joint broken here, for the vehicle's reaction.
+    pub fn remove_body(&mut self, world: &mut World, body: BodyId) -> Option<Limb> {
+        let (&part, _) = self.bodies.iter().find(|(_, &b)| b == body)?;
+        let (slot, root, hinge) = match part {
+            Part::UpperArm1 => (0, Limb::Shoulder1, Limb::Elbow1),
+            Part::UpperArm2 => (1, Limb::Shoulder2, Limb::Elbow2),
+            Part::UpperLeg1 => (2, Limb::Hip1, Limb::Knee1),
+            Part::UpperLeg2 => (3, Limb::Hip2, Limb::Knee2),
+            _ => return None,
+        };
+        if !self.broken.contains(&root) || slot > 1 && self.sev_limbs.contains(&root) {
+            return None;
+        }
+        let broke = (!self.broken.contains(&hinge)).then(|| {
+            self.break_limb(world, hinge, 1000.0);
+            hinge
+        });
+        self.stop_flows(world, &[6 + slot as u8]);
+        self.remote_break(world, slot);
+        broke
+    }
+
+    /// `i$.remoteBreak`: the ligament leaves its upper body; a 3 px ball at the old anchor takes the link over.
+    fn remote_break(&mut self, world: &mut World, slot: usize) {
+        let length = self.chain_len[1];
+        let upper = self.bodies[&[Part::UpperArm1, Part::UpperArm2, Part::UpperLeg1, Part::UpperLeg2][slot]];
+        let Some(chain) = self.ligaments[slot].as_mut() else { return };
+        let Some(main) = chain.joints[0] else { return };
+        let b = world.b2_mut();
+        let Some((anchor, _)) = b.distance_anchor1(main) else { return };
+        let ball = ligament_ball(b, anchor, upper);
+        let lower = b.joint(main).body2;
+        b.destroy_joint(main);
+        let mut d = DistanceJointDef::initialize(b.body(ball), ball, b.body(lower), lower, b.body(ball).xf.position, b.body(lower).xf.position);
+        d.length = length;
+        d.collide_connected = false;
+        chain.joints[0] = Some(b.create_distance_joint(&d));
+        chain.bodies.push(ball);
+        chain.torn = true;
+        world.play("LigTear2", 1, anchor);
     }
 
     fn stop_flows(&mut self, world: &mut World, kinds: &[u8]) {
@@ -1175,13 +1231,13 @@ impl Ragdoll {
             Limb::Shoulder1 | Limb::Shoulder2 => {
                 let (a1, a2) = anchors(world, limb);
                 let arm = if limb == Limb::Shoulder1 { Part::UpperArm1 } else { Part::UpperArm2 };
-                made.push((3, world.blood_flow(1.0, 3.0, body(arm), a2, 270.0, 200)));
+                made.push((if limb == Limb::Shoulder1 { 6 } else { 7 }, world.blood_flow(1.0, 3.0, body(arm), a2, 270.0, 200)));
                 made.push((2, world.blood_flow(0.0, 1.0, body(Part::Chest), a1, 270.0, 500)));
             }
             Limb::Hip1 | Limb::Hip2 => {
                 let (_, a2) = anchors(world, limb);
                 let leg = if limb == Limb::Hip1 { Part::UpperLeg1 } else { Part::UpperLeg2 };
-                made.push((3, world.blood_flow(1.0, 3.0, body(leg), a2, 270.0, 200)));
+                made.push((if limb == Limb::Hip1 { 8 } else { 9 }, world.blood_flow(1.0, 3.0, body(leg), a2, 270.0, 200)));
                 made.push((5, world.blood_flow(0.0, 1.0, body(Part::Pelvis), zero, 90.0, 500)));
             }
             _ => {}
