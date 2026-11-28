@@ -168,6 +168,51 @@ export class EditorPanel {
     return true;
   }
 
+  // the selected trigger's targets and what it does to each
+  showTargets(targets) {
+    const change = (...args) => { this.game.editor_trigger(...args); this.refresh(); };
+    const button = (text, apply) => {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = text;
+      b.addEventListener('click', apply);
+      return b;
+    };
+    const row = (...children) => {
+      const div = document.createElement('div');
+      div.className = 'row';
+      div.append(...children);
+      return div;
+    };
+    this.panel.querySelector('#ed-targets').replaceChildren(...targets.map((target, t) => {
+      const box = document.createElement('fieldset');
+      const legend = document.createElement('legend');
+      legend.textContent = target.label;
+      box.append(legend);
+      target.actions.forEach(([index, params], a) => {
+        const choice = document.createElement('select');
+        choice.setAttribute('aria-label', `${target.label} action ${a + 1}`);
+        target.choices.forEach((name, i) => choice.add(new Option(name, String(i), i === index, i === index)));
+        choice.addEventListener('change', () => change(0, t, a, 0, Number(choice.value)));
+        const inputs = params.map(([name, value], p) => {
+          const label = document.createElement('label');
+          const input = document.createElement('input');
+          input.type = 'number';
+          input.step = 'any';
+          input.value = String(value);
+          input.addEventListener('change', () => change(3, t, a, p, input.valueAsNumber));
+          label.append(`${name} `, input);
+          return label;
+        });
+        const remove = target.actions.length > 1 ? [button('Remove action', () => change(2, t, a, 0, 0))] : [];
+        box.append(row(choice, ...inputs, ...remove));
+      });
+      const add = target.actions.length && target.actions.length < 10 ? [button('Add action', () => change(1, t, 0, 0, 0))] : [];
+      box.append(row(...add, button('Remove target', () => change(4, t, 0, 0, 0))));
+      return box;
+    }));
+  }
+
   refresh() {
     if (!this.editing()) return;
     const state = JSON.parse(this.game.editor_state());
@@ -192,6 +237,7 @@ export class EditorPanel {
     const set = (name, value) => { this.game.editor_set(name, value); this.refresh(); };
     this.panel.querySelector('#ed-selected').textContent = state.selected ? `${state.selected} selected` : 'Nothing selected';
     this.properties.replaceChildren(...state.properties.map(([name, value]) => field(name, value, v => set(name, v))));
+    this.showTargets(state.targets);
     this.info.replaceChildren(...INFO.map(([key, label]) => {
       const row = field(label, state.info[key], v => { this.game.editor_set_info(key, v); this.refresh(); });
       return row;

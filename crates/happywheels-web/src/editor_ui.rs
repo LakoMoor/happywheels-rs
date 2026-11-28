@@ -164,6 +164,19 @@ impl EditorUi {
         self.editor.doc.to_xml()
     }
 
+    /// `what`: 0 choose action `value`, 1 add an action, 2 remove it, 3 set parameter `param`, 4 remove the target.
+    pub fn trigger_edit(&mut self, what: u8, target: usize, action: usize, param: usize, value: f64) {
+        let e = &mut self.editor;
+        match what {
+            0 => e.set_action(target, action, value.max(0.0) as usize),
+            1 => e.add_action(target),
+            2 => e.remove_action(target, action),
+            3 => e.set_action_param(target, action, param, value),
+            _ => e.remove_target(target),
+        }
+        self.dirty = true;
+    }
+
     /// What the page shows beside the window.
     pub fn state(&self) -> String {
         let e = &self.editor;
@@ -177,6 +190,7 @@ impl EditorUi {
         serde_json::json!({
             "tool": Tool::ALL.iter().position(|&t| t == e.tool),
             "selected": e.selection.len(),
+            "targets": e.trigger_targets().iter().map(|t| serde_json::json!({ "label": t.label, "choices": t.choices, "actions": t.actions })).collect::<Vec<_>>(),
             "properties": e.properties().iter().map(|(n, v)| (n.clone(), value(v))).collect::<Vec<_>>(),
             "info": { "character": info.character, "forceCharacter": info.force_character, "hideVehicle": info.hide_vehicle, "backdrop": info.backdrop, "background": info.background },
         })

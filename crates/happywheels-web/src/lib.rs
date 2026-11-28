@@ -397,6 +397,12 @@ mod browser {
             self.editor.as_ref().map(EditorUi::xml).unwrap_or_default()
         }
 
+        pub fn editor_trigger(&mut self, what: u8, target: usize, action: usize, param: usize, value: f64) {
+            if let Some(e) = &mut self.editor {
+                e.trigger_edit(what, target, action, param, value);
+            }
+        }
+
         pub fn editor_state(&self) -> String {
             self.editor.as_ref().map(EditorUi::state).unwrap_or_default()
         }

@@ -59,6 +59,7 @@ const press = async (keyCode, key, code, modifiers = 0) => {
   await sleep(60);
 };
 await evaluate('document.querySelector("#game").focus()');
+let shot;
 
 // a floor (shape tool, made wide), a polygon, an I-beam, a joint, a trigger
 await press(50, '2', 'Digit2'); await tap(450, 420);
@@ -74,11 +75,19 @@ await press(49, '1', 'Digit1'); await tap(780, 200);
 // select the trigger and the polygon, then link them
 await mouse('mousePressed', at(680, 360), { modifiers: 8 }); await mouse('mouseReleased', at(680, 360), { modifiers: 8 });
 await click('[data-command="link"]');
+// pick an action with parameters for the linked polygon and change one
+await tap(100, 60);
+await tap(780, 200);
+const choose = (selector, value) => evaluate(`(()=>{const e=document.querySelector(${JSON.stringify(selector)});e.value=${JSON.stringify(value)};e.dispatchEvent(new Event('change'))})()`);
+await choose('#ed-targets select', '4');
+await choose('#ed-targets input[type=number]', '25');
+shot = await send('Page.captureScreenshot', { format: 'png' });
+writeFileSync(join(out, 'editor-trigger.png'), Buffer.from(shot.result.data, 'base64'));
 await tap(100, 60);
 await drag([60, 40], [60, 40]);
 await tap(650, 350);
 await sleep(500);
-let shot = await send('Page.captureScreenshot', { format: 'png' });
+shot = await send('Page.captureScreenshot', { format: 'png' });
 writeFileSync(join(out, 'editor.png'), Buffer.from(shot.result.data, 'base64'));
 const xml = await save();
 writeFileSync(join(out, 'editor-level.xml'), xml ?? '');

@@ -8,6 +8,50 @@ use crate::editor::{Document, Group, Item, Joint, Ref, Target, Trigger, Value, V
 use image::{Rgba, RgbaImage};
 use imageproc::drawing::{draw_hollow_circle_mut, draw_line_segment_mut};
 
+/// What a trigger can do to one kind of object: the action's name and its parameters.
+type Actions = Vec<(String, Vec<String>)>;
+
+fn action_names() -> &'static std::collections::HashMap<String, Actions> {
+    static NAMES: std::sync::OnceLock<std::collections::HashMap<String, Actions>> = std::sync::OnceLock::new();
+    NAMES.get_or_init(|| serde_json::from_str(include_str!("../data/editor-action-names.json")).expect("action names"))
+}
+
+/// An action parameter's input in the original (`buildKeyedInput`): label, lowest, highest, default.
+fn parameter(name: &str) -> (&'static str, f64, f64, f64) {
+    let free = f64::INFINITY;
+    match name {
+        "newOpacities" => ("new opacity", 0.0, 100.0, 100.0),
+        "opacityTimes" | "motorSpeedTimes" => ("duration", 0.0, 5.0, 1.0),
+        "slideTimes" => ("duration", 0.0, 10.0, 1.0),
+        "impulseX" => ("impulse x", -50.0, 50.0, 10.0),
+        "impulseY" => ("impulse y", -50.0, 50.0, -10.0),
+        "spin" => ("spin", -20.0, 20.0, 0.0),
+        "newCollisions" => ("new collision", 1.0, 7.0, 1.0),
+        // these two default to where the object is
+        "newX" => ("new x", 0.0, free, 0.0),
+        "newY" => ("new y", 0.0, free, 0.0),
+        "newMotorSpeeds" => ("new speed", -20.0, 20.0, 0.0),
+        "newMotorSpeedsPris" => ("new speed", -50.0, 50.0, 0.0),
+        "newUpperAngles" => ("new upper angle", 0.0, 180.0, 90.0),
+        "newLowerAngles" => ("new lower angle", -180.0, 0.0, -90.0),
+        "newUpperLimits" => ("new upper limit", 0.0, 3000.0, 100.0),
+        "newLowerLimits" => ("new lower limit", -3000.0, 0.0, -100.0),
+        _ => ("value", -free, free, 0.0),
+    }
+}
+
+/// Most actions one trigger can give one target.
+const MAX_ACTIONS: usize = 10;
+
+/// One target of the selected trigger, for the front end.
+#[derive(Debug)]
+pub struct TargetView {
+    pub label: String,
+    pub choices: Vec<&'static str>,
+    /// Chosen action and its parameters' labels and values.
+    pub actions: Vec<(usize, Vec<(&'static str, f64)>)>,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Tool {
     Arrow,
@@ -958,6 +1002,140 @@ impl Editor {
         self.doc.shapes.push(item);
     }
 
+    /// The actions a trigger can give this object.
+    fn actions_of(&self, target: Ref) -> &'static [(String, Vec<String>)] {
+        let key = match target {
+            Ref::Shape(i) => self.doc.shapes.get(i).map(|s| s.spec().name.clone()),
+            Ref::Special(i) => self.doc.specials.get(i).map(|s| s.spec().name.clone()),
+            Ref::Group(_) => Some("group".into()),
+            Ref::Joint(i) => self.doc.joints.get(i).map(|j| if j.prismatic { "pris" } else { "pin" }.into()),
+            Ref::Trigger(_) => Some("trigger".into()),
+        };
+        key.and_then(|k| action_names().get(&k)).map_or(&[], Vec::as_slice)
+    }
+
+    /// Action `index` for `target` with the inputs' default values.
+    fn new_action(&self, target: Ref, index: usize) -> crate::editor::Action {
+        let at = match target {
+            Ref::Shape(i) => self.doc.shapes.get(i).map(position),
+            Ref::Special(i) => self.doc.specials.get(i).map(position),
+            _ => None,
+        }
+        .unwrap_or_default();
+        let params = self.actions_of(target).get(index).map_or_else(Vec::new, |(_, names)| {
+            names
+                .iter()
+                .map(|name| {
+                    Some(Value::Num(match name.as_str() {
+                        "newX" => at[0],
+                        "newY" => at[1],
+                        other => parameter(other).3,
+                    }))
+                })
+                .collect()
+        });
+        crate::editor::Action { index, params }
+    }
+
+    /// The only selected object, when it is a trigger.
+    fn selected_trigger(&self) -> Option<usize> {
+        match self.selection[..] {
+            [Ref::Trigger(i)] if i < self.doc.triggers.len() => Some(i),
+            _ => None,
+        }
+    }
+
+    pub fn trigger_targets(&self) -> Vec<TargetView> {
+        let Some(i) = self.selected_trigger() else { return Vec::new() };
+        self.doc.triggers[i]
+            .targets
+            .iter()
+            .map(|t| {
+                let known = self.actions_of(t.target);
+                let label = match t.target {
+                    Ref::Shape(i) => format!("shape {i}"),
+                    Ref::Special(i) => self.doc.specials.get(i).map_or_else(String::new, |s| format!("{} {i}", s.spec().name.trim_end_matches("Ref"))),
+                    Ref::Group(i) => format!("group {i}"),
+                    Ref::Joint(i) => format!("joint {i}"),
+                    Ref::Trigger(i) => format!("trigger {i}"),
+                };
+                let actions = t
+                    .actions
+                    .iter()
+                    .map(|a| {
+                        let names = known.get(a.index).map_or(&[][..], |k| &k.1[..]);
+                        (a.index, names.iter().enumerate().map(|(p, n)| (parameter(n).0, a.params.get(p).and_then(Option::as_ref).map_or(parameter(n).3, Value::number))).collect())
+                    })
+                    .collect();
+                TargetView { label, choices: known.iter().map(|k| k.0.as_str()).collect(), actions }
+            })
+            .collect()
+    }
+
+    /// Change the selected trigger's target `target`; `edit` returns false when there is nothing to do.
+    fn edit_target(&mut self, target: usize, edit: impl FnOnce(&Editor, &mut Target) -> bool) {
+        let Some(i) = self.selected_trigger() else { return };
+        let Some(mut t) = self.doc.triggers[i].targets.get(target).cloned() else { return };
+        if edit(self, &mut t) {
+            self.checkpoint();
+            self.doc.triggers[i].targets[target] = t;
+        }
+    }
+
+    /// Choose another action; its parameters start from their defaults.
+    pub fn set_action(&mut self, target: usize, action: usize, index: usize) {
+        self.edit_target(target, |e, t| {
+            let known = index < e.actions_of(t.target).len();
+            let new = e.new_action(t.target, index);
+            known && t.actions.get_mut(action).map(|a| *a = new).is_some()
+        });
+    }
+
+    pub fn add_action(&mut self, target: usize) {
+        self.edit_target(target, |e, t| {
+            let room = t.actions.len() < MAX_ACTIONS && !e.actions_of(t.target).is_empty();
+            if room {
+                t.actions.push(e.new_action(t.target, 0));
+            }
+            room
+        });
+    }
+
+    /// A target keeps at least one action; [`Editor::remove_target`] drops it altogether.
+    pub fn remove_action(&mut self, target: usize, action: usize) {
+        self.edit_target(target, |_, t| {
+            let can = t.actions.len() > 1 && action < t.actions.len();
+            if can {
+                t.actions.remove(action);
+            }
+            can
+        });
+    }
+
+    pub fn set_action_param(&mut self, target: usize, action: usize, param: usize, value: f64) {
+        if !value.is_finite() {
+            return;
+        }
+        self.edit_target(target, |e, t| {
+            let known = e.actions_of(t.target);
+            let Some(a) = t.actions.get_mut(action) else { return false };
+            let Some(name) = known.get(a.index).and_then(|k| k.1.get(param)) else { return false };
+            let (_, lo, hi, _) = parameter(name);
+            let Some(slot) = a.params.get_mut(param) else { return false };
+            *slot = Some(Value::Num(value.clamp(lo, hi)));
+            true
+        });
+    }
+
+    pub fn remove_target(&mut self, target: usize) {
+        if let Some(i) = self.selected_trigger() {
+            if target < self.doc.triggers[i].targets.len() {
+                self.checkpoint();
+                self.doc.triggers[i].targets.remove(target);
+            }
+        }
+    }
+
     /// The editable properties shared by the whole selection, with the first object's values.
     pub fn properties(&self) -> Vec<(String, Value)> {
         let lists: Vec<Vec<(String, Value)>> = self.selection.iter().map(|&r| self.properties_of(r)).collect();
@@ -1110,8 +1288,10 @@ impl Editor {
         };
         for i in drivers {
             for &target in &targets {
-                let Ok(counts) = self.doc.action_counts(target) else { continue };
-                let actions = counts.map_or_else(Vec::new, |c| vec![crate::editor::Action { index: 0, params: vec![Some(Value::Num(0.0)); c.first().copied().unwrap_or(0)] }]);
+                if self.doc.action_counts(target).is_err() {
+                    continue;
+                }
+                let actions = if self.actions_of(target).is_empty() { Vec::new() } else { vec![self.new_action(target, 0)] };
                 if let Some(t) = self.doc.triggers.get_mut(i) {
                     if !t.targets.iter().any(|x| x.target == target) {
                         t.targets.push(Target { target, actions });
@@ -1335,6 +1515,49 @@ mod tests {
             let (next, what) = polygon_cursor(&vertices, point(&case["mouse"]), case["shift"].as_bool().unwrap(), snap);
             let want = [Cursor::Add, Cursor::Complete, Cursor::Nothing, Cursor::ReplaceLast][case["state"].as_u64().unwrap() as usize];
             assert_eq!((next, what), (point(&case["next"]), want), "case {k}: {case}");
+        }
+    }
+
+    #[test]
+    fn trigger_actions_start_from_the_originals_defaults_and_limits() {
+        let mut e = two_boxes();
+        e.set_tool(Tool::Text);
+        click(&mut e, [1200.0, 1000.0]);
+        e.set_tool(Tool::Trigger);
+        click(&mut e, [900.0, 700.0]);
+        e.selection = vec![Ref::Trigger(0), Ref::Special(0), Ref::Shape(0)];
+        e.link_targets();
+        e.selection = vec![Ref::Trigger(0)];
+        // a text box's first action is "change opacity": full opacity over one second
+        let targets = e.trigger_targets();
+        assert_eq!(targets[0].actions, [(0, vec![("new opacity", 100.0), ("duration", 1.0)])]);
+        assert_eq!((targets[1].choices[4], targets[1].actions.clone()), ("apply impulse", vec![(0, Vec::new())]));
+        e.set_action(0, 0, 1);
+        assert_eq!(e.trigger_targets()[0].actions, [(1, vec![("duration", 1.0), ("new x", 1200.0), ("new y", 1000.0)])]);
+        e.set_action(1, 0, 4);
+        e.set_action_param(1, 0, 0, 1000.0);
+        e.add_action(1);
+        assert_eq!(e.trigger_targets()[1].actions, [(4, vec![("impulse x", 50.0), ("impulse y", -10.0), ("spin", 0.0)]), (0, Vec::new())]);
+        let xml = e.doc.to_xml();
+        assert_eq!(Document::parse(&xml).unwrap().to_xml(), xml);
+        e.remove_action(1, 1);
+        e.remove_target(0);
+        assert_eq!(e.trigger_targets().len(), 1);
+        e.undo();
+        assert_eq!(e.doc.triggers[0].targets.len(), 2);
+    }
+
+    #[test]
+    fn every_action_the_file_format_knows_has_a_name() {
+        let mut e = two_boxes();
+        for class in 0..crate::editor::schema().specials.len() {
+            e.set_tool(Tool::Arrow);
+            e.special_kind = class;
+            e.set_tool(Tool::Special);
+            click(&mut e, [2000.0, 2000.0]);
+            let r = Ref::Special(e.doc.specials.len() - 1);
+            let counts: Vec<usize> = e.doc.action_counts(r).unwrap().cloned().unwrap_or_default();
+            assert_eq!(e.actions_of(r).iter().map(|a| a.1.len()).collect::<Vec<_>>(), counts, "special {class}");
         }
     }
 
