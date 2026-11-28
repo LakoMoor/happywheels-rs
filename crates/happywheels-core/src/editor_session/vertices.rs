@@ -7,6 +7,15 @@ use crate::editor::{Item, Value};
 /// A vertex and its incoming and outgoing curve handles (relative to it).
 pub type Vertex = [Point; 3];
 
+/// What the window shows of the edited outline.
+#[derive(Default)]
+pub struct Marks {
+    /// Canvas position of each vertex and whether it is selected.
+    pub vertices: Vec<(Point, bool)>,
+    /// Curve handles of the selected vertices: vertex, side (1 in, 2 out), canvas position.
+    pub handles: Vec<(usize, usize, Point)>,
+}
+
 /// How far a new polygon vertex is pushed out of the edge it splits (`ADJUSTMENT_LENGTH`).
 const NUDGE: f64 = 0.25;
 
@@ -152,8 +161,7 @@ impl Editor {
         Some((edit, item))
     }
 
-    /// Canvas positions of the edited vertices, and of the curve handles of the selected ones (vertex, side, position).
-    pub fn vertex_marks(&self) -> (Vec<(Point, bool)>, Vec<(usize, usize, Point)>) {
+    pub fn vertex_marks(&self) -> Marks {
         let Some((edit, item)) = self.edited() else { return Default::default() };
         let points = &item.vertices.as_ref().expect("checked").points;
         let marks = points.iter().enumerate().map(|(i, p)| (to_canvas(item, edit.factor, p[0]), edit.selected.contains(&i))).collect();
@@ -163,7 +171,7 @@ impl Editor {
             .filter_map(|&i| points.get(i).map(|p| (i, p)))
             .flat_map(|(i, p)| [1, 2].into_iter().filter(|&s| p[s] != [0.0; 2]).map(move |s| (i, s, to_canvas(item, edit.factor, [p[0][0] + p[s][0], p[0][1] + p[s][1]]))))
             .collect();
-        (marks, handles)
+        Marks { vertices: marks, handles }
     }
 
     pub fn vertex_box(&self) -> Option<[Point; 2]> {
@@ -225,7 +233,7 @@ impl Editor {
 
     /// The vertex or handle under a canvas point.
     fn vertex_at(&self, p: Point) -> Option<(usize, Option<usize>)> {
-        let (marks, handles) = self.vertex_marks();
+        let Marks { vertices: marks, handles } = self.vertex_marks();
         let near = |q: Point| (q[0] - p[0]).hypot(q[1] - p[1]) <= self.snap;
         marks.iter().position(|m| near(m.0)).map(|i| (i, None)).or_else(|| handles.iter().find(|h| near(h.2)).map(|h| (h.0, Some(h.1))))
     }
@@ -320,7 +328,7 @@ impl Editor {
 
     pub(super) fn vertex_pointer_up(&mut self, p: Point) {
         self.vertex_pointer_move(p);
-        let (marks, _) = self.vertex_marks();
+        let marks = self.vertex_marks().vertices;
         let Some(edit) = self.vertex_edit.as_mut() else { return };
         if let Some(Drag::Box { from, to }) = edit.drag {
             let [l, t, r, b] = bounds(&[from, to]);

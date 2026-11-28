@@ -1445,9 +1445,8 @@ impl Editor {
             let [l, t, r, b] = bounds(&[from, to]);
             outline(&mut img, &rect(l, t, r - l, b - t), true, blue);
         }
-        let (marks, handles) = self.vertex_marks();
-        for (i, side, at) in handles {
-            let _ = side;
+        let vertices::Marks { vertices: marks, handles } = self.vertex_marks();
+        for (i, _, at) in handles {
             outline(&mut img, &[marks[i].0, at], false, red);
             ring(&mut img, at, 3.0, red);
         }
