@@ -4,6 +4,8 @@ use happywheels_core::character::Limb;
 use happywheels_core::physics::World;
 use std::collections::BTreeMap;
 
+const LEVEL: &str = "<levelXML><info v='1.99' x='1000' y='250' h='f' bg='0' bgc=''/><shapes><sh t='0' p0='1000' p1='425' p2='2000' p3='50' p4='0' p5='t' p6='f' p7='1' p8='0' p9='-1' p10='100' p11='1'/></shapes></levelXML>";
+
 #[derive(serde::Deserialize)]
 struct Case {
     seq: Vec<String>,
@@ -29,7 +31,7 @@ fn limb(name: &str) -> Limb {
 #[test]
 fn limb_breaks_leave_the_same_joints_as_the_original() {
     let golden: BTreeMap<usize, Vec<Case>> = serde_json::from_str(include_str!("../../../tests/golden/reactions.json")).unwrap();
-    let level = happywheels_core::level::parse("<levelXML><info v='1.99' x='1000' y='250' h='f' bg='0' bgc=''/><shapes><sh t='0' p0='1000' p1='425' p2='2000' p3='50' p4='0' p5='t' p6='f' p7='1' p8='0' p9='-1' p10='100' p11='1'/></shapes></levelXML>").unwrap();
+    let level = happywheels_core::level::parse(LEVEL).unwrap();
     let mut wrong = Vec::new();
     for (&c, cases) in &golden {
         for case in cases {
@@ -47,6 +49,30 @@ fn limb_breaks_leave_the_same_joints_as_the_original() {
             }
             if steps != case.steps {
                 wrong.push(format!("c{c} {:?}: original {:?}, here {steps:?}", case.seq, case.steps));
+            }
+        }
+    }
+    assert!(wrong.is_empty(), "{} differ:\n{}", wrong.len(), wrong.join("\n"));
+}
+
+#[test]
+fn passengers_limb_breaks_leave_the_same_joints_as_the_original() {
+    let golden: BTreeMap<String, Vec<Case>> = serde_json::from_str(include_str!("../../../tests/golden/passengers.json")).unwrap();
+    let level = happywheels_core::level::parse(LEVEL).unwrap();
+    let mut wrong = Vec::new();
+    for (key, cases) in &golden {
+        let (c, who) = key.split_once(' ').unwrap();
+        for case in cases {
+            let mut world = World::from_level(&level);
+            assert!(world.spawn_bike(c.parse().unwrap(), level.info.start));
+            let mut vehicle = world.bike.take().unwrap();
+            let mut steps = vec![(world.b2().joint_count(), false)];
+            for name in &case.seq {
+                let off = vehicle.break_passenger_limb(&mut world, who, limb(name)).unwrap();
+                steps.push((world.b2().joint_count(), off));
+            }
+            if steps != case.steps {
+                wrong.push(format!("{key} {:?}: original {:?}, here {steps:?}", case.seq, case.steps));
             }
         }
     }

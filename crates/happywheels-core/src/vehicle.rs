@@ -503,6 +503,29 @@ impl Vehicle {
         !matches!(self, Vehicle::Chair(_) | Vehicle::Heli(_))
     }
 
+    /// Breaks a passenger's joint as an overload would and runs its reaction; `who` is the original's field name
+    /// (`kid`, `girl`, `daughter`, `son`, `elf1`, `elf2`). Returns whether they are off the vehicle now.
+    pub fn break_passenger_limb(&mut self, world: &mut World, who: &str, limb: Limb) -> Option<bool> {
+        macro_rules! hurt {
+            ($p:expr) => {{
+                let p = $p;
+                let force = p.doll.break_limit(world, limb) + 1.0;
+                p.doll.break_limb(world, limb, force);
+                p.limbs_broken(world, &[limb]);
+                p.ejected
+            }};
+        }
+        Some(match (self, who) {
+            (Vehicle::Bike(b), "kid") => hurt!(b.kid.as_mut()?),
+            (Vehicle::Dirt(d), "girl") => hurt!(d.girl.as_mut()?),
+            (Vehicle::Family(f), "daughter") => hurt!(&mut f.daughter),
+            (Vehicle::Family(f), "son") => hurt!(&mut f.son),
+            (Vehicle::Santa(s), "elf1") => hurt!(&mut s.elf1),
+            (Vehicle::Santa(s), "elf2") => hurt!(&mut s.elf2),
+            _ => return None,
+        })
+    }
+
     /// A smash (`smashed`) or the joints broken this frame: eject, or the vehicle's limb-break reaction.
     pub fn rider_hurt(&mut self, world: &mut World, doll: &mut Ragdoll, smashed: bool, broken: &[Limb]) {
         // `neckBreak` / `torsoBreak` overrides that call `eject()`: the chair, the helicopter and the moped keep the rider on a broken neck
@@ -4777,6 +4800,10 @@ impl Daughter {
             return;
         }
         for l in broken {
+            if *l == Limb::Waist {
+                self.eject(world);
+                return;
+            }
             let (is_hand, k) = match l {
                 Limb::Shoulder1 | Limb::Elbow1 => (true, 0),
                 Limb::Shoulder2 | Limb::Elbow2 => (true, 1),
@@ -5070,6 +5097,10 @@ impl Son {
             return;
         }
         for l in broken {
+            if *l == Limb::Waist {
+                self.eject(world);
+                return;
+            }
             let k = match l {
                 Limb::Shoulder1 | Limb::Elbow1 => 0,
                 Limb::Shoulder2 | Limb::Elbow2 => 1,
@@ -5280,7 +5311,7 @@ impl Kid {
                         world.b2_mut().destroy_joint(j);
                     }
                 }
-                Limb::Neck | Limb::Waist => self.eject(world),
+                Limb::Waist => self.eject(world),
                 _ => {}
             }
         }
@@ -5946,6 +5977,10 @@ impl Elf {
                     self.check_legs_ok(world);
                 }
             }
+        }
+        // the `dead` setter (a broken neck, say) stops the running
+        if self.doll.dead && self.feet.iter().any(Option::is_some) {
+            self.disable_running(world);
         }
     }
 
