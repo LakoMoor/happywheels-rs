@@ -197,6 +197,9 @@ mod browser {
             }
         }
 
+        /// Whether the last menu click hit a button.
+        pub fn menu_pressed(&mut self) -> bool { self.menu.as_mut().is_some_and(Menu::take_press) }
+
         pub fn close_menu(&mut self) { self.menu_open = false; self.last_time = None; }
 
         /// Replace the current level only after it parses successfully.

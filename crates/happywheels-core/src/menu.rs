@@ -66,6 +66,8 @@ pub struct Menu {
     body_font: FontArc,
     buttons: Vec<Button>,
     presentation: Presentation,
+    /// A button was released: the original plays `MenuSelect`.
+    pressed: bool,
 }
 
 impl Menu {
@@ -77,7 +79,7 @@ impl Menu {
         let (faces, face_pixels) = Atlas::from_bytes(read("image/character_images/character_images.json")?, read("image/character_images/character_images.png")?)?;
         let title_font = FontArc::try_from_vec(read("fonts/ClarendonLTStd-Bold.otf")?.clone()).map_err(|e| anyhow::anyhow!("title font: {e:?}"))?;
         let body_font = FontArc::try_from_vec(read("fonts/HelveticaNeueLTStd-Roman.otf")?.clone()).map_err(|e| anyhow::anyhow!("body font: {e:?}"))?;
-        Ok(Self { scene: Scene::Main, ui, ui_pixels, ui_parts, ui_parts_pixels, faces, face_pixels, title_font, body_font, buttons: Vec::new(), presentation: Presentation { scale: 1.0, offset_x: 0.0, offset_y: 0.0 } })
+        Ok(Self { scene: Scene::Main, ui, ui_pixels, ui_parts, ui_parts_pixels, faces, face_pixels, title_font, body_font, buttons: Vec::new(), presentation: Presentation { scale: 1.0, offset_x: 0.0, offset_y: 0.0 }, pressed: false })
     }
     pub fn load(assets: &AssetRoot) -> Result<Self> {
         let ui = assets.atlas("animate/game-ui/game_ui_atlas_1/game_ui_atlas_1.json")?;
@@ -99,6 +101,7 @@ impl Menu {
             title_font,
             body_font,
             buttons: Vec::new(),
+            pressed: false,
             presentation: Presentation {
                 scale: 1.0,
                 offset_x: 0.0,
@@ -114,6 +117,11 @@ impl Menu {
         }
     }
 
+    /// Whether a click since the last call hit a button (the app then plays the `MenuSelect` sound).
+    pub fn take_press(&mut self) -> bool {
+        std::mem::take(&mut self.pressed)
+    }
+
     pub fn handle_click(&mut self, x: f32, y: f32) -> Option<MenuAction> {
         let logical_x = (x - self.presentation.offset_x) / self.presentation.scale;
         let logical_y = (y - self.presentation.offset_y) / self.presentation.scale;
@@ -124,6 +132,7 @@ impl Menu {
                 && logical_x < (button.rect.x + button.rect.w) as f32
                 && logical_y < (button.rect.y + button.rect.h) as f32
         })?;
+        self.pressed = true;
         match button.action {
             ButtonAction::Play => {
                 self.scene = Scene::CharacterSelect;

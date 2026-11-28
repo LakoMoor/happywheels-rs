@@ -61,12 +61,13 @@ export class SpriteAudio {
   }
 
   play(name, at, listener, scale = 1) {
-    // Victory uses playSoundItem in the original, not a positional sound instance.
-    const gain = name === 'Victory' ? 1 : this.gainAt(at, listener, scale);
-    if (name !== 'Victory' && !this.inRange(at, listener)) return;
+    // Victory and the menu click use playSoundItem in the original, not a positional sound instance.
+    const flat = name === 'Victory' || name === 'MenuSelect';
+    const gain = flat ? 1 : this.gainAt(at, listener, scale);
+    if (!flat && !this.inRange(at, listener)) return;
     const voice = this.create(name, gain);
     if (!voice) return;
-    voice.at = name === 'Victory' ? null : at;
+    voice.at = flat ? null : at;
     voice.scale = scale;
     voice.panner.pan.value = voice.at ? this.panAt(at, listener) : 0;
     while (this.voices.length >= 24) this.voices.shift().source.stop();

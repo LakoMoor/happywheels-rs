@@ -702,7 +702,13 @@ impl ApplicationHandler for App {
                 button: MouseButton::Left,
                 ..
             } if self.sim.is_none() => {
-                if let Some(action) = self.menu.handle_click(self.cursor.0, self.cursor.1) {
+                let action = self.menu.handle_click(self.cursor.0, self.cursor.1);
+                if self.menu.take_press() {
+                    if let Some(audio) = &self.audio {
+                        audio.play("MenuSelect", [0.0, 0.0], [0.0, 0.0]);
+                    }
+                }
+                if let Some(action) = action {
                     match action {
                         MenuAction::Exit => event_loop.exit(),
                         MenuAction::LoadLevel => {

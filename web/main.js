@@ -80,6 +80,8 @@ try {
       } else if (action === -2) {
         menuOpen = false;
       }
+      // after the branches: starting a character clears the playing voices
+      if (game.menu_pressed()) audio.play('MenuSelect', null, null);
     } else {
       game.pointer((event.clientX - rect.left) * 900 / rect.width, (event.clientY - rect.top) * 500 / rect.height, clicked);
     }
