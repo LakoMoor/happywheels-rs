@@ -56,6 +56,17 @@ fn solid(mut d: ShapeDef, density: f64, group: i16) -> ShapeDef {
     d
 }
 
+/// Where a clip of the level's `backGround` that follows a body is now.
+pub struct Clip {
+    pub name: String,
+    /// World px and radians.
+    pub position: [f64; 2],
+    pub angle: f64,
+    pub visible: bool,
+    /// Rotation of the clip's `inner` node (gears).
+    pub inner: Option<f64>,
+}
+
 struct Piston {
     joint: usize,
     body: BodyId,
@@ -80,6 +91,8 @@ pub(super) struct Level1 {
     /// Finish zone (m): lower and upper corner.
     zone: [Vec2; 2],
     end_done: bool,
+    /// Clip name (`<guide name>mc`), its body and the gears' `inner` rotation.
+    clips: Vec<(String, BodyId, Option<f64>)>,
 }
 
 impl World {
@@ -114,6 +127,7 @@ impl World {
                 _ => {}
             }
         }
+        let mut clips: Vec<(String, BodyId, Option<f64>)> = Vec::new();
         // createDynamicShapes: `<name>_<density>_<sleep>`
         for s in &g {
             let parts: Vec<&str> = s.name.split('_').collect();
@@ -123,6 +137,7 @@ impl World {
             let id = w.b.create_body(&BodyDef { is_sleeping: parts.get(2) == Some(&"sleep"), ..BodyDef::default() });
             w.b.create_shape(id, &s.boxed(parts[1].parse().unwrap_or(0.0), 0));
             w.b.set_mass_from_shapes(id);
+            clips.push((format!("{}mc", parts[0]), id, None));
         }
         // createItems: the finish block first
         let end = named("end");
@@ -144,6 +159,7 @@ impl World {
                 id
             })
             .collect();
+        clips.extend(bodies.iter().enumerate().map(|(i, &id)| (format!("bamc{i}"), id, None)));
         let pin = |w: &mut World, a: BodyId, b: BodyId, x: f64, y: f64| {
             let d = RevoluteJointDef::initialize(w.b.body(a), a, w.b.body(b), b, Vec2::new(x / PS, y / PS));
             w.b.create_revolute_joint(&d);
@@ -172,6 +188,7 @@ impl World {
             d.max_motor_torque = 10_000_000.0;
             d.motor_speed = motor;
             w.b.create_revolute_joint(&d);
+            clips.push((format!("{name}mc"), id, Some(s.angle())));
         }
 
         // pistons (speed 3 m/s, travel 3.4 m); the second starts 90 frames into a 60 frame wait
@@ -190,6 +207,7 @@ impl World {
             d.max_motor_force = 100_000.0;
             let joint = w.b.create_prismatic_joint(&d);
             let (waiting, counter) = if offset > 0 { (true, wait - offset) } else { (false, 0) };
+            clips.push((format!("{name}mc"), id, None));
             pistons.push(Piston { joint, body: id, speed, wait, counter, waiting, raising: true });
         }
 
@@ -201,8 +219,31 @@ impl World {
         let sensor = w.b.create_shape(body, &solid(boxed, 1.0, 0));
 
         w.b.c.report_results = true;
-        w.level1 = Some(Box::new(Level1 { pistons, mine: Mine { body, sensor, triggered: false, gone: false }, end_shape, zone, end_done: false }));
+        w.level1 = Some(Box::new(Level1 { pistons, mine: Mine { body, sensor, triggered: false, gone: false }, end_shape, zone, end_done: false, clips }));
         w
+    }
+
+    /// The moving bodies of the built-in level.
+    pub fn level1_bodies(&self) -> Vec<BodyId> {
+        self.level1.iter().flat_map(|l| l.clips.iter().map(|c| c.1)).collect()
+    }
+
+    /// The clips of the built-in level that follow bodies (`paint`), and the mine, which disappears when it goes off.
+    pub fn level1_clips(&self) -> Vec<Clip> {
+        let Some(level) = &self.level1 else { return Vec::new() };
+        let mut out: Vec<Clip> = level
+            .clips
+            .iter()
+            .map(|(name, id, inner)| {
+                let body = self.b.body(*id);
+                let c = body.sweep.c;
+                Clip { name: name.clone(), position: [c.x * PS, c.y * PS], angle: body.sweep.a, visible: true, inner: *inner }
+            })
+            .collect();
+        if level.mine.gone {
+            out.push(Clip { name: "mine1mc".into(), position: [0.0; 2], angle: 0.0, visible: false, inner: None });
+        }
+        out
     }
 
     /// `Level1.actions` and the level's contact listeners, after the step: the finish zone, the pistons, the mine.

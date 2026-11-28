@@ -173,6 +173,16 @@ pub struct Level {
     pub specials: Vec<Special>,
     pub groups: Vec<Group>,
     pub triggers: Vec<Trigger>,
+    /// The level built into the original (id 1) instead of a `levelXML` one.
+    pub builtin: bool,
+}
+
+impl Level {
+    /// The built-in level: it has no XML, its content comes from `World::level1`.
+    pub fn level1() -> Self {
+        let info = Info { start: crate::physics::LEVEL1_START, background_color: 0xFF_FFFF, ..Info::default() };
+        Level { info, builtin: true, ..Level::default() }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]

@@ -303,7 +303,7 @@ struct Player {
 
 impl Player {
     fn new(assets: &std::path::Path, level: &happywheels_core::level::Level, character: usize) -> Self {
-        let mut world = happywheels_core::physics::World::from_level(level);
+        let mut world = happywheels_core::physics::World::for_level(level);
         if !world.spawn_bike(character, level.info.start) {
             world.spawn_character(character, level.info.start);
         }
@@ -335,11 +335,7 @@ impl Sim {
 
 /// Sprites for the c3 bike + rider (other characters still use the polygon fallback).
 fn make_backdrop(assets: &std::path::Path, level: &happywheels_core::level::Level) -> Option<happywheels_core::sprites::Sprites> {
-    match level.info.background {
-        1 => happywheels_core::sprites::Sprites::open_backdrop(assets),
-        2 => happywheels_core::sprites::Sprites::open_city_backdrop(assets),
-        _ => None,
-    }
+    happywheels_core::sprites::Sprites::open_level_backdrop(&happywheels_core::sprites::SpriteAssets::Directory(assets.to_path_buf()), level)
 }
 
 fn make_sprites(assets: &std::path::Path, character: usize, world: &happywheels_core::physics::World, start: [f32; 2]) -> Option<happywheels_core::sprites::Sprites> {
@@ -477,7 +473,7 @@ impl App {
         let xml = std::fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
         let level = happywheels_core::level::parse(&xml)?;
         let level2 = happywheels_core::level::parse(&xml)?;
-        let mut world = happywheels_core::physics::World::from_level(&level);
+        let mut world = happywheels_core::physics::World::for_level(&level);
         if !world.spawn_bike(self.character, level.info.start) {
             world.spawn_character(self.character, level.info.start);
         }
@@ -749,6 +745,8 @@ struct Options {
     check_assets: bool,
     frame_limit: Option<u32>,
     level: Option<PathBuf>,
+    /// `--level1`: the level built into the original instead of a file.
+    level1: bool,
     sim_steps: u32,
     level_png: Option<PathBuf>,
     window: bool,
@@ -769,6 +767,7 @@ fn parse_options() -> Result<Option<Options>> {
         check_assets: false,
         frame_limit: None,
         level: None,
+        level1: false,
         sim_steps: 90,
         level_png: None,
         window: false,
@@ -790,6 +789,7 @@ fn parse_options() -> Result<Option<Options>> {
                 ));
             }
             "--check-assets" => options.check_assets = true,
+            "--level1" => options.level1 = true,
             "--level" => options.level = Some(PathBuf::from(args.next().context("--level needs a file")?)),
             "--blood" => happywheels_core::blood::set_blood_setting(args.next().context("--blood needs 0 to 4")?.parse::<u8>()?),
             "--particles" => happywheels_core::blood::set_max_particles(args.next().context("--particles needs 0 to 2000")?.parse::<usize>()?),
@@ -811,7 +811,7 @@ fn parse_options() -> Result<Option<Options>> {
             }
             "--help" | "-h" => {
                 println!(
-                    "happywheels [--assets DIR] [--check-assets] [--screenshot FILE] [--frames N] [--level FILE.xml [--steps N] [--level-png F] [--window]] [--fps60] [--character 1..11] [--players 1|2] [--blood 0..4] [--particles N]"
+                    "happywheels [--assets DIR] [--check-assets] [--screenshot FILE] [--frames N] [--level1 | --level FILE.xml [--steps N] [--level-png F] [--window]] [--fps60] [--character 1..11] [--players 1|2] [--blood 0..4] [--particles N]"
                 );
                 return Ok(None);
             }
@@ -831,15 +831,21 @@ fn main() -> Result<()> {
         let report = assets.check_content()?;
         println!("{}", serde_json::to_string_pretty(&report)?);
     }
-    if let Some(path) = options.level.as_ref().filter(|_| !options.window) {
-        // Headless simulation: load a level XML, step the (stand-in) physics, print results.
-        let xml = std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
-        let level = happywheels_core::level::parse(&xml)?;
+    let chosen = match &options.level {
+        _ if options.level1 => Some(happywheels_core::level::Level::level1()),
+        Some(path) => {
+            let xml = std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+            Some(happywheels_core::level::parse(&xml)?)
+        }
+        None => None,
+    };
+    if let Some(level) = chosen.clone().filter(|_| !options.window) {
+        // Headless simulation: load the level, step the physics, print results.
         println!(
             "level: {} shapes, {} specials, {} joints, start {:?}",
             level.shapes.len(), level.special_count, level.joint_count, level.info.start
         );
-        let mut world = happywheels_core::physics::World::from_level(&level);
+        let mut world = happywheels_core::physics::World::for_level(&level);
         let character = options.character.unwrap_or(3);
         if !world.spawn_bike(character, level.info.start) {
             world.spawn_character(character, level.info.start);
@@ -917,11 +923,9 @@ fn main() -> Result<()> {
         app.players = 2;
         app.net = Some(net);
     }
-    if let (Some(path), true) = (&options.level, options.window) {
-        let xml = std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
-        let level = happywheels_core::level::parse(&xml)?;
-        let level2 = happywheels_core::level::parse(&xml)?;
-        let mut world = happywheels_core::physics::World::from_level(&level);
+    if let Some(level) = chosen.filter(|_| options.window) {
+        let level2 = level.clone();
+        let mut world = happywheels_core::physics::World::for_level(&level);
         if !world.spawn_bike(app.character, level.info.start) {
             world.spawn_character(app.character, level.info.start);
         }

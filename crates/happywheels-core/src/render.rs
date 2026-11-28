@@ -50,6 +50,28 @@ pub fn render_level_view(level: &Level, world: &World, width: u32, height: u32, 
     }
     let (cx, cy) = (camera[0], camera[1]);
     let to_screen = |x: f32, y: f32| ((x - cx) * zoom + width as f32 / 2.0, (y - cy) * zoom + height as f32 / 2.0);
+    let view_offset = (f64::from(width as f32 / (2.0 * zoom) - cx), f64::from(height as f32 / (2.0 * zoom) - cy));
+    if let Some(b) = backdrop {
+        b.draw_level_background(&mut img, world, f64::from(zoom), view_offset);
+    }
+    // without its artwork the built-in level is shown as its collision shapes
+    if level.builtin && backdrop.is_none() {
+        let statics = (world.level_body(), Rgba([0x80, 0x80, 0x80, 255]));
+        for (h, col) in std::iter::once(statics).chain(world.level1_bodies().into_iter().map(|h| (h, Rgba([0x80, 0x70, 0x60, 255])))) {
+            for sh in world.body_draw_shapes(h) {
+                match sh {
+                    DrawShape::Poly(pts) => {
+                        let pts: Vec<_> = pts.iter().map(|p| to_screen(p[0], p[1])).collect();
+                        poly(&mut img, &pts, col);
+                    }
+                    DrawShape::Circle { center, radius } => {
+                        let (sx, sy) = to_screen(center[0], center[1]);
+                        draw_filled_circle_mut(&mut img, (sx as i32, sy as i32), (radius * zoom) as i32, col);
+                    }
+                }
+            }
+        }
+    }
     for (i, s) in level.shapes.iter().enumerate() {
         if !world.shape_visible.get(i).copied().unwrap_or(true) { continue; }
         let col = colour(s);
@@ -188,6 +210,9 @@ pub fn render_level_view(level: &Level, world: &World, width: u32, height: u32, 
             let angle = ba + s.num("angle").unwrap_or(0.0).to_radians();
             draw_shape(&mut img, s, (px, py), angle, colour(s), &to_screen);
         }
+    }
+    if let Some(b) = backdrop {
+        b.draw_level_foreground(&mut img, f64::from(zoom), view_offset);
     }
     img
 }

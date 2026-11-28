@@ -111,7 +111,7 @@ mod browser {
     }
 
     fn world_for(level: &Level, character: usize) -> World {
-        let mut world = World::from_level(level);
+        let mut world = World::for_level(level);
         if !world.spawn_bike(character, level.info.start) {
             world.spawn_character(character, level.info.start);
         }
@@ -169,11 +169,7 @@ mod browser {
                     )
                 })?;
             sprites.bind_vehicle_rider(&self.world, self.level.info.start);
-            let backdrop = match self.level.info.background {
-                1 => Sprites::open_backdrop_from(&assets),
-                2 => Sprites::open_city_backdrop_from(&assets),
-                _ => None,
-            };
+            let backdrop = Sprites::open_level_backdrop(&assets, &self.level);
             if let Some(editor) = &mut self.editor {
                 editor.use_assets(&assets);
             }
@@ -211,6 +207,14 @@ mod browser {
             Ok(())
         }
 
+        /// The level built into the original.
+        pub fn load_level1(&mut self, character: usize) -> Result<(), JsValue> {
+            self.replace_level(Level::level1(), character)?;
+            // the editor has no XML to open for it
+            self.source = SAMPLE.to_string();
+            Ok(())
+        }
+
         /// Recreate the current level and rider, retaining the loaded asset pack.
         pub fn restart(&mut self, character: usize) -> Result<(), JsValue> {
             self.replace_level(self.level.clone(), character)
@@ -229,14 +233,7 @@ mod browser {
                 sprites.bind_vehicle_rider(&self.world, self.level.info.start);
                 Some(sprites)
             });
-            self.backdrop =
-                self.assets
-                    .as_ref()
-                    .and_then(|assets| match self.level.info.background {
-                        1 => Sprites::open_backdrop_from(assets),
-                        2 => Sprites::open_city_backdrop_from(assets),
-                        _ => None,
-                    });
+            self.backdrop = self.assets.as_ref().and_then(|assets| Sprites::open_level_backdrop(assets, &self.level));
             self.keys = [false; 8];
             self.accumulator = 0.0;
             self.last_time = None;

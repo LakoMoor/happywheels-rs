@@ -7,6 +7,7 @@ pub mod character;
 pub mod editor;
 pub mod editor_session;
 pub mod level;
+mod level1_art;
 pub mod menu;
 pub mod physics;
 pub mod render;

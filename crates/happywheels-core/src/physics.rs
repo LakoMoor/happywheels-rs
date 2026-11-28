@@ -15,7 +15,7 @@ use crate::specials::{JointSpec, SimpleBody};
 
 pub const PHYS_SCALE: f32 = 62.5;
 mod level1;
-pub use level1::START as LEVEL1_START;
+pub use level1::{Clip as Level1Clip, START as LEVEL1_START};
 
 const PS: f64 = 62.5;
 pub const TIME_STEP: f64 = 1.0 / 30.0;
@@ -698,6 +698,11 @@ pub struct World {
 }
 
 impl World {
+    /// [`from_level`](Self::from_level), or the built-in level.
+    pub fn for_level(level: &Level) -> Self {
+        if level.builtin { Self::level1() } else { Self::from_level(level) }
+    }
+
     pub fn from_level(level: &Level) -> Self {
         // Original session: world bounds from the level (x -250, y -5250, 20500 x 15500), gravity (0, 10).
         let mut b = B2::new(Vec2::new(-250.0 / PS, -5250.0 / PS), Vec2::new(20250.0 / PS, 10250.0 / PS), Vec2::new(0.0, 10.0), true);

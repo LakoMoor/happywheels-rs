@@ -118,6 +118,7 @@ try {
       return { file, path: start < 0 ? '' : parts.slice(start).join('/') };
     }).filter(({path}) => /^animate\/(character\d+|character-shared|game|backgrounds)\/.*@0\.6x\.(json|png)$/.test(path)
       || /^animate\/game-ui\/game_ui_atlas_[13]\/game_ui_atlas_[13]\.(json|png)$/.test(path)
+      || /^animate\/level1\/(level_\d+\.png|shapes\/level1\.shapes\.txt)$/.test(path)
       || /^image\/character_images\/character_images\.(json|png)$/.test(path)
       || /^fonts\/(ClarendonLTStd-Bold|HelveticaNeueLTStd-Roman)\.otf$/.test(path));
     if (!files.length) {
@@ -159,6 +160,21 @@ try {
       status.textContent = `Loaded ${file.name}.`;
     } catch (error) {
       status.textContent = `Could not load level: ${error}`;
+    }
+  });
+  document.querySelector('#level1').addEventListener('click', () => {
+    try {
+      game.set_blood_setting(Number(document.querySelector('#blood').value));
+      game.load_level1(Number(character.value));
+      setPaused(false);
+      menuOpen = false;
+      audio.clear();
+      victoryShown = false;
+      input.clear();
+      status.textContent = 'Built-in level.';
+      canvas.focus();
+    } catch (error) {
+      status.textContent = `Could not load the level: ${error}`;
     }
   });
   document.querySelector('#restart').addEventListener('click', () => {

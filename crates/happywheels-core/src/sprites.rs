@@ -139,7 +139,7 @@ impl SpriteAssets {
         Self::Memory(std::rc::Rc::new(files))
     }
 
-    fn root(&self) -> &Path {
+    pub(crate) fn root(&self) -> &Path {
         match self { Self::Directory(path) => path, Self::Memory(_) => Path::new("") }
     }
 
@@ -147,11 +147,11 @@ impl SpriteAssets {
         match self { Self::Directory(_) => std::fs::read(path).ok(), Self::Memory(files) => files.get(path).cloned() }
     }
 
-    fn string(&self, path: &Path) -> Option<String> {
+    pub(crate) fn string(&self, path: &Path) -> Option<String> {
         String::from_utf8(self.read(path)?).ok()
     }
 
-    fn image(&self, path: &Path) -> Option<image::DynamicImage> {
+    pub(crate) fn image(&self, path: &Path) -> Option<image::DynamicImage> {
         image::load_from_memory(&self.read(path)?).ok()
     }
 }
@@ -211,6 +211,8 @@ pub struct Sprites {
     /// Asset root (kept for the lazily opened NPC clips) and those clips (`NPCSprite1..12` as top-level nodes `npc1..12`).
     assets: SpriteAssets,
     npc: std::cell::OnceCell<Option<Box<Sprites>>>,
+    /// The built-in level's own artwork (a backdrop opened by `open_level1_from`).
+    level1: Option<Box<crate::level1_art::Level1Art>>,
 }
 
 /// One baked `drawBuilding` result: the top `W` rows drawn once (and again `dup` px to the right) and `k` tiled rows below them.
@@ -324,7 +326,7 @@ impl Sprites {
                 pages.push((atlas.frames, img.to_rgba8()));
             }
         }
-        Some(Self { blurred: Default::default(), view: Default::default(), trace: Default::default(), layers, shown: Default::default(), queue: Default::default(), clip, pages, bindings: Vec::new(), city: Vec::new(), hidden: Default::default(), show_wound: Default::default(), grind_mask: Default::default(), assets: source.clone(), npc: Default::default() })
+        Some(Self { blurred: Default::default(), view: Default::default(), trace: Default::default(), layers, shown: Default::default(), queue: Default::default(), clip, pages, bindings: Vec::new(), city: Vec::new(), hidden: Default::default(), show_wound: Default::default(), grind_mask: Default::default(), assets: source.clone(), npc: Default::default(), level1: None })
     }
 
     /// Clip set of the NPC ragdolls: `NPCSprite1..12` (dumped from the oracle) with the atlas pages that hold their textures (game atlases and the
@@ -381,7 +383,7 @@ impl Sprites {
             missing.retain(|t| !atlas.frames.contains_key(t));
             pages.push((atlas.frames, img.to_rgba8()));
         }
-        Some(Self { blurred: Default::default(), view: Default::default(), trace: Default::default(), layers: Default::default(), shown: Default::default(), queue: Default::default(), clip, pages, bindings: Vec::new(), city: Vec::new(), hidden: Default::default(), show_wound: Default::default(), grind_mask: Default::default(), assets: source.clone(), npc: Default::default() })
+        Some(Self { blurred: Default::default(), view: Default::default(), trace: Default::default(), layers: Default::default(), shown: Default::default(), queue: Default::default(), clip, pages, bindings: Vec::new(), city: Vec::new(), hidden: Default::default(), show_wound: Default::default(), grind_mask: Default::default(), assets: source.clone(), npc: Default::default(), level1: None })
     }
 
     /// Draws the NPC of special `sp` (frame 1 of every part, `shape` guides hidden): each part clip sits at its body's centre of mass with the body's
@@ -475,7 +477,39 @@ impl Sprites {
         if pages.is_empty() {
             return None;
         }
-        Some(Self { blurred: Default::default(), view: Default::default(), trace: Default::default(), layers: Default::default(), shown: Default::default(), queue: Default::default(), clip, pages, bindings: Vec::new(), city: Vec::new(), hidden: Default::default(), show_wound: Default::default(), grind_mask: Default::default(), assets: source.clone(), npc: Default::default() })
+        Some(Self { blurred: Default::default(), view: Default::default(), trace: Default::default(), layers: Default::default(), shown: Default::default(), queue: Default::default(), clip, pages, bindings: Vec::new(), city: Vec::new(), hidden: Default::default(), show_wound: Default::default(), grind_mask: Default::default(), assets: source.clone(), npc: Default::default(), level1: None })
+    }
+
+    /// The backdrop a level asks for (`bg`), or the artwork of the built-in level.
+    pub fn open_level_backdrop(source: &SpriteAssets, level: &crate::level::Level) -> Option<Self> {
+        match level.info.background {
+            _ if level.builtin => Self::open_level1_from(source),
+            1 => Self::open_backdrop_from(source),
+            2 => Self::open_city_backdrop_from(source),
+            _ => None,
+        }
+    }
+
+    /// The built-in level: the green sky and its own three parallax layers, plus its background and foreground (`Level1::createBackDrops`,
+    /// `createMovieClips`). `source` needs `animate/level1` and the backgrounds atlases.
+    pub fn open_level1_from(source: &SpriteAssets) -> Option<Self> {
+        let mut s = Self::open_backdrop_from(source)?;
+        s.clip.truncate(1);
+        s.level1 = Some(Box::new(crate::level1_art::Level1Art::open(source)?));
+        Some(s)
+    }
+
+    /// The built-in level's `backGround` (nothing for other backdrops). `view` is image px per world px, `offset` as in [`draw`](Self::draw).
+    pub fn draw_level_background(&self, img: &mut RgbaImage, world: &World, zoom: f64, offset: (f64, f64)) {
+        if let Some(art) = &self.level1 {
+            art.draw_background(img, world, [zoom, 0.0, 0.0, zoom, offset.0 * zoom, offset.1 * zoom]);
+        }
+    }
+
+    pub fn draw_level_foreground(&self, img: &mut RgbaImage, zoom: f64, offset: (f64, f64)) {
+        if let Some(art) = &self.level1 {
+            art.draw_foreground(img, [zoom, 0.0, 0.0, zoom, offset.0 * zoom, offset.1 * zoom]);
+        }
     }
 
     /// City backdrop (`bg='2'`): `city_bd1` (fixed sky/clouds) below two layers of baked buildings (`backdrop2`: multiplier .25, blur 5;
@@ -573,12 +607,16 @@ impl Sprites {
         let (cx, cy) = (f64::from(img.width()) / 2.0 - f64::from(camera[0]), f64::from(img.height()) / 2.0 - f64::from(camera[1]));
         // Flash `BlurFilter` strengths of the layers (sky has none); blur is applied as a gaussian with the variance of `quality` (3) box passes.
         const BLUR: [f32; 4] = [0.0, 7.0, 6.0, 3.0];
-        for (index, ((layer, m), blur)) in self.clip.iter().zip(MULTIPLIERS).zip(BLUR).enumerate() {
+        // the built-in level draws its own layers above the shared sky
+        let count = if self.level1.is_some() { MULTIPLIERS.len() } else { self.clip.len() };
+        for (index, (m, blur)) in MULTIPLIERS.into_iter().zip(BLUR).enumerate().take(count) {
             let g = local((cx * m).round(), (cy * m).round(), 0.0, 1.0, 1.0);
+            let paint = |img: &mut RgbaImage, g: M| match (&self.level1, index) {
+                (Some(art), 1..) => art.draw_backdrop_layer(img, ["backdrop4", "backdrop2", "backdrop3"][index - 1], g),
+                _ => self.clip.get(index).into_iter().flat_map(|l| &l.k).for_each(|child| self.draw_node(img, child, g)),
+            };
             if blur == 0.0 {
-                for child in &layer.k {
-                    self.draw_node(img, child, g);
-                }
+                paint(img, g);
                 continue;
             }
             // Blurring a whole layer costs more than the rest of the frame, so each one is kept, rendered with a margin, and reused
@@ -594,9 +632,7 @@ impl Sprites {
             if !cache[index].as_ref().is_some_and(fits) {
                 let mut tmp = RgbaImage::new(size.0, size.1);
                 let shifted = local((ox + MARGIN) as f64, (oy + MARGIN) as f64, 0.0, 1.0, 1.0);
-                for child in &layer.k {
-                    self.draw_node(&mut tmp, child, shifted);
-                }
+                paint(&mut tmp, shifted);
                 // premultiplied, as Flash blurs: otherwise transparent black bleeds into the edges as a dark halo
                 for p in tmp.pixels_mut() {
                     for i in 0..3 {
