@@ -5,6 +5,7 @@ pub mod camera;
 pub mod atlas;
 pub mod character;
 pub mod editor;
+pub mod editor_session;
 pub mod level;
 pub mod menu;
 pub mod physics;

@@ -1,6 +1,9 @@
 #[cfg(target_arch = "wasm32")]
 mod renderer;
 
+#[cfg(target_arch = "wasm32")]
+mod editor_ui;
+
 #[cfg(any(target_arch = "wasm32", test))]
 fn in_mouse_trigger(point: [f32; 2], position: [f32; 2], size: [f32; 2]) -> bool {
     (point[0] - position[0]).abs() < size[0].abs() * 0.5
@@ -44,7 +47,7 @@ mod browser {
     use wasm_bindgen::prelude::*;
     use web_sys::HtmlCanvasElement;
 
-    use crate::renderer::Renderer;
+    use crate::{editor_ui::EditorUi, renderer::Renderer};
 
     const SAMPLE: &str = include_str!("../../../tests/levels/sample.xml");
 
@@ -100,6 +103,11 @@ mod browser {
         menu: Option<Menu>,
         menu_open: bool,
         paused: bool,
+        /// The XML of the level being played (the editor opens it).
+        source: String,
+        editor: Option<EditorUi>,
+        /// The editor's level is being played.
+        testing: bool,
     }
 
     fn world_for(level: &Level, character: usize) -> World {
@@ -144,6 +152,9 @@ mod browser {
                 menu: None,
                 menu_open: false,
                 paused: false,
+                source: SAMPLE.to_string(),
+                editor: None,
+                testing: false,
             })
         }
 
@@ -163,6 +174,9 @@ mod browser {
                 2 => Sprites::open_city_backdrop_from(&assets),
                 _ => None,
             };
+            if let Some(editor) = &mut self.editor {
+                editor.use_assets(&assets);
+            }
             self.assets = Some(assets);
             self.sprites = Some(sprites);
             self.backdrop = backdrop;
@@ -192,7 +206,9 @@ mod browser {
         /// Replace the current level only after it parses successfully.
         pub fn load_level(&mut self, xml: &str, character: usize) -> Result<(), JsValue> {
             let level = happywheels_core::level::parse(xml).map_err(js_error)?;
-            self.replace_level(level, character)
+            self.replace_level(level, character)?;
+            self.source = xml.to_string();
+            Ok(())
         }
 
         /// Recreate the current level and rider, retaining the loaded asset pack.
@@ -293,7 +309,113 @@ mod browser {
             }
         }
 
+        /// Open the level editor on the current level (or return to it from a test).
+        pub fn editor_open(&mut self) {
+            if self.editor.is_none() {
+                let mut editor = EditorUi::new(&self.source, self.canvas.width().max(1), self.canvas.height().max(1));
+                if let Some(assets) = &self.assets {
+                    editor.use_assets(assets);
+                }
+                self.editor = Some(editor);
+            }
+            if let Some(editor) = &mut self.editor {
+                editor.redraw();
+            }
+            self.testing = false;
+            self.menu_open = false;
+            self.keys = [false; 8];
+        }
+
+        pub fn editor_close(&mut self) {
+            self.editor = None;
+            self.testing = false;
+            self.last_time = None;
+        }
+
+        /// Play the level being edited; the level's own character wins when it forces one.
+        pub fn editor_test(&mut self, character: usize) -> Result<(), JsValue> {
+            let Some(xml) = self.editor.as_ref().map(EditorUi::xml) else { return Ok(()) };
+            let level = happywheels_core::level::parse(&xml).map_err(js_error)?;
+            let character = self.editor.as_ref().and_then(EditorUi::forced_character).unwrap_or(character);
+            self.replace_level(level, character)?;
+            self.source = xml;
+            self.testing = true;
+            Ok(())
+        }
+
+        pub fn editor_pointer(&mut self, kind: u8, x: f64, y: f64, shift: bool) {
+            if let Some(e) = &mut self.editor {
+                e.pointer(kind, x, y, shift);
+            }
+        }
+
+        pub fn editor_pan(&mut self, dx: f64, dy: f64) {
+            if let Some(e) = &mut self.editor {
+                e.pan(dx, dy);
+            }
+        }
+
+        pub fn editor_zoom(&mut self, factor: f64, x: f64, y: f64) {
+            if let Some(e) = &mut self.editor {
+                e.zoom(factor, x, y);
+            }
+        }
+
+        pub fn editor_key(&mut self, code: u32, shift: bool, ctrl: bool) -> bool {
+            self.editor.as_mut().is_some_and(|e| e.key(code, shift, ctrl))
+        }
+
+        pub fn editor_command(&mut self, name: &str) {
+            if let Some(e) = &mut self.editor {
+                e.command(name);
+            }
+        }
+
+        pub fn editor_tool(&mut self, tool: usize, shape: usize, special: usize, sliding: bool) {
+            if let Some(e) = &mut self.editor {
+                e.tool(tool, shape, special, sliding);
+            }
+        }
+
+        pub fn editor_set(&mut self, name: &str, value: &str) {
+            if let Some(e) = &mut self.editor {
+                e.set_property(name, value);
+            }
+        }
+
+        pub fn editor_set_info(&mut self, name: &str, value: &str) {
+            if let Some(e) = &mut self.editor {
+                e.set_info(name, value);
+            }
+        }
+
+        pub fn editor_load(&mut self, xml: &str) -> Result<(), JsValue> {
+            self.editor.as_mut().map_or(Ok(()), |e| e.load(xml).map_err(js_error))
+        }
+
+        pub fn editor_xml(&self) -> String {
+            self.editor.as_ref().map(EditorUi::xml).unwrap_or_default()
+        }
+
+        pub fn editor_state(&self) -> String {
+            self.editor.as_ref().map(EditorUi::state).unwrap_or_default()
+        }
+
+        pub fn editor_special_names() -> String {
+            EditorUi::special_names()
+        }
+
         pub fn frame(&mut self, now_ms: f64) -> Result<String, JsValue> {
+            if let Some(editor) = self.editor.as_mut().filter(|_| !self.testing) {
+                self.last_time = None;
+                let (w, h) = (self.canvas.width().max(1), self.canvas.height().max(1));
+                if let Some(frame) = editor.frame(w, h) {
+                    self.renderer.resize(w, h);
+                    self.renderer.upload(&frame).map_err(js_error)?;
+                    self.renderer.render();
+                }
+                return Ok("[[],[],[0,0],[]]".into());
+            }
             if self.menu_open {
                 self.last_time = None;
                 let (w, h) = (self.canvas.width().max(1), self.canvas.height().max(1));

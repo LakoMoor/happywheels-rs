@@ -1,6 +1,7 @@
 import init, { AssetPack, Game, audio_table } from './pkg/happywheels_web.js';
 import { SpriteAudio } from './audio.mjs';
 import { GameInput } from './input.mjs';
+import { EditorPanel } from './editor.mjs';
 
 const canvas = document.querySelector('#game');
 const status = document.querySelector('#status');
@@ -52,7 +53,15 @@ try {
     pauseButton.textContent = value ? 'Resume' : 'Pause';
     pauseButton.setAttribute('aria-pressed', String(value));
   };
+  const editor = new EditorPanel(game, JSON.parse(Game.editor_special_names()), {
+    opened: () => { input.clear(); audio.clear(); menuOpen = false; setPaused(false); },
+    closed: () => { input.clear(); audio.clear(); status.textContent = 'Editor closed.'; },
+    testing: () => { input.clear(); audio.clear(); victoryShown = false; setPaused(false); },
+    status: text => { status.textContent = text; },
+    character: () => Number(character.value),
+  });
   const pointer = (event, clicked) => {
+    if (editor.editing()) return;
     const rect = canvas.getBoundingClientRect();
     if (!rect.width || !rect.height) return;
     if (menuOpen) {
@@ -79,6 +88,7 @@ try {
   canvas.addEventListener('pointermove', event => pointer(event, false));
   canvas.addEventListener('pointerleave', () => { if (!menuOpen) game.pointer(-1e9, -1e9, false); });
   const updateKey = (event, down) => {
+    if (editor.key(event, down)) return;
     const target = event.target;
     const editing = target instanceof HTMLElement && (target.isContentEditable || target.closest('input, select, textarea, button'));
     if (event.code === 'Escape' && !editing && !menuOpen) {

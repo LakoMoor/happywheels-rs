@@ -10,6 +10,10 @@
     canvas { display: block; width: 100%; aspect-ratio: 9 / 5; background: #111; }
     .controls { display: flex; flex-wrap: wrap; align-items: center; gap: 1rem; margin: 1rem 0; }
     #status { min-height: 1.5em; }
+    #editor { border-top: 1px solid #555; }
+    #editor .row { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem 1rem; margin: .5rem 0; }
+    #editor button[aria-pressed="true"] { outline: 2px solid #3a8bff; }
+    #editor[hidden] { display: none; }
   </style>
 </head>
 <body>
@@ -26,9 +30,43 @@
       <button id="restart" type="button">Restart level</button>
       <button id="pause" type="button" aria-pressed="false">Pause</button>
       <button id="menu" type="button">Open menu</button>
+      <button id="editor-toggle" type="button">Level editor</button>
       <label>Original assets folder <input id="assets" type="file" webkitdirectory multiple></label>
     </div>
     <p>Arrow keys move; Space, Z, Shift and Control perform actions; C switches the camera between riders; Escape pauses. Choose your original assets folder for artwork and sound; files stay in your browser.</p>
+    <section id="editor" hidden aria-label="Level editor">
+      <div class="row tools" role="toolbar" aria-label="Tools"></div>
+      <div class="row">
+        <label>Shape <select id="ed-shape"><option value="0">Rectangle</option><option value="1">Circle</option><option value="2">Triangle</option></select></label>
+        <label>Special <select id="ed-special"></select></label>
+        <label><input id="ed-sliding" type="checkbox"> Sliding joint</label>
+      </div>
+      <div class="row">
+        <button type="button" data-command="undo" title="Ctrl+Z">Undo</button>
+        <button type="button" data-command="redo" title="Ctrl+Y">Redo</button>
+        <button type="button" data-command="copy" title="C">Copy</button>
+        <button type="button" data-command="paste" title="V (Shift+V: in place)">Paste</button>
+        <button type="button" data-command="delete" title="Backspace">Delete</button>
+        <button type="button" data-command="group" title="G">Group</button>
+        <button type="button" data-command="ungroup" title="Shift+G">Ungroup</button>
+        <button type="button" data-command="link" title="Select triggers and their targets">Link targets</button>
+        <button type="button" data-command="up" title="Ctrl+Up">Raise</button>
+        <button type="button" data-command="down" title="Ctrl+Down">Lower</button>
+        <button type="button" data-command="finish" title="Enter">Finish outline</button>
+        <button type="button" data-command="start">Start point here</button>
+      </div>
+      <div class="row">
+        <button type="button" data-command="test" title="T">Test level</button>
+        <button type="button" data-command="save">Save XML</button>
+        <button type="button" data-command="open">Open XML</button>
+        <button type="button" data-command="new">New level</button>
+        <input id="ed-file" type="file" accept=".xml,.txt,text/xml" hidden>
+      </div>
+      <p>A/D change width, W/S height, Z/X turn, arrows move (Shift: ten times as much). Wheel moves the view, Ctrl+wheel or +/- zooms.</p>
+      <div class="row" id="ed-info"></div>
+      <p id="ed-selected">Nothing selected</p>
+      <div class="row" id="ed-properties"></div>
+    </section>
     <p id="status" role="status">Starting WebGPU…</p>
   </main>
   <script type="module" src="./main.js"></script>
