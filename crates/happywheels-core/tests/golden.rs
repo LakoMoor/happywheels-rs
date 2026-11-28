@@ -1438,9 +1438,9 @@ fn pogo_hand_breaks_eject() {
     assert!(v.ejected());
 }
 
-/// Cart limb breaks: shoulders/hips are ignored, elbows+knees all gone ejects.
+/// Cart limb breaks: with both hands and both feet gone the rider is out (shoulders and hips count too).
 #[test]
-fn cart_elbow_knee_breaks_eject() {
+fn cart_limb_breaks_eject() {
     use happywheels_core::character::Limb;
     let level = level::parse(
         "<levelXML><info v='1.99' x='1000' y='250'/><shapes>\
@@ -1451,9 +1451,9 @@ fn cart_elbow_knee_breaks_eject() {
     assert!(w.spawn_bike(4, [1000.0, 250.0]));
     let (Some(mut doll), Some(mut v)) = (w.character.take(), w.bike.take()) else { panic!() };
     assert!(matches!(v, happywheels_core::vehicle::Vehicle::Cart(_)));
-    v.rider_hurt(&mut w, &mut doll, false, &[Limb::Shoulder1, Limb::Shoulder2, Limb::Hip1, Limb::Hip2]);
-    assert!(!v.ejected(), "shoulders and hips are ignored");
-    v.rider_hurt(&mut w, &mut doll, false, &[Limb::Elbow1, Limb::Elbow2, Limb::Knee1, Limb::Knee2]);
+    v.rider_hurt(&mut w, &mut doll, false, &[Limb::Shoulder1, Limb::Shoulder2]);
+    assert!(!v.ejected(), "the feet still hold");
+    v.rider_hurt(&mut w, &mut doll, false, &[Limb::Hip1, Limb::Knee2]);
     assert!(v.ejected());
 }
 

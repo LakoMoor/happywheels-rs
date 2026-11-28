@@ -5699,7 +5699,8 @@ impl World {
                 crate::vehicle::Vehicle::Dirt(d)
             }),
             2 => crate::vehicle::Segway::attach(self, &guide, start_px, &mut doll).map(crate::vehicle::Vehicle::Segway),
-            10 => crate::vehicle::Bike::attach(self, &guide, start_px, &mut doll).and_then(|dad| {
+            10 => crate::vehicle::Bike::attach(self, &guide, start_px, &mut doll).and_then(|mut dad| {
+                dad.roots_let_go = true;
                 let daughter = crate::vehicle::Daughter::attach(self, start_px, dad.frame)?;
                 let son = crate::vehicle::Son::attach(self, start_px, dad.frame)?;
                 Some(crate::vehicle::Vehicle::Family(Box::new(crate::vehicle::Family { dad, daughter, son })))

@@ -28,6 +28,8 @@ pub struct Keys {
 }
 
 pub struct Bike {
+    /// c10: a shoulder or hip break also lets go of that handlebar or pedal.
+    pub roots_let_go: bool,
     pub frame: BodyId,
     pub back_wheel: BodyId,
     pub front_wheel: BodyId,
@@ -160,6 +162,7 @@ impl Bike {
             max_spin_av: 5.0,
             pieces: Vec::new(),
             pieces_geo: vec![poly(&["forkVert1", "forkVert2", "forkVert3"])?, poly(&["brokenVert1", "brokenVert2", "brokenVert3", "brokenVert4"])?, poly(&["seatVert1", "seatVert2", "seatVert3"])?],
+            roots_let_go: false,
             frame_smashed: false,
             kid: None,
         })
@@ -296,6 +299,11 @@ impl Bike {
                 Limb::Elbow2 => &mut self.frame_hands[1],
                 Limb::Knee1 => &mut self.gear_feet[0],
                 Limb::Knee2 => &mut self.gear_feet[1],
+                // only the mom's class (22139) overrides these
+                Limb::Shoulder1 if self.roots_let_go => &mut self.frame_hands[0],
+                Limb::Shoulder2 if self.roots_let_go => &mut self.frame_hands[1],
+                Limb::Hip1 if self.roots_let_go => &mut self.gear_feet[0],
+                Limb::Hip2 if self.roots_let_go => &mut self.gear_feet[1],
                 _ => continue,
             };
             if let Some(j) = slot.take() {
@@ -507,6 +515,7 @@ impl Vehicle {
             Vehicle::Heli(c) if !smashed && !torso => c.limbs_broken(world, doll, broken),
             Vehicle::Pogo(c) if !smashed && !torso => c.limbs_broken(world, doll, broken),
             Vehicle::Cart(c) if !smashed && !torso => c.limbs_broken(world, doll, broken),
+            Vehicle::Santa(c) if !smashed && !torso => c.limbs_broken(world, doll, broken),
             Vehicle::Segway(c) if !smashed && !torso => c.limbs_broken(world, doll, broken),
             Vehicle::Dirt(c) if !smashed && !torso => c.limbs_broken(world, doll, broken),
             Vehicle::Chair(c) if !smashed && !torso => c.limbs_broken(world, broken),
@@ -1535,6 +1544,12 @@ impl DirtBike {
         }
         let b = world.b2_mut();
         for l in broken {
+            // a broken neck keeps the rider on the moped but takes both hands off the bars (25762)
+            if *l == Limb::Neck {
+                for j in [self.joints[1].take(), self.joints[2].take()].into_iter().flatten() {
+                    b.destroy_joint(j);
+                }
+            }
             let slot = match l {
                 Limb::Shoulder1 | Limb::Elbow1 => 1,
                 Limb::Shoulder2 | Limb::Elbow2 => 2,
@@ -2606,24 +2621,44 @@ impl Pogo {
         b.destroy_body(self.frame);
     }
 
-    /// Limb-break reactions (class at 34471, original 35269): shoulder/elbow breaks drop that hand's joint and eject once both
-    /// hands are gone. Legs only touch the original's centre-of-mass list (not modelled).
+    /// Limb-break reactions (original 35269..35380): arms let go of the handle (both gone → eject), legs come off the foot
+    /// pegs; with a leg broken on each side the frame and the tip start colliding with the rider. The broken parts leave
+    /// the balance's centre of mass, torn-off upper limbs join it.
     pub fn limbs_broken(&mut self, world: &mut World, doll: &mut Ragdoll, broken: &[Limb]) {
-        if self.ejected {
-            return;
-        }
-        let b = world.b2_mut();
-        for l in broken {
-            let slot = match l {
-                Limb::Shoulder1 | Limb::Elbow1 => 0,
-                Limb::Shoulder2 | Limb::Elbow2 => 1,
+        for &limb in broken {
+            if self.ejected {
+                return;
+            }
+            let (slot, parts, torn): (usize, &[Part], bool) = match limb {
+                Limb::Shoulder1 => (0, &[Part::UpperArm1, Part::LowerArm1], true),
+                Limb::Shoulder2 => (1, &[Part::UpperArm2, Part::LowerArm2], true),
+                Limb::Elbow1 => (0, &[Part::LowerArm1], false),
+                Limb::Elbow2 => (1, &[Part::LowerArm2], false),
+                Limb::Hip1 => (2, &[Part::UpperLeg1, Part::LowerLeg1], true),
+                Limb::Hip2 => (3, &[Part::UpperLeg2, Part::LowerLeg2], true),
+                Limb::Knee1 => (2, &[Part::LowerLeg1], false),
+                Limb::Knee2 => (3, &[Part::LowerLeg2], false),
                 _ => continue,
             };
-            if let Some(j) = self.joints[slot].take() {
-                b.destroy_joint(j);
+            let gone: Vec<BodyId> = parts.iter().map(|p| doll.bodies[p]).collect();
+            self.com.retain(|id| !gone.contains(id));
+            if torn {
+                self.com.extend(doll.sev.iter().zip(&doll.sev_limbs).filter(|&(_, &l)| l == limb).map(|(&b, _)| b));
+            }
+            let Some(j) = self.joints[slot].take() else { continue };
+            world.b2_mut().destroy_joint(j);
+            if slot < 2 {
                 if self.joints[0].is_none() && self.joints[1].is_none() {
                     self.eject(world, doll);
-                    return;
+                }
+            } else {
+                let off = |a, b| doll.broken.contains(&a) || doll.broken.contains(&b);
+                if off(Limb::Hip1, Limb::Knee1) && off(Limb::Hip2, Limb::Knee2) {
+                    let free = Filter { category_bits: 260, mask_bits: 270, group_index: 0 };
+                    let b = world.b2_mut();
+                    for s in [b.body(self.frame).shapes[0], b.body(self.rod).shapes[1]] {
+                        b.set_shape_filter(s, free);
+                    }
                 }
             }
         }
@@ -3080,8 +3115,8 @@ impl Cart {
         self.pieces = bodies;
     }
 
-    /// Limb-break reactions (original 27463): only elbow and knee breaks drop that hand's/foot's joint (shoulders and hips do
-    /// nothing); `checkEject` fires once all four are gone (the pelvis joint, slot 0, does not count).
+    /// Limb-break reactions (original 27463, shoulders and hips in the subclass at 27789): shoulder/elbow → that hand's joint,
+    /// hip/knee → that foot's; `checkEject` fires once all four are gone (the pelvis joint, slot 0, does not count).
     pub fn limbs_broken(&mut self, world: &mut World, doll: &mut Ragdoll, broken: &[Limb]) {
         if self.ejected {
             return;
@@ -3089,10 +3124,10 @@ impl Cart {
         let b = world.b2_mut();
         for l in broken {
             let slot = match l {
-                Limb::Elbow1 => 1,
-                Limb::Elbow2 => 2,
-                Limb::Knee1 => 3,
-                Limb::Knee2 => 4,
+                Limb::Shoulder1 | Limb::Elbow1 => 1,
+                Limb::Shoulder2 | Limb::Elbow2 => 2,
+                Limb::Hip1 | Limb::Knee1 => 3,
+                Limb::Hip2 | Limb::Knee2 => 4,
                 _ => continue,
             };
             if let Some(j) = self.joints[slot].take() {
@@ -6332,6 +6367,8 @@ impl Santa {
                     let mut all = self.anti_grav.clone();
                     all.extend(&self.elf1.anti_grav);
                     all.extend(&self.elf2.anti_grav);
+                    // upper arms and thighs torn off Santa or an elf float like the rest of them
+                    all.extend(doll.sev.iter().chain(&self.elf1.doll.sev).chain(&self.elf2.doll.sev));
                     let b = world.b2_mut();
                     for id in all {
                         let body = b.body_mut(id);
@@ -6600,7 +6637,7 @@ impl Santa {
         for i in 0..2 {
             if let Some(id) = self.reigns_hands[i].take() {
                 world.b2_mut().destroy_joint(id);
-                self.check_reigns(world);
+                self.check_reigns(world, doll);
             }
         }
         let b = world.b2_mut();
@@ -6637,7 +6674,7 @@ impl Santa {
     }
 
     /// `checkReigns`: with both hands off the reins, the reins body is replaced by a loose strap ball.
-    fn check_reigns(&mut self, world: &mut World) {
+    fn check_reigns(&mut self, world: &mut World, doll: &mut Ragdoll) {
         if self.reigns_hands.iter().any(Option::is_some) {
             return;
         }
@@ -6658,6 +6695,7 @@ impl Santa {
         b.destroy_joint(first);
         self.strap_head[0] = nj;
         b.destroy_body(reigns);
+        self.check_eject(world, doll);
     }
 
     /// `elfHeadRemove`: the strap's head link is re-hung on a ball at the head's back.
@@ -6811,22 +6849,21 @@ impl Santa {
         }
     }
 
-    /// `checkJoints`: Santa's limb breaks let go of the sleigh; straps snap above 0.4; the elves' limbs break too.
-    pub fn check_joints(&mut self, world: &mut World, doll: &mut Ragdoll) {
-        let broken = doll.check_joints(world);
-        for limb in broken {
+    /// Santa's limb-break reactions: they let go of the reins and the sleigh.
+    pub fn limbs_broken(&mut self, world: &mut World, doll: &mut Ragdoll, broken: &[Limb]) {
+        for &limb in broken {
             match limb {
                 Limb::Neck | Limb::Waist => self.eject(world, doll),
                 Limb::Elbow1 | Limb::Shoulder1 if !self.ejected => {
                     if let Some(id) = self.reigns_hands[0].take() {
                         world.b2_mut().destroy_joint(id);
-                        self.check_reigns(world);
+                        self.check_reigns(world, doll);
                     }
                 }
                 Limb::Elbow2 | Limb::Shoulder2 if !self.ejected => {
                     if let Some(id) = self.reigns_hands[1].take() {
                         world.b2_mut().destroy_joint(id);
-                        self.check_reigns(world);
+                        self.check_reigns(world, doll);
                     }
                 }
                 Limb::Knee1 | Limb::Hip1 if !self.ejected => {
@@ -6844,6 +6881,12 @@ impl Santa {
                 _ => {}
             }
         }
+    }
+
+    /// `checkJoints`: Santa's limb breaks let go of the sleigh; straps snap above 0.4; the elves' limbs break too.
+    pub fn check_joints(&mut self, world: &mut World, doll: &mut Ragdoll) {
+        let broken = doll.check_joints(world);
+        self.limbs_broken(world, doll, &broken);
         for n in [1u8, 2] {
             let (strapped, chain0) = if n == 1 { (self.elf1.strapped_in, self.strap_chest1[0]) } else { (self.elf2.strapped_in, self.strap_chest2[0]) };
             if strapped && world.b2().distance_impulse(chain0).is_some_and(|i| i.abs() > 0.4) {

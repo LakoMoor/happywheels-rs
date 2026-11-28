@@ -912,6 +912,11 @@ impl World {
     }
 
     /// `b2World.DestroyJoint`.
+    /// Joints alive in the world (`m_jointCount`).
+    pub fn joint_count(&self) -> usize {
+        self.c.joint_order.len()
+    }
+
     pub fn destroy_joint(&mut self, id: usize) {
         let (b1, b2, collide) = (self.c.joints[id].body1, self.c.joints[id].body2, self.c.joints[id].collide_connected);
         if !self.c.bodies[b2].joints.iter().any(|j| j.0 == id) {

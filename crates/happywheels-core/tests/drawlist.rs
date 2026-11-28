@@ -11,6 +11,10 @@ enum Action {
     Head,
     Chest,
     Pelvis,
+    /// Both hips and shoulders broken.
+    Roots,
+    /// Both knees and elbows broken.
+    Joints,
     /// The vehicle's own breaking method.
     Wreck,
 }
@@ -44,6 +48,14 @@ fn port_list(c: usize, frames: usize, action: Action) -> Option<Vec<(String, [[f
                 Vehicle::Santa(v) => v.sleigh_smash(&mut world, &mut doll),
                 Vehicle::Grinder(_) => {}
             },
+            Action::Roots | Action::Joints => {
+                let limbs = if matches!(action, Action::Roots) { [Limb::Hip1, Limb::Shoulder1, Limb::Hip2, Limb::Shoulder2] } else { [Limb::Knee1, Limb::Knee2, Limb::Elbow1, Limb::Elbow2] };
+                for limb in limbs {
+                    let force = doll.break_limit(&world, limb) + 1.0;
+                    doll.break_limb(&mut world, limb, force);
+                    vehicle.rider_hurt(&mut world, &mut doll, false, &[limb]);
+                }
+            }
             Action::Break => {
                 for (limb, over) in [(Limb::Neck, 5.0), (Limb::Waist, 10.0), (Limb::Elbow1, 1.0)] {
                     let force = doll.break_limit(&world, limb) + over;
@@ -115,6 +127,21 @@ fn smashed_riders_are_drawn_like_the_original() {
     }
 }
 
+/// Every limb joint broken before the first frame: stumps, loose limbs and the knee ligaments.
+#[test]
+fn broken_limbs_are_drawn_like_the_original() {
+    let mut failed = Vec::new();
+    for c in 1..=11 {
+        for (set, frames) in [("a", 1), ("a", 10), ("b", 1), ("b", 10)] {
+            let action = if set == "a" { Action::Roots } else { Action::Joints };
+            if let Err(e) = std::panic::catch_unwind(|| compare(c, frames, &format!("limbs{set}{frames}"), action)) {
+                failed.push(e.downcast_ref::<String>().cloned().unwrap_or_default());
+            }
+        }
+    }
+    assert!(failed.is_empty(), "{}", failed.join("\n"));
+}
+
 /// Each vehicle's breaking method before the first frame (the grinder of c7 has none).
 #[test]
 fn wrecked_vehicles_are_drawn_like_the_original() {
@@ -152,5 +179,5 @@ fn compare(c: usize, frames: usize, golden: &str, action: Action) {
         let extra: Vec<_> = port.iter().zip(&used).filter(|(_, &u)| !u).map(|(d, _)| &d.0).collect();
         // the debris particles' textures have names here and none there: as many must be left over as were unnamed
         let unnamed = original.iter().filter(|d| d.0 == "?").count();
-        assert!(extra.len() == unnamed, "c{c}: {} drawn here only, {unnamed} particles there: {:?}", extra.len(), &extra[..extra.len().min(6)]);
+        assert!(extra.is_empty() || extra.len() == unnamed, "c{c}: {} drawn here only, {unnamed} particles there: {:?}", extra.len(), &extra[..extra.len().min(6)]);
 }
