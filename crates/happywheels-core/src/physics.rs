@@ -525,6 +525,9 @@ struct Arrow {
     blood: Vec<(f64, f64, f64, f64)>,
     reverse: bool,
     flesh_sounds: u32,
+    /// BladeWeapon: the body impaled last (it bleeds once) and the frame at which its flesh sound ends.
+    previous: Option<BodyId>,
+    squelch_until: u32,
 }
 
 /// ArrowGun special, static-base variant (`immovable2` true): turret aims at the closest material-2 body in range and fires 10 arrows.
@@ -3483,6 +3486,28 @@ impl World {
         self.character = Some(doll);
     }
 
+    /// What a blade does on running through a new body of flesh: it bleeds, stains the blade and squelches, once the previous
+    /// squelch has ended. (For anything else the original asks for `BladeSolid1..3`, which its sound file does not have.)
+    fn blade_cut(&mut self, ai: usize, body: BodyId, other: BodyId) {
+        if self.b.shape_material(self.b.body(other).shapes[0]) & 6 == 0 {
+            return;
+        }
+        let at = self.b.body(body).sweep.c;
+        self.shape_impale(other, true, Some(at), 0.01);
+        let c = self.b.body(other).sweep.c;
+        self.blood.burst([c.x * PS, c.y * PS], Vec2::default(), 5.0, 15.0, 50);
+        let l = self.b.body(body).local_point(c);
+        let flip = if self.arrows[ai].reverse { -1.0 } else { 1.0 };
+        let (rot, mirror) = (self.blood.rand() * std::f64::consts::TAU, if self.blood.rand() > 0.5 { -1.0 } else { 1.0 });
+        if !self.blood.off {
+            self.arrows[ai].blood.push((l.x * PS * flip, l.y * PS, rot, mirror));
+        }
+        if self.frame >= self.arrows[ai].squelch_until {
+            self.arrows[ai].squelch_until = self.frame + sound_frames("BladeFlesh1");
+            self.play("BladeFlesh", 3, at);
+        }
+    }
+
     /// Whether `body` is a food item (its grinding sprays juice particles, not blood).
     pub(crate) fn is_food(&self, body: BodyId) -> bool {
         self.foods.iter().any(|f| f.0 == body)
@@ -4173,7 +4198,7 @@ impl World {
         hs.filter = Filter { category_bits: 8, mask_bits: 0xFFFF, group_index: 0 };
         self.b.create_shape(body, &hs);
         self.b.set_mass_from_shapes(body);
-        self.arrows.push(Arrow { body, sensor, solid, pinned: Vec::new(), queue_add: Vec::new(), queue_remove: Vec::new(), armed: false, done: false, harpoon: true, blade: Some(r + blade_rot), blood: Vec::new(), reverse: m < 0.0, flesh_sounds: 0 });
+        self.arrows.push(Arrow { body, sensor, solid, pinned: Vec::new(), queue_add: Vec::new(), queue_remove: Vec::new(), armed: false, done: false, harpoon: true, blade: Some(r + blade_rot), blood: Vec::new(), reverse: m < 0.0, flesh_sounds: 0, previous: None, squelch_until: 0 });
         Some(body)
     }
 
@@ -4192,7 +4217,7 @@ impl World {
         self.b.set_mass_from_shapes(body);
         self.b.body_mut(body).linear_velocity = vel;
         self.b.c.report_results = true;
-        self.arrows.push(Arrow { body, sensor, solid, pinned: Vec::new(), queue_add: Vec::new(), queue_remove: Vec::new(), armed: false, done: false, harpoon, blade: None, blood: Vec::new(), reverse: false, flesh_sounds: 0 });
+        self.arrows.push(Arrow { body, sensor, solid, pinned: Vec::new(), queue_add: Vec::new(), queue_remove: Vec::new(), armed: false, done: false, harpoon, blade: None, blood: Vec::new(), reverse: false, flesh_sounds: 0, previous: None, squelch_until: 0 });
     }
 
     /// `ArrowGun.actions` + `fireArrow` (before the world step) and the arrows' own `actions` (pin / unpin queued bodies).
@@ -4292,6 +4317,10 @@ impl World {
                 if !self.b.c.bodies[other].alive {
                     continue;
                 }
+                // `createPrisJoint` of the blade first tells a character it is impaled, with no point: fatal for a head
+                if self.arrows[ai].blade.is_some() {
+                    self.shape_impale(other, true, None, 0.0);
+                }
                 if let Some(p) = self.arrows[ai].pinned.iter_mut().find(|p| p.0 == other) {
                     p.2 += 1;
                     continue;
@@ -4340,22 +4369,9 @@ impl World {
                         self.play("HarpoonSolid", 2, tip);
                     }
                 }
-                if self.arrows[ai].blade.is_some() && self.b.shape_material(self.b.body(other).shapes[0]) & 6 != 0 {
-                    let tip = self.b.body(body).sweep.c;
-                    self.shape_impale(other, true, Some(tip), 0.01);
-                    // BladeWeapon.createPrisJoint on a new flesh body: 50-particle blood burst at its centre, `paintBlood` stamp, BladeFlesh sound
-                    let c = self.b.body(other).sweep.c;
-                    self.blood.burst([c.x * PS, c.y * PS], Vec2::default(), 5.0, 15.0, 50);
-                    let l = self.b.body(body).local_point(c);
-                    let flip = if self.arrows[ai].reverse { -1.0 } else { 1.0 };
-                    let (rot, mirror) = (self.blood.rand() * std::f64::consts::TAU, if self.blood.rand() > 0.5 { -1.0 } else { 1.0 });
-                    if !self.blood.off {
-                        self.arrows[ai].blood.push((l.x * PS * flip, l.y * PS, rot, mirror));
-                    }
-                    if self.arrows[ai].flesh_sounds < 1 {
-                        self.arrows[ai].flesh_sounds += 1;
-                        self.play("BladeFlesh", 3, c);
-                    }
+                if self.arrows[ai].blade.is_some() && self.arrows[ai].previous != Some(other) {
+                    self.arrows[ai].previous = Some(other);
+                    self.blade_cut(ai, body, other);
                 }
             }
             for other in std::mem::take(&mut self.arrows[ai].queue_remove) {
@@ -6739,6 +6755,23 @@ mod tests {
             w.step();
         }
         assert!(w.arrows[0].armed, "blade never pinned to the floor");
+    }
+
+    /// The blade tells a character it is impaled before anything else, with no point: a head kills, wherever the blade's centre is.
+    #[test]
+    fn a_blade_in_the_head_kills_an_npc() {
+        let xml = "<levelXML><info v='1.99'/><specials><sp t='17' p0='1000' p1='300' p2='0' p3='1' p4='f' p5='f' p6='f' p7='t'/><sp t='34' p0='3000' p1='300' p2='180' p3='f' p4='f' p5='t' p6='2'/></specials></levelXML>";
+        let mut w = World::from_level(&crate::level::parse(xml).unwrap());
+        let (chest, head) = (w.npcs[0].bodies[0], w.npcs[0].bodies[1]);
+        // as the sensor would report them; the chest is flesh too and squelches once
+        w.arrows[0].queue_add.push(chest);
+        w.step();
+        assert!(!w.npcs[0].dead);
+        let sounds = w.take_sounds();
+        assert_eq!(sounds.iter().filter(|s| s.0.starts_with("BladeFlesh")).count(), 1, "{sounds:?}");
+        w.arrows[0].queue_add.push(head);
+        w.step();
+        assert!(w.npcs[0].dead);
     }
 
     /// `grindShape` on an NPC deletes its smash listeners: slammed into the floor at 60 m/s it breaks into pieces, but a ground one stays whole.
