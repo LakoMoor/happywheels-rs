@@ -7323,3 +7323,21 @@ impl Santa {
         v
     }
 }
+
+#[cfg(test)]
+mod pogo_limit_tests {
+    use crate::character::Limb;
+
+    #[test]
+    fn pogo_rider_breaks_at_the_originals_limits() {
+        let level = crate::level::parse("<levelXML><info v='1.99' x='600' y='300' c='9'/></levelXML>").unwrap();
+        let mut w = crate::physics::World::from_level(&level);
+        w.spawn_bike(9, level.info.start);
+        let mut doll = w.character.take().expect("rider");
+        let limits = |d: &crate::character::Ragdoll, w: &crate::physics::World| [Limb::Elbow1, Limb::Knee1].map(|l| d.break_limit(w, l));
+        // read from the running original: 90 / 120 on the stick, 52 / 76 off it
+        assert_eq!(limits(&doll, &w), [90.0, 120.0]);
+        doll.limit_override = None;
+        assert_eq!(limits(&doll, &w), [52.0, 76.0]);
+    }
+}
