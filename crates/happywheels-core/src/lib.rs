@@ -4,6 +4,7 @@ pub mod blood;
 pub mod camera;
 pub mod atlas;
 pub mod character;
+pub mod editor;
 pub mod level;
 pub mod menu;
 pub mod physics;
