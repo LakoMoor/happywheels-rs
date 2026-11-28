@@ -173,7 +173,11 @@ pub enum PoseSet {
     Grinder,
 }
 
+#[derive(Clone)]
 pub struct Ragdoll {
+    /// Head, chest, pelvis, upper arm, lower arm, upper leg and lower leg masses as `setLimits` saw them: every break and
+    /// smash limit comes from these, not from what is left of a damaged body.
+    masses: std::cell::OnceCell<[f64; 7]>,
     /// Joints not created yet (`spawn_scaled`): the original creates every body of the character AND its vehicle before any joint, and a joint's
     /// `RefilterProxy` reorders the contact list, so the vehicle calls `finish_joints` after its own bodies.
     deferred: Option<(Guide, Vec2)>,
@@ -399,13 +403,14 @@ impl Ragdoll {
         }
         let joint_ids = if defer { Vec::new() } else { Self::make_joints(b, guide, start, &bodies)? };
         let joints = LIMB_ORDER.iter().copied().zip(joint_ids).collect();
-        Some(Self { deferred: None, poses: PoseSet::Base, bodies, joints, pose: 0, cancel: false, broken: Vec::new(), grabbing: false, hands_open: false, eject_noted: false, grips: [None; 2], group, head_chunk_radius: guide.get("headChunkShape").map_or(0.0, |g| g[3] * 5.0 / CHARACTER_SCALE), chest_chunk_radius: guide.get("chestChunkShape").map_or(0.0, |g| g[3] * 5.0 / CHARACTER_SCALE), pelvis_chunk_radius: guide.get("pelvisChunkShape").map_or(0.0, |g| g[3] * 5.0 / CHARACTER_SCALE), foot_guide: guide.get("footShape").copied().unwrap_or_default(), ref_scale, chunks: Vec::new(), chunk_names: Vec::new(), brain: None, heart: None, feet: [None; 2], dead: false, helmet_geo: (1..=4).map(|k| guide.get(&format!("helmetVert{k}")).map(|g| Vec2::new(g[0] / CHARACTER_SCALE, g[1] / CHARACTER_SCALE))).collect::<Option<Vec<_>>>().unwrap_or_default(), helmet_on: guide.get("helmetVert1").is_some(), helmet: None, sev: Vec::new(), sev_limbs: Vec::new(), ground: Vec::new(), pelvis_smashed: false, blood_flows: Vec::new(), tag: "Char3", voices: [None; 6], voice_until: 0, voice_prio: -1, intestines: None, spine: None, ligaments: [None, None, None, None], chain_len: ["intestineShape", "ligamentShape"].map(|n| guide.get(n).map_or(0.0, |g| g[5] / CHARACTER_SCALE)), spine_anchor: guide.get("spineAnchor").map_or([0.0; 2], |g| [g[0], g[1]]), sev_guides: ["sevArm1Shape", "sevLeg1Shape", "sevLeg2Shape"].map(|n| guide.get(n).copied().unwrap_or_default()) })
+        Some(Self { masses: Default::default(), deferred: None, poses: PoseSet::Base, bodies, joints, pose: 0, cancel: false, broken: Vec::new(), grabbing: false, hands_open: false, eject_noted: false, grips: [None; 2], group, head_chunk_radius: guide.get("headChunkShape").map_or(0.0, |g| g[5] / 2.0 / CHARACTER_SCALE), chest_chunk_radius: guide.get("chestChunkShape").map_or(0.0, |g| g[5] / 2.0 / CHARACTER_SCALE), pelvis_chunk_radius: guide.get("pelvisChunkShape").map_or(0.0, |g| g[5] / 2.0 / CHARACTER_SCALE), foot_guide: guide.get("footShape").copied().unwrap_or_default(), ref_scale, chunks: Vec::new(), chunk_names: Vec::new(), brain: None, heart: None, feet: [None; 2], dead: false, helmet_geo: (1..=4).map(|k| guide.get(&format!("helmetVert{k}")).map(|g| Vec2::new(g[0] / CHARACTER_SCALE, g[1] / CHARACTER_SCALE))).collect::<Option<Vec<_>>>().unwrap_or_default(), helmet_on: guide.get("helmetVert1").is_some(), helmet: None, sev: Vec::new(), sev_limbs: Vec::new(), ground: Vec::new(), pelvis_smashed: false, blood_flows: Vec::new(), tag: "Char3", voices: [None; 6], voice_until: 0, voice_prio: -1, intestines: None, spine: None, ligaments: [None, None, None, None], chain_len: ["intestineShape", "ligamentShape"].map(|n| guide.get(n).map_or(0.0, |g| g[5] / CHARACTER_SCALE)), spine_anchor: guide.get("spineAnchor").map_or([0.0; 2], |g| [g[0], g[1]]), sev_guides: ["sevArm1Shape", "sevLeg1Shape", "sevLeg2Shape"].map(|n| guide.get(n).copied().unwrap_or_default()) })
     }
 
     /// `headSmash1`: the head body is destroyed (taking the neck joint with it) and replaced by four chunk balls on a
     /// ring (4 px from the head centre, 90° apart) plus a brain ball; the character is dead.
     pub fn smash_head(&mut self, world: &mut World) {
-        if self.dead {
+        // once only; a dead character's head still smashes
+        if self.brain.is_some() {
             return;
         }
         self.sound(world, Part::Head, "HeadSmash", 1);
@@ -539,13 +544,13 @@ impl Ragdoll {
         if self.broken.contains(&Limb::Neck) {
             self.tear_chain(world, true, 0);
         }
-        let ratio = world.b2().body(self.bodies[&Part::UpperArm1]).mass / 0.07019;
+        let ratio = self.limit_mass(world, Part::UpperArm1) / 0.07019;
         let snap = (ratio * 90.0).round() + 1.0;
-        let spine = (world.b2().body(self.bodies[&Part::Head]).mass / 0.05456 * 105.0).round();
+        let spine = (self.limit_mass(world, Part::Head) / 0.05456 * 105.0).round();
         self.break_then(world, Limb::Neck, spine, on_break);
         self.break_then(world, Limb::Shoulder1, snap, on_break);
         self.break_then(world, Limb::Shoulder2, snap, on_break);
-        let m = world.b2().body(self.bodies[&Part::Pelvis]).mass / 0.0735;
+        let m = self.limit_mass(world, Part::Pelvis) / 0.0735;
         self.break_then(world, Limb::Waist, (m * 260.0).round() - 1.0, on_break);
         self.tear_chain(world, false, 1);
         self.chunk_ring(world, Part::Chest, 4, std::f64::consts::FRAC_PI_4, std::f64::consts::FRAC_PI_2, 5.0 / CHARACTER_SCALE, self.chest_chunk_radius);
@@ -630,11 +635,11 @@ impl Ragdoll {
         self.sound(world, Part::Pelvis, "PelvisSmash", 1);
         world.blood_burst(5.0, 15.0, self.bodies[&Part::Pelvis], 200, Vec2::default());
         self.stop_flows(world, &[5]);
-        let ratio = world.b2().body(self.bodies[&Part::UpperLeg1]).mass / 0.14914;
+        let ratio = self.limit_mass(world, Part::UpperLeg1) / 0.14914;
         let snap = (ratio * 110.0).round() + 1.0;
         self.break_then(world, Limb::Hip1, snap, on_break);
         self.break_then(world, Limb::Hip2, snap, on_break);
-        let m = world.b2().body(self.bodies[&Part::Pelvis]).mass / 0.0735;
+        let m = self.limit_mass(world, Part::Pelvis) / 0.0735;
         if self.broken.contains(&Limb::Waist) {
             self.tear_chain(world, false, 0);
         }
@@ -672,8 +677,14 @@ impl Ragdoll {
     }
 
     /// Break limits of the original's `setLimits` (mass ratio × base constant, rounded), per limb.
+    fn limit_mass(&self, world: &World, part: Part) -> f64 {
+        const PARTS: [Part; 7] = [Part::Head, Part::Chest, Part::Pelvis, Part::UpperArm1, Part::LowerArm1, Part::UpperLeg1, Part::LowerLeg1];
+        let masses = self.masses.get_or_init(|| PARTS.map(|p| world.b2().body(self.bodies[&p]).mass));
+        PARTS.iter().position(|&p| p == part).map_or(0.0, |k| masses[k])
+    }
+
     pub fn break_limit(&self, world: &World, limb: Limb) -> f64 {
-        let ratio = |part: Part, def: f64| world.b2().body(self.bodies[&part]).mass / def;
+        let ratio = |part: Part, def: f64| self.limit_mass(world, part) / def;
         let r = |v: f64| v.round();
         match limb {
             Limb::Neck => r(ratio(Part::Head, 0.05456) * 85.0),
@@ -691,7 +702,7 @@ impl Ragdoll {
         if self.ground.contains(&part) {
             return None;
         }
-        let ratio = |p: Part, def: f64| world.b2().body(self.bodies[&p]).mass / def;
+        let ratio = |p: Part, def: f64| self.limit_mass(world, p) / def;
         match part {
             Part::Head => Some(3.0 * ratio(Part::Head, 0.05456)),
             Part::Chest => Some(7.5 * ratio(Part::Chest, 0.17171)),
@@ -704,6 +715,17 @@ impl Ragdoll {
     /// `checkJoints`/`checkRevJoint`: a joint whose reaction force exceeds its limit, or whose anchors drifted
     /// more than 0.5 m apart, breaks (is destroyed). Returns the limbs that broke this frame. The original's
     /// break callbacks (blood, ligaments, sprites, dying) are not modelled.
+    /// Whether the next `check_joints` breaks the neck or the torso (either kills at once).
+    pub fn about_to_die(&self, world: &World) -> bool {
+        [Limb::Neck, Limb::Waist].into_iter().any(|limb| {
+            if self.broken.contains(&limb) {
+                return false;
+            }
+            let Some(&id) = self.joints.get(&limb) else { return false };
+            world.b2().revolute_reaction(id).is_some_and(|(force, gap)| force > self.break_limit(world, limb) || gap > 0.5)
+        })
+    }
+
     pub fn check_joints(&mut self, world: &mut World) -> Vec<Limb> {
         let mut now = Vec::new();
         for limb in LIMB_ORDER {
@@ -1174,7 +1196,7 @@ impl Ragdoll {
         }
         let zero = Filter { category_bits: 260, mask_bits: 0xFFFF, group_index: 0 };
         let lower = Filter { category_bits: 260, mask_bits: 270, group_index: self.group - 5 }; // groupID - 5
-        let masses: HashMap<Part, f64> = self.bodies.iter().map(|(&p, &id)| (p, world.b2().body(id).mass)).collect();
+        let masses: HashMap<Part, f64> = [Part::Head, Part::Chest, Part::Pelvis, Part::UpperArm1, Part::LowerArm1, Part::UpperLeg1, Part::LowerLeg1].into_iter().map(|p| (p, self.limit_mass(world, p))).collect();
         let ratio = move |p: Part, def: f64| masses[&p] / def;
         match limb {
             Limb::Neck => {

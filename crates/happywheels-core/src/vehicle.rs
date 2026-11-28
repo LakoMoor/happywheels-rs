@@ -200,7 +200,7 @@ impl Bike {
     pub fn keys(&mut self, world: &mut World, doll: &mut Ragdoll, k: Keys) {
         if let Some(mut kid) = self.kid.take() {
             // the dad's `shiftPressedActions` ejects him (original 21559); every key is forwarded to the kid afterwards
-            if k.shift {
+            if k.shift && !doll.dead {
                 self.eject(world, doll);
             }
             self.keys_inner(world, doll, Keys { shift: false, ..k });
@@ -212,6 +212,11 @@ impl Bike {
     }
 
     fn keys_inner(&mut self, world: &mut World, doll: &mut Ragdoll, k: Keys) {
+        // `checkKeyStates` of a dead character runs none of the key actions
+        if doll.dead {
+            doll.apply_pose(world);
+            return;
+        }
         let Keys { left, right, up, down, space, z, .. } = k;
         if self.ejected {
             doll.keys(left, right, up, down);
@@ -937,74 +942,77 @@ impl Segway {
     pub fn keys(&mut self, world: &mut World, doll: &mut Ragdoll, k: Keys) {
         let Keys { left, right, up, down, space, z, .. } = k;
         let ejected = self.ejected;
-        // left / right
-        if ejected {
-            doll.keys(left, right, false, false);
-        } else {
-            let (lo, gain) = match (left, right) {
-                (true, false) => (0.0, 20.0),
-                (false, true) => (0.52, 20.0),
-                _ => (0.26, 20.0),
-            };
-            let stand_frame = self.stand_frame;
-            doll.set_joint_raw(world, stand_frame, lo, gain);
-        }
-        // up / down
-        match (up, down) {
-            (true, false) | (false, true) if ejected => {
-                doll.keys(false, false, up, down);
-            }
-            (true, false) => self.drive(world, 1.0),
-            (false, true) => self.drive(world, -1.0),
-            _ => {
-                if self.wheel_motor_enabled(world) {
-                    self.wheel_motor(world, Some(false), None);
-                }
-                if doll.pose == 3 || doll.pose == 4 {
-                    doll.set_pose(0);
-                }
-            }
-        }
-        // space
-        if space {
+        // `checkKeyStates` of a dead character runs none of the key actions
+        if !doll.dead {
+            // left / right
             if ejected {
-                // `grabAction`: a hand pressed against the handle re-boards instead of gripping (approximated by proximity)
-                if !self.frame_smashed && !doll.dead {
-                    for (k, (arm, shoulder, elbow)) in [(Part::LowerArm1, Limb::Shoulder1, Limb::Elbow1), (Part::LowerArm2, Limb::Shoulder2, Limb::Elbow2)].into_iter().enumerate() {
-                        if doll.broken.contains(&shoulder) || doll.broken.contains(&elbow) {
-                            continue;
-                        }
-                        let (t, h) = (Self::limb_tip(world, doll, arm), world.b2().body(self.frame).world_point(self.hand_anchor));
-                        if (t.x - h.x).abs() < 0.25 && (t.y - h.y).abs() < 0.25 {
-                            self.re_attach(world, doll, k);
-                            break;
-                        }
+                doll.keys(left, right, false, false);
+            } else {
+                let (lo, gain) = match (left, right) {
+                    (true, false) => (0.0, 20.0),
+                    (false, true) => (0.52, 20.0),
+                    _ => (0.26, 20.0),
+                };
+                let stand_frame = self.stand_frame;
+                doll.set_joint_raw(world, stand_frame, lo, gain);
+            }
+            // up / down
+            match (up, down) {
+                (true, false) | (false, true) if ejected => {
+                    doll.keys(false, false, up, down);
+                }
+                (true, false) => self.drive(world, 1.0),
+                (false, true) => self.drive(world, -1.0),
+                _ => {
+                    if self.wheel_motor_enabled(world) {
+                        self.wheel_motor(world, Some(false), None);
+                    }
+                    if doll.pose == 3 || doll.pose == 4 {
+                        doll.set_pose(0);
                     }
                 }
             }
-            if self.ejected {
-                doll.set_grab(world, true);
+            // space
+            if space {
+                if ejected {
+                    // `grabAction`: a hand pressed against the handle re-boards instead of gripping (approximated by proximity)
+                    if !self.frame_smashed && !doll.dead {
+                        for (k, (arm, shoulder, elbow)) in [(Part::LowerArm1, Limb::Shoulder1, Limb::Elbow1), (Part::LowerArm2, Limb::Shoulder2, Limb::Elbow2)].into_iter().enumerate() {
+                            if doll.broken.contains(&shoulder) || doll.broken.contains(&elbow) {
+                                continue;
+                            }
+                            let (t, h) = (Self::limb_tip(world, doll, arm), world.b2().body(self.frame).world_point(self.hand_anchor));
+                            if (t.x - h.x).abs() < 0.25 && (t.y - h.y).abs() < 0.25 {
+                                self.re_attach(world, doll, k);
+                                break;
+                            }
+                        }
+                    }
+                }
+                if self.ejected {
+                    doll.set_grab(world, true);
+                } else {
+                    self.shock_step(world, true);
+                }
+            } else if ejected {
+                doll.set_grab(world, false);
             } else {
-                self.shock_step(world, true);
+                self.shock_step(world, false);
             }
-        } else if ejected {
-            doll.set_grab(world, false);
-        } else {
-            self.shock_step(world, false);
-        }
-        // shift / ctrl
-        if k.shift {
-            doll.set_pose(if ejected { 7 } else { 5 });
-        } else if doll.pose == 5 || doll.pose == 7 {
-            doll.set_pose(0);
-        }
-        if k.ctrl {
-            doll.set_pose(if ejected { 8 } else { 6 });
-        } else if doll.pose == 6 || doll.pose == 8 {
-            doll.set_pose(0);
-        }
-        if z {
-            self.eject(world, doll);
+            // shift / ctrl
+            if k.shift {
+                doll.set_pose(if ejected { 7 } else { 5 });
+            } else if doll.pose == 5 || doll.pose == 7 {
+                doll.set_pose(0);
+            }
+            if k.ctrl {
+                doll.set_pose(if ejected { 8 } else { 6 });
+            } else if doll.pose == 6 || doll.pose == 8 {
+                doll.set_pose(0);
+            }
+            if z {
+                self.eject(world, doll);
+            }
         }
         if self.reattaching {
             self.re_attaching(world, doll);
@@ -1352,63 +1360,66 @@ impl Chair {
 
     pub fn keys(&mut self, world: &mut World, doll: &mut Ragdoll, k: Keys) {
         let ejected = self.ejected;
-        match (k.left, k.right) {
-            (true, false) if ejected => doll.set_pose(1),
-            (false, true) if ejected => doll.set_pose(2),
-            (true, false) => self.tilt(world, true),
-            (false, true) => self.tilt(world, false),
-            _ if ejected && (doll.pose == 1 || doll.pose == 2) => doll.set_pose(0),
-            _ => {}
-        }
-        match (k.up, k.down) {
-            (true, false) if ejected => doll.set_pose(3),
-            (false, true) if ejected => doll.set_pose(4),
-            (true, false) => self.drive(world, doll, 1.0),
-            (false, true) => self.drive(world, doll, -1.0),
-            _ => {
-                if self.motor_enabled(world) {
-                    self.motor(world, Some(false), None);
-                }
-                if ejected {
-                    if doll.pose == 3 || doll.pose == 4 {
+        // `checkKeyStates` of a dead character runs none of the key actions
+        if !doll.dead {
+            match (k.left, k.right) {
+                (true, false) if ejected => doll.set_pose(1),
+                (false, true) if ejected => doll.set_pose(2),
+                (true, false) => self.tilt(world, true),
+                (false, true) => self.tilt(world, false),
+                _ if ejected && (doll.pose == 1 || doll.pose == 2) => doll.set_pose(0),
+                _ => {}
+            }
+            match (k.up, k.down) {
+                (true, false) if ejected => doll.set_pose(3),
+                (false, true) if ejected => doll.set_pose(4),
+                (true, false) => self.drive(world, doll, 1.0),
+                (false, true) => self.drive(world, doll, -1.0),
+                _ => {
+                    if self.motor_enabled(world) {
+                        self.motor(world, Some(false), None);
+                    }
+                    if ejected {
+                        if doll.pose == 3 || doll.pose == 4 {
+                            doll.set_pose(0);
+                        }
+                    } else if doll.pose == 5 {
                         doll.set_pose(0);
                     }
-                } else if doll.pose == 5 {
-                    doll.set_pose(0);
                 }
             }
-        }
-        if k.space {
-            if ejected {
-                doll.set_grab(world, true);
+            if k.space {
+                if ejected {
+                    doll.set_grab(world, true);
+                } else {
+                    self.firing = true;
+                }
+            } else if ejected {
+                doll.set_grab(world, false);
             } else {
-                self.firing = true;
+                self.firing = false;
             }
-        } else if ejected {
-            doll.set_grab(world, false);
-        } else {
-            self.firing = false;
-        }
-        if k.shift {
-            if ejected {
-                doll.set_pose(6);
-            } else {
-                self.jet_angle += 0.1;
+            if k.shift {
+                if ejected {
+                    doll.set_pose(6);
+                } else {
+                    self.jet_angle += 0.1;
+                }
+            } else if doll.pose == 6 {
+                doll.set_pose(0);
             }
-        } else if doll.pose == 6 {
-            doll.set_pose(0);
-        }
-        if k.ctrl {
-            if ejected {
-                doll.set_pose(7);
-            } else {
-                self.jet_angle -= 0.1;
+            if k.ctrl {
+                if ejected {
+                    doll.set_pose(7);
+                } else {
+                    self.jet_angle -= 0.1;
+                }
+            } else if doll.pose == 7 {
+                doll.set_pose(0);
             }
-        } else if doll.pose == 7 {
-            doll.set_pose(0);
-        }
-        if k.z {
-            self.eject(world, doll);
+            if k.z {
+                self.eject(world, doll);
+            }
         }
         // `actions`: jet thrust, then the pose motors.
         if self.firing {
@@ -1796,73 +1807,76 @@ impl DirtBike {
 
     fn keys_inner(&mut self, world: &mut World, doll: &mut Ragdoll, k: Keys) {
         let ejected = self.ejected;
-        match (k.left, k.right) {
-            (true, false) if ejected => doll.set_pose(1),
-            (false, true) if ejected => doll.set_pose(2),
-            (true, false) | (false, true) => {
-                let left = k.left;
-                let b = world.b2_mut();
-                let angle = b.body(self.frame).sweep.a;
-                let (a, w) = (box2d::fdlibm::cos(angle) * self.impulse_magnitude, box2d::fdlibm::sin(angle) * self.impulse_magnitude);
-                let c = b.body(self.frame).sweep.local_center;
-                let off = if left { self.impulse_offset } else { -self.impulse_offset };
-                let p = b.body(self.frame).world_point(Vec2::new(c.x + off, c.y));
-                b.body_mut(self.frame).apply_impulse(Vec2::new(w, -a), p);
+        // `checkKeyStates` of a dead character runs none of the key actions
+        if !doll.dead {
+            match (k.left, k.right) {
+                (true, false) if ejected => doll.set_pose(1),
+                (false, true) if ejected => doll.set_pose(2),
+                (true, false) | (false, true) => {
+                    let left = k.left;
+                    let b = world.b2_mut();
+                    let angle = b.body(self.frame).sweep.a;
+                    let (a, w) = (box2d::fdlibm::cos(angle) * self.impulse_magnitude, box2d::fdlibm::sin(angle) * self.impulse_magnitude);
+                    let c = b.body(self.frame).sweep.local_center;
+                    let off = if left { self.impulse_offset } else { -self.impulse_offset };
+                    let p = b.body(self.frame).world_point(Vec2::new(c.x + off, c.y));
+                    b.body_mut(self.frame).apply_impulse(Vec2::new(w, -a), p);
+                }
+                _ if ejected && (doll.pose == 1 || doll.pose == 2) => doll.set_pose(0),
+                _ => {}
             }
-            _ if ejected && (doll.pose == 1 || doll.pose == 2) => doll.set_pose(0),
-            _ => {}
-        }
-        match (k.up, k.down) {
-            (true, false) if ejected => doll.set_pose(3),
-            (false, true) if ejected => doll.set_pose(4),
-            (true, false) | (false, true) => {
-                let dir = if k.up { 1.0 } else { -1.0 };
-                self.motors(world, Some(true), Some(false), None);
-                let b = world.b2();
-                let cur = b.body(self.back_wheel).angular_velocity - b.body(self.frame).angular_velocity;
-                let new = if cur * dir < 0.0 {
-                    0.0
-                } else if cur * dir < self.wheel_max_speed {
-                    cur + dir * self.accel_step
+            match (k.up, k.down) {
+                (true, false) if ejected => doll.set_pose(3),
+                (false, true) if ejected => doll.set_pose(4),
+                (true, false) | (false, true) => {
+                    let dir = if k.up { 1.0 } else { -1.0 };
+                    self.motors(world, Some(true), Some(false), None);
+                    let b = world.b2();
+                    let cur = b.body(self.back_wheel).angular_velocity - b.body(self.frame).angular_velocity;
+                    let new = if cur * dir < 0.0 {
+                        0.0
+                    } else if cur * dir < self.wheel_max_speed {
+                        cur + dir * self.accel_step
+                    } else {
+                        cur
+                    };
+                    if let box2d::joints::JointKind::Revolute(r) = &mut world.b2_mut().joint_mut(self.back_joint).kind {
+                        r.motor_speed = new;
+                    }
+                }
+                _ => {
+                    self.motors(world, Some(false), Some(false), None);
+                    if ejected && (doll.pose == 3 || doll.pose == 4) {
+                        doll.set_pose(0);
+                    }
+                }
+            }
+            if k.space {
+                if ejected {
+                    if !self.try_re_attach(world, doll) {
+                        doll.set_grab(world, true);
+                    }
                 } else {
-                    cur
-                };
-                if let box2d::joints::JointKind::Revolute(r) = &mut world.b2_mut().joint_mut(self.back_joint).kind {
-                    r.motor_speed = new;
-                }
-            }
-            _ => {
-                self.motors(world, Some(false), Some(false), None);
-                if ejected && (doll.pose == 3 || doll.pose == 4) {
-                    doll.set_pose(0);
-                }
-            }
-        }
-        if k.space {
-            if ejected {
-                if !self.try_re_attach(world, doll) {
-                    doll.set_grab(world, true);
+                    self.boost = (self.boost + 2.0).min(50.0);
+                    if self.boost < 50.0 {
+                        let b = world.b2_mut();
+                        let a = b.body(self.frame).sweep.a;
+                        let p = b.body(self.frame).sweep.c;
+                        b.body_mut(self.frame).apply_impulse(Vec2::new(box2d::fdlibm::cos(a) * 4.0, box2d::fdlibm::sin(a) * 4.0), p);
+                    }
                 }
             } else {
-                self.boost = (self.boost + 2.0).min(50.0);
-                if self.boost < 50.0 {
-                    let b = world.b2_mut();
-                    let a = b.body(self.frame).sweep.a;
-                    let p = b.body(self.frame).sweep.c;
-                    b.body_mut(self.frame).apply_impulse(Vec2::new(box2d::fdlibm::cos(a) * 4.0, box2d::fdlibm::sin(a) * 4.0), p);
+                if ejected {
+                    doll.set_grab(world, false);
                 }
+                self.boost = (self.boost - 0.5).max(0.0);
             }
-        } else {
-            if ejected {
-                doll.set_grab(world, false);
+            if k.ctrl && !ejected {
+                self.motors(world, Some(true), Some(true), Some(0.0));
             }
-            self.boost = (self.boost - 0.5).max(0.0);
-        }
-        if k.ctrl && !ejected {
-            self.motors(world, Some(true), Some(true), Some(0.0));
-        }
-        if k.z {
-            self.eject(world, doll);
+            if k.z {
+                self.eject(world, doll);
+            }
         }
         doll.apply_pose(world);
         if self.reattaching {
@@ -2086,6 +2100,9 @@ impl Mower {
         let b = world.b2_mut();
         b.set_shape_filter(shape, Filter { category_bits: 1, mask_bits: 9, group_index: -3 });
         b.shape_mut(shape).material = 0;
+        // the refilter's `Remove`s reach the original's counter before it is reset, so they must not arrive afterwards
+        let clearance = self.clearance_shape;
+        b.c.events.retain(|e| !(e.kind == box2d::world::ContactEventKind::Remove && [e.shape1, e.shape2].contains(&clearance) && [e.shape1, e.shape2].contains(&shape)));
         self.contact_count.insert(body, 0);
         // `grindShape` of the main rider (other ragdolls are not tracked)
         if let Some(mut doll) = world.character.take() {
@@ -2464,90 +2481,93 @@ impl Mower {
             return;
         }
         let ejected = self.ejected;
-        match (k.left, k.right) {
-            (true, false) | (false, true) if ejected => doll.set_pose(if k.left { 1 } else { 2 }),
-            (true, false) | (false, true) => {
-                let left = k.left;
-                let b = world.b2_mut();
-                let (angle, av) = (b.body(self.body).sweep.a, b.body(self.body).angular_velocity);
-                let scale = if left { (av + Self::MAX_SPIN) / Self::MAX_SPIN } else { (av - Self::MAX_SPIN) / -Self::MAX_SPIN };
-                let scale = scale.clamp(0.0, 1.0);
-                let imp = if left { 2.4 } else { 2.8 };
-                let (c, s) = (box2d::fdlibm::cos(angle) * imp * scale, box2d::fdlibm::sin(angle) * imp * scale);
-                let lc = b.body(self.body).sweep.local_center;
-                let near = b.body(self.body).world_point(Vec2::new(lc.x + 1.0, lc.y));
-                let far = b.body(self.body).world_point(Vec2::new(lc.x - 1.0, lc.y));
-                let (p1, p2) = if left { (Vec2::new(s, -c), Vec2::new(-s, c)) } else { (Vec2::new(-s, c), Vec2::new(s, -c)) };
-                b.body_mut(self.body).apply_impulse(p1, near);
-                b.body_mut(self.body).apply_impulse(p2, far);
-                doll.set_pose(if left { 7 } else { 8 });
+        // `checkKeyStates` of a dead character runs none of the key actions
+        if !doll.dead {
+            match (k.left, k.right) {
+                (true, false) | (false, true) if ejected => doll.set_pose(if k.left { 1 } else { 2 }),
+                (true, false) | (false, true) => {
+                    let left = k.left;
+                    let b = world.b2_mut();
+                    let (angle, av) = (b.body(self.body).sweep.a, b.body(self.body).angular_velocity);
+                    let scale = if left { (av + Self::MAX_SPIN) / Self::MAX_SPIN } else { (av - Self::MAX_SPIN) / -Self::MAX_SPIN };
+                    let scale = scale.clamp(0.0, 1.0);
+                    let imp = if left { 2.4 } else { 2.8 };
+                    let (c, s) = (box2d::fdlibm::cos(angle) * imp * scale, box2d::fdlibm::sin(angle) * imp * scale);
+                    let lc = b.body(self.body).sweep.local_center;
+                    let near = b.body(self.body).world_point(Vec2::new(lc.x + 1.0, lc.y));
+                    let far = b.body(self.body).world_point(Vec2::new(lc.x - 1.0, lc.y));
+                    let (p1, p2) = if left { (Vec2::new(s, -c), Vec2::new(-s, c)) } else { (Vec2::new(-s, c), Vec2::new(s, -c)) };
+                    b.body_mut(self.body).apply_impulse(p1, near);
+                    b.body_mut(self.body).apply_impulse(p2, far);
+                    doll.set_pose(if left { 7 } else { 8 });
+                }
+                _ if ejected && (doll.pose == 1 || doll.pose == 2) => doll.set_pose(0),
+                _ => {}
             }
-            _ if ejected && (doll.pose == 1 || doll.pose == 2) => doll.set_pose(0),
-            _ => {}
-        }
-        match (k.up, k.down) {
-            (true, false) | (false, true) if ejected => doll.set_pose(if k.up { 3 } else { 4 }),
-            (true, false) | (false, true) => {
-                let dir = if k.up { 1.0 } else { -1.0 };
-                if !Self::rev_mut(world, self.back_joint).is_some_and(|r| r.enable_motor) {
-                    for id in [self.back_joint, self.front_joint] {
-                        if let Some(r) = Self::rev_mut(world, id) {
-                            r.enable_motor = true;
+            match (k.up, k.down) {
+                (true, false) | (false, true) if ejected => doll.set_pose(if k.up { 3 } else { 4 }),
+                (true, false) | (false, true) => {
+                    let dir = if k.up { 1.0 } else { -1.0 };
+                    if !Self::rev_mut(world, self.back_joint).is_some_and(|r| r.enable_motor) {
+                        for id in [self.back_joint, self.front_joint] {
+                            if let Some(r) = Self::rev_mut(world, id) {
+                                r.enable_motor = true;
+                            }
                         }
                     }
-                }
-                let b = world.b2();
-                let cur = b.body(self.back_wheel).angular_velocity - b.body(self.back_shock).angular_velocity;
-                let new = if cur * dir < 0.0 {
-                    0.0
-                } else if cur * dir < Self::MAX_SPEED {
-                    cur + dir * Self::ACCEL
-                } else {
-                    cur
-                };
-                if let Some(r) = Self::rev_mut(world, self.back_joint) {
-                    r.motor_speed = new;
-                }
-                if let Some(r) = Self::rev_mut(world, self.front_joint) {
-                    r.motor_speed = new * 1.76;
-                }
-            }
-            _ => {
-                if Self::rev_mut(world, self.back_joint).is_some_and(|r| r.enable_motor) {
-                    for id in [self.back_joint, self.front_joint] {
-                        if let Some(r) = Self::rev_mut(world, id) {
-                            r.enable_motor = false;
-                        }
+                    let b = world.b2();
+                    let cur = b.body(self.back_wheel).angular_velocity - b.body(self.back_shock).angular_velocity;
+                    let new = if cur * dir < 0.0 {
+                        0.0
+                    } else if cur * dir < Self::MAX_SPEED {
+                        cur + dir * Self::ACCEL
+                    } else {
+                        cur
+                    };
+                    if let Some(r) = Self::rev_mut(world, self.back_joint) {
+                        r.motor_speed = new;
+                    }
+                    if let Some(r) = Self::rev_mut(world, self.front_joint) {
+                        r.motor_speed = new * 1.76;
                     }
                 }
-                if ejected && (doll.pose == 3 || doll.pose == 4) {
+                _ => {
+                    if Self::rev_mut(world, self.back_joint).is_some_and(|r| r.enable_motor) {
+                        for id in [self.back_joint, self.front_joint] {
+                            if let Some(r) = Self::rev_mut(world, id) {
+                                r.enable_motor = false;
+                            }
+                        }
+                    }
+                    if ejected && (doll.pose == 3 || doll.pose == 4) {
+                        doll.set_pose(0);
+                    }
+                }
+            }
+            if ejected {
+                doll.set_grab(world, k.space);
+                if k.shift {
+                    doll.set_pose(6);
+                } else if doll.pose == 6 {
+                    doll.set_pose(0);
+                }
+                if k.ctrl {
+                    doll.set_pose(7);
+                } else if doll.pose == 7 {
+                    doll.set_pose(0);
+                }
+            } else {
+                self.hop(world, k.space);
+                if !k.shift && doll.pose == 6 {
+                    doll.set_pose(0);
+                }
+                if !k.ctrl && doll.pose == 7 {
                     doll.set_pose(0);
                 }
             }
-        }
-        if ejected {
-            doll.set_grab(world, k.space);
-            if k.shift {
-                doll.set_pose(6);
-            } else if doll.pose == 6 {
-                doll.set_pose(0);
+            if k.z {
+                self.eject(world, doll);
             }
-            if k.ctrl {
-                doll.set_pose(7);
-            } else if doll.pose == 7 {
-                doll.set_pose(0);
-            }
-        } else {
-            self.hop(world, k.space);
-            if !k.shift && doll.pose == 6 {
-                doll.set_pose(0);
-            }
-            if !k.ctrl && doll.pose == 7 {
-                doll.set_pose(0);
-            }
-        }
-        if k.z {
-            self.eject(world, doll);
         }
         doll.apply_pose(world);
     }
@@ -2851,117 +2871,120 @@ impl Pogo {
 
     pub fn keys(&mut self, world: &mut World, doll: &mut Ragdoll, k: Keys) {
         let ejected = self.ejected;
-        match (k.left, k.right) {
-            (true, false) | (false, true) if ejected => doll.set_pose(if k.left { 1 } else { 2 }),
-            (true, false) | (false, true) => {
-                if world.nub.contacts == 0 {
-                    world.nub.air_lean = true;
+        // `checkKeyStates` of a dead character runs none of the key actions
+        if !doll.dead {
+            match (k.left, k.right) {
+                (true, false) | (false, true) if ejected => doll.set_pose(if k.left { 1 } else { 2 }),
+                (true, false) | (false, true) => {
+                    if world.nub.contacts == 0 {
+                        world.nub.air_lean = true;
+                    }
+                    let left = k.left;
+                    let b = world.b2_mut();
+                    let (angle, av) = (b.body(self.frame).sweep.a, b.body(self.frame).angular_velocity);
+                    let f = if left { (av + Self::MAX_SPIN) / Self::MAX_SPIN } else { (av - Self::MAX_SPIN) / -Self::MAX_SPIN };
+                    let f = f.clamp(0.0, 1.0);
+                    let (c, s) = (box2d::fdlibm::cos(angle) * 0.5 * f, box2d::fdlibm::sin(angle) * 0.5 * f);
+                    let lc = b.body(self.frame).sweep.local_center;
+                    let top = b.body(self.frame).world_point(Vec2::new(lc.x, lc.y - 1.0));
+                    let bottom = b.body(self.frame).world_point(Vec2::new(lc.x, lc.y + 1.0));
+                    let (it, ib) = if left { (Vec2::new(-c, -s), Vec2::new(c, s)) } else { (Vec2::new(c, s), Vec2::new(-c, -s)) };
+                    b.body_mut(self.frame).apply_impulse(it, top);
+                    b.body_mut(self.frame).apply_impulse(ib, bottom);
                 }
-                let left = k.left;
-                let b = world.b2_mut();
-                let (angle, av) = (b.body(self.frame).sweep.a, b.body(self.frame).angular_velocity);
-                let f = if left { (av + Self::MAX_SPIN) / Self::MAX_SPIN } else { (av - Self::MAX_SPIN) / -Self::MAX_SPIN };
-                let f = f.clamp(0.0, 1.0);
-                let (c, s) = (box2d::fdlibm::cos(angle) * 0.5 * f, box2d::fdlibm::sin(angle) * 0.5 * f);
-                let lc = b.body(self.frame).sweep.local_center;
-                let top = b.body(self.frame).world_point(Vec2::new(lc.x, lc.y - 1.0));
-                let bottom = b.body(self.frame).world_point(Vec2::new(lc.x, lc.y + 1.0));
-                let (it, ib) = if left { (Vec2::new(-c, -s), Vec2::new(c, s)) } else { (Vec2::new(c, s), Vec2::new(-c, -s)) };
-                b.body_mut(self.frame).apply_impulse(it, top);
-                b.body_mut(self.frame).apply_impulse(ib, bottom);
-            }
-            _ if ejected => {
-                if doll.pose == 1 || doll.pose == 2 {
-                    doll.set_pose(0);
+                _ if ejected => {
+                    if doll.pose == 1 || doll.pose == 2 {
+                        doll.set_pose(0);
+                    }
                 }
+                _ => self.steer(world),
             }
-            _ => self.steer(world),
-        }
-        match (k.up, k.down) {
-            (true, false) | (false, true) if ejected => doll.set_pose(if k.up { 3 } else { 4 }),
-            (true, false) | (false, true) => self.bounce(world, k.up),
-            _ if ejected => {
-                if doll.pose == 3 || doll.pose == 4 {
-                    doll.set_pose(0);
+            match (k.up, k.down) {
+                (true, false) | (false, true) if ejected => doll.set_pose(if k.up { 3 } else { 4 }),
+                (true, false) | (false, true) => self.bounce(world, k.up),
+                _ if ejected => {
+                    if doll.pose == 3 || doll.pose == 4 {
+                        doll.set_pose(0);
+                    }
                 }
-            }
-            _ => {
-                self.target_angle = Self::UPRIGHT;
-                if !self.charging {
-                    let translation = world.b2().prismatic_translation(self.pogo).unwrap_or(0.0);
-                    if let Some(p) = Self::pogo_mut(world, self.pogo) {
-                        if p.lower_translation != 0.0 {
-                            if translation < 0.0 {
-                                p.motor_speed = 0.5;
-                            } else {
-                                p.motor_speed = 0.0;
-                                p.lower_translation = 0.0;
+                _ => {
+                    self.target_angle = Self::UPRIGHT;
+                    if !self.charging {
+                        let translation = world.b2().prismatic_translation(self.pogo).unwrap_or(0.0);
+                        if let Some(p) = Self::pogo_mut(world, self.pogo) {
+                            if p.lower_translation != 0.0 {
+                                if translation < 0.0 {
+                                    p.motor_speed = 0.5;
+                                } else {
+                                    p.motor_speed = 0.0;
+                                    p.lower_translation = 0.0;
+                                }
                             }
                         }
                     }
                 }
             }
-        }
-        if k.space {
-            if ejected {
-                doll.set_grab(world, true);
-            } else {
-                self.charging = true;
-                let translation = world.b2().prismatic_translation(self.pogo).unwrap_or(0.0);
-                if let Some(p) = Self::pogo_mut(world, self.pogo) {
-                    if p.lower_translation != Self::JUMP {
-                        p.lower_translation = Self::JUMP;
-                    }
-                    p.motor_speed = if translation > p.lower_translation { Self::RETRACT } else { 0.0 };
-                }
-            }
-        } else if ejected {
-            doll.set_grab(world, false);
-        } else if self.charging {
-            let translation = world.b2().prismatic_translation(self.pogo).unwrap_or(0.0);
-            let mut done = false;
-            let mut release_volume = None;
-            if let Some(p) = Self::pogo_mut(world, self.pogo) {
-                if translation < 0.0 {
-                    if translation * -70.0 > p.motor_speed {
-                        release_volume = Some((-translation * 62.5 / 20.0).clamp(0.0, 1.0));
-                    }
-                    p.motor_speed = translation * -70.0;
+            if k.space {
+                if ejected {
+                    doll.set_grab(world, true);
                 } else {
-                    p.motor_speed = 0.0;
-                    p.lower_translation = 0.0;
-                    done = true;
+                    self.charging = true;
+                    let translation = world.b2().prismatic_translation(self.pogo).unwrap_or(0.0);
+                    if let Some(p) = Self::pogo_mut(world, self.pogo) {
+                        if p.lower_translation != Self::JUMP {
+                            p.lower_translation = Self::JUMP;
+                        }
+                        p.motor_speed = if translation > p.lower_translation { Self::RETRACT } else { 0.0 };
+                    }
+                }
+            } else if ejected {
+                doll.set_grab(world, false);
+            } else if self.charging {
+                let translation = world.b2().prismatic_translation(self.pogo).unwrap_or(0.0);
+                let mut done = false;
+                let mut release_volume = None;
+                if let Some(p) = Self::pogo_mut(world, self.pogo) {
+                    if translation < 0.0 {
+                        if translation * -70.0 > p.motor_speed {
+                            release_volume = Some((-translation * 62.5 / 20.0).clamp(0.0, 1.0));
+                        }
+                        p.motor_speed = translation * -70.0;
+                    } else {
+                        p.motor_speed = 0.0;
+                        p.lower_translation = 0.0;
+                        done = true;
+                    }
+                }
+                if let Some(volume) = release_volume {
+                    let at = world.b2().body(self.frame).sweep.c;
+                    world.play_scaled("PogoRelease", at, volume);
+                }
+                if done {
+                    self.charging = false;
+                    self.jump_frames = 5;
                 }
             }
-            if let Some(volume) = release_volume {
-                let at = world.b2().body(self.frame).sweep.c;
-                world.play_scaled("PogoRelease", at, volume);
+            if k.shift {
+                doll.set_pose(if ejected { 7 } else { 5 });
+            } else if ejected {
+                if doll.pose == 7 {
+                    doll.set_pose(0);
+                }
+            } else if doll.pose == 5 {
+                doll.set_pose(9);
             }
-            if done {
-                self.charging = false;
-                self.jump_frames = 5;
+            if k.ctrl {
+                doll.set_pose(if ejected { 8 } else { 6 });
+            } else if ejected {
+                if doll.pose == 8 {
+                    doll.set_pose(0);
+                }
+            } else if doll.pose == 6 {
+                doll.set_pose(9);
             }
-        }
-        if k.shift {
-            doll.set_pose(if ejected { 7 } else { 5 });
-        } else if ejected {
-            if doll.pose == 7 {
-                doll.set_pose(0);
+            if k.z {
+                self.eject(world, doll);
             }
-        } else if doll.pose == 5 {
-            doll.set_pose(9);
-        }
-        if k.ctrl {
-            doll.set_pose(if ejected { 8 } else { 6 });
-        } else if ejected {
-            if doll.pose == 8 {
-                doll.set_pose(0);
-            }
-        } else if doll.pose == 6 {
-            doll.set_pose(9);
-        }
-        if k.z {
-            self.eject(world, doll);
         }
         // actions: relaxPogo (after eject), checkPose, jump frame countdown
         if self.relaxing {
@@ -3352,84 +3375,87 @@ impl Cart {
 
     pub fn keys(&mut self, world: &mut World, doll: &mut Ragdoll, k: Keys) {
         let ejected = self.ejected;
-        match (k.left, k.right) {
-            (true, false) | (false, true) if ejected => doll.set_pose(if k.left { 1 } else { 2 }),
-            (true, false) | (false, true) => {
-                let left = k.left;
-                let b = world.b2_mut();
-                let (angle, av) = (b.body(self.body).sweep.a, b.body(self.body).angular_velocity);
-                let f = if left { (av + Self::MAX_SPIN) / Self::MAX_SPIN } else { (av - Self::MAX_SPIN) / -Self::MAX_SPIN };
-                let f = f.clamp(0.0, 1.0);
-                // original: `Math.cos(a) * impulseMagnitude * f` (left to right)
-                let (c, s) = (box2d::fdlibm::cos(angle) * 1.25 * f, box2d::fdlibm::sin(angle) * 1.25 * f);
-                let lc = b.body(self.body).sweep.local_center;
-                let off = if left { 1.0 } else { -1.0 };
-                let point = b.body(self.body).world_point(Vec2::new(lc.x + off, lc.y));
-                b.body_mut(self.body).apply_impulse(Vec2::new(s, -c), point);
+        // `checkKeyStates` of a dead character runs none of the key actions
+        if !doll.dead {
+            match (k.left, k.right) {
+                (true, false) | (false, true) if ejected => doll.set_pose(if k.left { 1 } else { 2 }),
+                (true, false) | (false, true) => {
+                    let left = k.left;
+                    let b = world.b2_mut();
+                    let (angle, av) = (b.body(self.body).sweep.a, b.body(self.body).angular_velocity);
+                    let f = if left { (av + Self::MAX_SPIN) / Self::MAX_SPIN } else { (av - Self::MAX_SPIN) / -Self::MAX_SPIN };
+                    let f = f.clamp(0.0, 1.0);
+                    // original: `Math.cos(a) * impulseMagnitude * f` (left to right)
+                    let (c, s) = (box2d::fdlibm::cos(angle) * 1.25 * f, box2d::fdlibm::sin(angle) * 1.25 * f);
+                    let lc = b.body(self.body).sweep.local_center;
+                    let off = if left { 1.0 } else { -1.0 };
+                    let point = b.body(self.body).world_point(Vec2::new(lc.x + off, lc.y));
+                    b.body_mut(self.body).apply_impulse(Vec2::new(s, -c), point);
+                }
+                _ if ejected && (doll.pose == 1 || doll.pose == 2) => doll.set_pose(0),
+                _ => {}
             }
-            _ if ejected && (doll.pose == 1 || doll.pose == 2) => doll.set_pose(0),
-            _ => {}
-        }
-        match (k.up, k.down) {
-            (true, false) | (false, true) if ejected => doll.set_pose(if k.up { 3 } else { 4 }),
-            (true, false) | (false, true) => {
-                let dir = if k.up { 1.0 } else { -1.0 };
-                if !Self::rev_mut(world, self.back_joint).is_some_and(|r| r.enable_motor) {
+            match (k.up, k.down) {
+                (true, false) | (false, true) if ejected => doll.set_pose(if k.up { 3 } else { 4 }),
+                (true, false) | (false, true) => {
+                    let dir = if k.up { 1.0 } else { -1.0 };
+                    if !Self::rev_mut(world, self.back_joint).is_some_and(|r| r.enable_motor) {
+                        for id in [self.back_joint, self.front_joint] {
+                            if let Some(r) = Self::rev_mut(world, id) {
+                                r.enable_motor = true;
+                            }
+                        }
+                    }
+                    let b = world.b2();
+                    let cur = b.body(self.back_wheel).angular_velocity - b.body(self.back_shock).angular_velocity;
+                    let new = if cur * dir < 0.0 {
+                        0.0
+                    } else if cur * dir < Self::MAX_SPEED {
+                        cur + dir * Self::ACCEL
+                    } else {
+                        cur
+                    };
                     for id in [self.back_joint, self.front_joint] {
                         if let Some(r) = Self::rev_mut(world, id) {
-                            r.enable_motor = true;
+                            r.motor_speed = new;
                         }
                     }
                 }
-                let b = world.b2();
-                let cur = b.body(self.back_wheel).angular_velocity - b.body(self.back_shock).angular_velocity;
-                let new = if cur * dir < 0.0 {
-                    0.0
-                } else if cur * dir < Self::MAX_SPEED {
-                    cur + dir * Self::ACCEL
-                } else {
-                    cur
-                };
-                for id in [self.back_joint, self.front_joint] {
-                    if let Some(r) = Self::rev_mut(world, id) {
-                        r.motor_speed = new;
-                    }
-                }
-            }
-            _ => {
-                if Self::rev_mut(world, self.back_joint).is_some_and(|r| r.enable_motor) {
-                    for id in [self.back_joint, self.front_joint] {
-                        if let Some(r) = Self::rev_mut(world, id) {
-                            r.enable_motor = false;
+                _ => {
+                    if Self::rev_mut(world, self.back_joint).is_some_and(|r| r.enable_motor) {
+                        for id in [self.back_joint, self.front_joint] {
+                            if let Some(r) = Self::rev_mut(world, id) {
+                                r.enable_motor = false;
+                            }
                         }
                     }
+                    if ejected && (doll.pose == 3 || doll.pose == 4) {
+                        doll.set_pose(0);
+                    }
                 }
-                if ejected && (doll.pose == 3 || doll.pose == 4) {
-                    doll.set_pose(0);
+            }
+            if ejected {
+                doll.set_grab(world, k.space);
+            } else {
+                self.hop(world, k.space);
+            }
+            if k.shift {
+                if ejected {
+                    doll.set_pose(6);
                 }
+            } else if doll.pose == 6 {
+                doll.set_pose(0);
             }
-        }
-        if ejected {
-            doll.set_grab(world, k.space);
-        } else {
-            self.hop(world, k.space);
-        }
-        if k.shift {
-            if ejected {
-                doll.set_pose(6);
+            if k.ctrl {
+                if ejected {
+                    doll.set_pose(7);
+                }
+            } else if doll.pose == 7 {
+                doll.set_pose(0);
             }
-        } else if doll.pose == 6 {
-            doll.set_pose(0);
-        }
-        if k.ctrl {
-            if ejected {
-                doll.set_pose(7);
+            if k.z {
+                self.eject(world, doll);
             }
-        } else if doll.pose == 7 {
-            doll.set_pose(0);
-        }
-        if k.z {
-            self.eject(world, doll);
         }
         doll.apply_pose(world);
     }
@@ -3776,112 +3802,115 @@ impl Heli {
         if !self.copter_smashed {
             self.curr_com = self.center_of_mass(world); // preActions
         }
-        match (k.left, k.right) {
-            (true, false) | (false, true) if ejected => doll.set_pose(if k.left { 1 } else { 2 }),
-            (true, false) => {
-                if self.spin_acceleration > 0.0 {
-                    self.spin_acceleration = -self.spin_acceleration;
-                }
-                self.spin_acceleration -= Self::ACCEL;
-                if self.spin_acceleration < -Self::MAX_STEP {
-                    self.spin_acceleration = -Self::MAX_STEP;
-                }
-                self.target_ang += self.spin_acceleration;
-                doll.set_pose(7);
-            }
-            (false, true) => {
-                if self.spin_acceleration < 0.0 {
-                    self.spin_acceleration = -self.spin_acceleration;
-                }
-                self.spin_acceleration += Self::ACCEL;
-                if self.spin_acceleration > Self::MAX_STEP {
-                    self.spin_acceleration = Self::MAX_STEP;
-                }
-                self.target_ang += self.spin_acceleration;
-                doll.set_pose(8);
-            }
-            _ if ejected => {
-                if doll.pose == 1 || doll.pose == 2 {
-                    doll.set_pose(0);
-                }
-            }
-            _ => {
-                if self.target_ang > 0.0 {
-                    self.spin_acceleration -= Self::DECEL;
+        // `checkKeyStates` of a dead character runs none of the key actions
+        if !doll.dead {
+            match (k.left, k.right) {
+                (true, false) | (false, true) if ejected => doll.set_pose(if k.left { 1 } else { 2 }),
+                (true, false) => {
+                    if self.spin_acceleration > 0.0 {
+                        self.spin_acceleration = -self.spin_acceleration;
+                    }
+                    self.spin_acceleration -= Self::ACCEL;
                     if self.spin_acceleration < -Self::MAX_STEP {
                         self.spin_acceleration = -Self::MAX_STEP;
                     }
                     self.target_ang += self.spin_acceleration;
-                    if self.target_ang < 0.0 {
-                        self.target_ang = 0.0;
+                    doll.set_pose(7);
+                }
+                (false, true) => {
+                    if self.spin_acceleration < 0.0 {
+                        self.spin_acceleration = -self.spin_acceleration;
                     }
-                } else if self.target_ang < 0.0 {
-                    self.spin_acceleration += Self::DECEL;
+                    self.spin_acceleration += Self::ACCEL;
                     if self.spin_acceleration > Self::MAX_STEP {
                         self.spin_acceleration = Self::MAX_STEP;
                     }
                     self.target_ang += self.spin_acceleration;
+                    doll.set_pose(8);
+                }
+                _ if ejected => {
+                    if doll.pose == 1 || doll.pose == 2 {
+                        doll.set_pose(0);
+                    }
+                }
+                _ => {
                     if self.target_ang > 0.0 {
-                        self.target_ang = 0.0;
+                        self.spin_acceleration -= Self::DECEL;
+                        if self.spin_acceleration < -Self::MAX_STEP {
+                            self.spin_acceleration = -Self::MAX_STEP;
+                        }
+                        self.target_ang += self.spin_acceleration;
+                        if self.target_ang < 0.0 {
+                            self.target_ang = 0.0;
+                        }
+                    } else if self.target_ang < 0.0 {
+                        self.spin_acceleration += Self::DECEL;
+                        if self.spin_acceleration > Self::MAX_STEP {
+                            self.spin_acceleration = Self::MAX_STEP;
+                        }
+                        self.target_ang += self.spin_acceleration;
+                        if self.target_ang > 0.0 {
+                            self.target_ang = 0.0;
+                        }
+                    }
+                    if doll.pose == 7 || doll.pose == 8 {
+                        doll.set_pose(0);
                     }
                 }
-                if doll.pose == 7 || doll.pose == 8 {
-                    doll.set_pose(0);
+            }
+            match (k.up, k.down) {
+                (true, false) | (false, true) if ejected => doll.set_pose(if k.up { 3 } else { 4 }),
+                (true, false) => self.hover_state = 1,
+                (false, true) => self.hover_state = -1,
+                _ if ejected => {
+                    if doll.pose == 3 || doll.pose == 4 {
+                        doll.set_pose(0);
+                    }
                 }
+                _ => self.hover_state = 0,
             }
-        }
-        match (k.up, k.down) {
-            (true, false) | (false, true) if ejected => doll.set_pose(if k.up { 3 } else { 4 }),
-            (true, false) => self.hover_state = 1,
-            (false, true) => self.hover_state = -1,
-            _ if ejected => {
-                if doll.pose == 3 || doll.pose == 4 {
-                    doll.set_pose(0);
+            if k.space {
+                if ejected {
+                    doll.set_grab(world, true);
+                } else if self.space_off {
+                    self.space_off = false;
+                    self.magnetized = !self.magnetized;
                 }
-            }
-            _ => self.hover_state = 0,
-        }
-        if k.space {
-            if ejected {
-                doll.set_grab(world, true);
-            } else if self.space_off {
-                self.space_off = false;
-                self.magnetized = !self.magnetized;
-            }
-        } else if ejected {
-            doll.set_grab(world, false);
-        } else {
-            self.space_off = true;
-        }
-        if k.shift {
-            if ejected {
-                doll.set_pose(7);
+            } else if ejected {
+                doll.set_grab(world, false);
             } else {
-                let min = self.rope_min;
-                if let Some(r) = Self::rope_mut(world, self.rope) {
-                    r.max_length -= Self::ROPE_SPEED;
-                    if r.max_length < min {
-                        r.max_length = min;
+                self.space_off = true;
+            }
+            if k.shift {
+                if ejected {
+                    doll.set_pose(7);
+                } else {
+                    let min = self.rope_min;
+                    if let Some(r) = Self::rope_mut(world, self.rope) {
+                        r.max_length -= Self::ROPE_SPEED;
+                        if r.max_length < min {
+                            r.max_length = min;
+                        }
                     }
                 }
+            } else if ejected && doll.pose == 7 {
+                doll.set_pose(0);
             }
-        } else if ejected && doll.pose == 7 {
-            doll.set_pose(0);
-        }
-        if k.ctrl {
-            if ejected {
-                doll.set_pose(8);
-            } else if let Some(r) = Self::rope_mut(world, self.rope) {
-                r.max_length += Self::ROPE_SPEED;
-                if r.max_length > Self::ROPE_MAX {
-                    r.max_length = Self::ROPE_MAX;
+            if k.ctrl {
+                if ejected {
+                    doll.set_pose(8);
+                } else if let Some(r) = Self::rope_mut(world, self.rope) {
+                    r.max_length += Self::ROPE_SPEED;
+                    if r.max_length > Self::ROPE_MAX {
+                        r.max_length = Self::ROPE_MAX;
+                    }
                 }
+            } else if ejected && doll.pose == 8 {
+                doll.set_pose(0);
             }
-        } else if ejected && doll.pose == 8 {
-            doll.set_pose(0);
-        }
-        if k.z {
-            self.eject(world, doll);
+            if k.z {
+                self.eject(world, doll);
+            }
         }
         doll.apply_pose(world);
         if !self.copter_smashed {
@@ -4532,72 +4561,75 @@ impl Grinder {
     }
     pub fn keys(&mut self, world: &mut World, doll: &mut Ragdoll, k: Keys) {
         let ejected = self.ejected;
-        match (k.left, k.right) {
-            (true, false) | (false, true) if ejected => doll.set_pose(if k.left { 1 } else { 2 }),
-            (true, false) | (false, true) => {
-                let left = k.left;
-                let b = world.b2_mut();
-                let (angle, av) = (b.body(self.frame).sweep.a, b.body(self.frame).angular_velocity);
-                let f = if left { (av + Self::MAX_SPIN) / Self::MAX_SPIN } else { (av - Self::MAX_SPIN) / -Self::MAX_SPIN };
-                let f = f.clamp(0.0, 1.0);
-                let (c, s) = (box2d::fdlibm::cos(angle) * Self::IMPULSE * f, box2d::fdlibm::sin(angle) * Self::IMPULSE * f);
-                let lc = b.body(self.frame).sweep.local_center;
-                let off = if left { Self::OFFSET } else { -Self::OFFSET };
-                let point = b.body(self.frame).world_point(Vec2::new(lc.x + off, lc.y));
-                b.body_mut(self.frame).apply_impulse(Vec2::new(s, -c), point);
-            }
-            _ if ejected && (doll.pose == 1 || doll.pose == 2) => doll.set_pose(0),
-            _ => {}
-        }
-        match (k.up, k.down) {
-            (true, false) | (false, true) if ejected => doll.set_pose(if k.up { 3 } else { 4 }),
-            (true, false) | (false, true) => self.drive(world, k.up),
-            _ => {
-                for d in self.dongles.iter().flatten() {
-                    if let box2d::joints::JointKind::Prismatic(p) = &mut world.b2_mut().joint_mut(d.slider).kind {
-                        p.enable_motor = false;
-                    }
+        // `checkKeyStates` of a dead character runs none of the key actions
+        if !doll.dead {
+            match (k.left, k.right) {
+                (true, false) | (false, true) if ejected => doll.set_pose(if k.left { 1 } else { 2 }),
+                (true, false) | (false, true) => {
+                    let left = k.left;
+                    let b = world.b2_mut();
+                    let (angle, av) = (b.body(self.frame).sweep.a, b.body(self.frame).angular_velocity);
+                    let f = if left { (av + Self::MAX_SPIN) / Self::MAX_SPIN } else { (av - Self::MAX_SPIN) / -Self::MAX_SPIN };
+                    let f = f.clamp(0.0, 1.0);
+                    let (c, s) = (box2d::fdlibm::cos(angle) * Self::IMPULSE * f, box2d::fdlibm::sin(angle) * Self::IMPULSE * f);
+                    let lc = b.body(self.frame).sweep.local_center;
+                    let off = if left { Self::OFFSET } else { -Self::OFFSET };
+                    let point = b.body(self.frame).world_point(Vec2::new(lc.x + off, lc.y));
+                    b.body_mut(self.frame).apply_impulse(Vec2::new(s, -c), point);
                 }
-                let motors = Self::rev_mut(world, self.back_joint).is_some_and(|r| r.enable_motor);
-                if motors {
-                    for id in [self.back_joint, self.front_joint] {
-                        if let Some(r) = Self::rev_mut(world, id) {
-                            r.enable_motor = false;
+                _ if ejected && (doll.pose == 1 || doll.pose == 2) => doll.set_pose(0),
+                _ => {}
+            }
+            match (k.up, k.down) {
+                (true, false) | (false, true) if ejected => doll.set_pose(if k.up { 3 } else { 4 }),
+                (true, false) | (false, true) => self.drive(world, k.up),
+                _ => {
+                    for d in self.dongles.iter().flatten() {
+                        if let box2d::joints::JointKind::Prismatic(p) = &mut world.b2_mut().joint_mut(d.slider).kind {
+                            p.enable_motor = false;
                         }
                     }
-                }
-                if ejected && (doll.pose == 3 || doll.pose == 4) {
-                    doll.set_pose(0);
+                    let motors = Self::rev_mut(world, self.back_joint).is_some_and(|r| r.enable_motor);
+                    if motors {
+                        for id in [self.back_joint, self.front_joint] {
+                            if let Some(r) = Self::rev_mut(world, id) {
+                                r.enable_motor = false;
+                            }
+                        }
+                    }
+                    if ejected && (doll.pose == 3 || doll.pose == 4) {
+                        doll.set_pose(0);
+                    }
                 }
             }
-        }
-        if k.space {
-            if ejected {
-                doll.set_grab(world, true);
+            if k.space {
+                if ejected {
+                    doll.set_grab(world, true);
+                } else {
+                    self.connecting = true;
+                }
             } else {
-                self.connecting = true;
+                if ejected {
+                    doll.set_grab(world, false);
+                }
+                self.connecting = false;
+                for n in 0..2 {
+                    self.remove_dongle(world, n);
+                }
             }
-        } else {
-            if ejected {
-                doll.set_grab(world, false);
+            if k.shift {
+                doll.set_pose(if ejected { 5 } else { 8 });
+            } else if doll.pose == 5 || doll.pose == 8 {
+                doll.set_pose(0);
             }
-            self.connecting = false;
-            for n in 0..2 {
-                self.remove_dongle(world, n);
+            if k.ctrl {
+                doll.set_pose(if ejected { 6 } else { 7 });
+            } else if doll.pose == 6 || doll.pose == 7 {
+                doll.set_pose(0);
             }
-        }
-        if k.shift {
-            doll.set_pose(if ejected { 5 } else { 8 });
-        } else if doll.pose == 5 || doll.pose == 8 {
-            doll.set_pose(0);
-        }
-        if k.ctrl {
-            doll.set_pose(if ejected { 6 } else { 7 });
-        } else if doll.pose == 6 || doll.pose == 7 {
-            doll.set_pose(0);
-        }
-        if k.z {
-            self.eject(world, doll);
+            if k.z {
+                self.eject(world, doll);
+            }
         }
         doll.apply_pose(world);
         self.rail_actions(world);
@@ -4741,53 +4773,56 @@ impl Daughter {
 
     pub fn keys(&mut self, world: &mut World, k: Keys) {
         let ejected = self.ejected;
-        match (k.left, k.right) {
-            (true, false) | (false, true) if ejected => self.doll.set_pose(if k.left { 1 } else { 2 }),
-            _ if ejected && (self.doll.pose == 1 || self.doll.pose == 2) => self.doll.set_pose(0),
-            _ => {}
-        }
-        match (k.up, k.down) {
-            (true, false) | (false, true) => {
-                let up = k.up;
-                if ejected {
-                    self.doll.set_pose(if up { 3 } else { 4 });
-                } else {
-                    let b = world.b2();
-                    let speed = b.body(self.wheel).angular_velocity - b.body(self.frame).angular_velocity;
-                    let new = if up {
-                        if speed < 0.0 { 0.0 } else if speed < Self::MAX_SPEED { speed + Self::ACCEL } else { speed }
-                    } else if speed > 0.0 {
-                        0.0
-                    } else if speed > -Self::MAX_SPEED {
-                        speed - Self::ACCEL
+        // `checkKeyStates` of a dead character runs none of the key actions
+        if !self.doll.dead {
+            match (k.left, k.right) {
+                (true, false) | (false, true) if ejected => self.doll.set_pose(if k.left { 1 } else { 2 }),
+                _ if ejected && (self.doll.pose == 1 || self.doll.pose == 2) => self.doll.set_pose(0),
+                _ => {}
+            }
+            match (k.up, k.down) {
+                (true, false) | (false, true) => {
+                    let up = k.up;
+                    if ejected {
+                        self.doll.set_pose(if up { 3 } else { 4 });
                     } else {
-                        speed
-                    };
+                        let b = world.b2();
+                        let speed = b.body(self.wheel).angular_velocity - b.body(self.frame).angular_velocity;
+                        let new = if up {
+                            if speed < 0.0 { 0.0 } else if speed < Self::MAX_SPEED { speed + Self::ACCEL } else { speed }
+                        } else if speed > 0.0 {
+                            0.0
+                        } else if speed > -Self::MAX_SPEED {
+                            speed - Self::ACCEL
+                        } else {
+                            speed
+                        };
+                        if let Some(r) = self.motor_mut(world) {
+                            r.enable_motor = true;
+                            r.motor_speed = new;
+                        }
+                    }
+                }
+                _ => {
                     if let Some(r) = self.motor_mut(world) {
-                        r.enable_motor = true;
-                        r.motor_speed = new;
+                        r.enable_motor = false;
+                    }
+                    if ejected && (self.doll.pose == 3 || self.doll.pose == 4) {
+                        self.doll.set_pose(0);
                     }
                 }
             }
-            _ => {
+            if ejected {
+                self.doll.set_grab(world, k.space);
+            } else if k.space {
                 if let Some(r) = self.motor_mut(world) {
-                    r.enable_motor = false;
-                }
-                if ejected && (self.doll.pose == 3 || self.doll.pose == 4) {
-                    self.doll.set_pose(0);
+                    r.enable_motor = true;
+                    r.motor_speed = 0.0;
                 }
             }
-        }
-        if ejected {
-            self.doll.set_grab(world, k.space);
-        } else if k.space {
-            if let Some(r) = self.motor_mut(world) {
-                r.enable_motor = true;
-                r.motor_speed = 0.0;
+            if k.ctrl || k.z {
+                self.eject(world);
             }
-        }
-        if k.ctrl || k.z {
-            self.eject(world);
         }
         self.doll.apply_pose(world);
     }
@@ -4872,11 +4907,7 @@ impl Daughter {
             if !hits.contains(&part) {
                 continue;
             }
-            match part {
-                Part::Head => self.doll.smash_head(world),
-                Part::Chest => self.doll.smash_chest(world),
-                _ => self.doll.smash_pelvis(world),
-            }
+            smash_part(self, world, part, |p| &mut p.doll, Self::limbs_broken);
             self.eject(world);
         }
         for (leg, part) in [Part::LowerLeg1, Part::LowerLeg2].into_iter().enumerate() {
@@ -5035,23 +5066,26 @@ impl Son {
     }
 
     pub fn keys(&mut self, world: &mut World, k: Keys) {
-        if self.ejected {
-            match (k.left, k.right) {
-                (true, false) => self.doll.set_pose(1),
-                (false, true) => self.doll.set_pose(2),
-                _ if self.doll.pose == 1 || self.doll.pose == 2 => self.doll.set_pose(0),
-                _ => {}
+        // `checkKeyStates` of a dead character runs none of the key actions
+        if !self.doll.dead {
+            if self.ejected {
+                match (k.left, k.right) {
+                    (true, false) => self.doll.set_pose(1),
+                    (false, true) => self.doll.set_pose(2),
+                    _ if self.doll.pose == 1 || self.doll.pose == 2 => self.doll.set_pose(0),
+                    _ => {}
+                }
+                match (k.up, k.down) {
+                    (true, false) => self.doll.set_pose(3),
+                    (false, true) => self.doll.set_pose(4),
+                    _ if self.doll.pose == 3 || self.doll.pose == 4 => self.doll.set_pose(0),
+                    _ => {}
+                }
+                self.doll.set_grab(world, k.space);
             }
-            match (k.up, k.down) {
-                (true, false) => self.doll.set_pose(3),
-                (false, true) => self.doll.set_pose(4),
-                _ if self.doll.pose == 3 || self.doll.pose == 4 => self.doll.set_pose(0),
-                _ => {}
+            if k.shift || k.z {
+                self.eject(world);
             }
-            self.doll.set_grab(world, k.space);
-        }
-        if k.shift || k.z {
-            self.eject(world);
         }
         self.doll.apply_pose(world);
     }
@@ -5063,11 +5097,7 @@ impl Son {
             if !hits.contains(&part) {
                 continue;
             }
-            match part {
-                Part::Head => self.doll.smash_head(world),
-                Part::Chest => self.doll.smash_chest(world),
-                _ => self.doll.smash_pelvis(world),
-            }
+            smash_part(self, world, part, |p| &mut p.doll, Self::limbs_broken);
             self.eject(world);
         }
         for (leg, part) in [Part::LowerLeg1, Part::LowerLeg2].into_iter().enumerate() {
@@ -5267,23 +5297,26 @@ impl Kid {
     }
 
     pub fn keys(&mut self, world: &mut World, k: Keys) {
-        if self.ejected {
-            match (k.left, k.right) {
-                (true, false) => self.doll.set_pose(1),
-                (false, true) => self.doll.set_pose(2),
-                _ if self.doll.pose == 1 || self.doll.pose == 2 => self.doll.set_pose(0),
-                _ => {}
+        // `checkKeyStates` of a dead character runs none of the key actions
+        if !self.doll.dead {
+            if self.ejected {
+                match (k.left, k.right) {
+                    (true, false) => self.doll.set_pose(1),
+                    (false, true) => self.doll.set_pose(2),
+                    _ if self.doll.pose == 1 || self.doll.pose == 2 => self.doll.set_pose(0),
+                    _ => {}
+                }
+                match (k.up, k.down) {
+                    (true, false) => self.doll.set_pose(3),
+                    (false, true) => self.doll.set_pose(4),
+                    _ if self.doll.pose == 3 || self.doll.pose == 4 => self.doll.set_pose(0),
+                    _ => {}
+                }
+                self.doll.set_grab(world, k.space);
             }
-            match (k.up, k.down) {
-                (true, false) => self.doll.set_pose(3),
-                (false, true) => self.doll.set_pose(4),
-                _ if self.doll.pose == 3 || self.doll.pose == 4 => self.doll.set_pose(0),
-                _ => {}
+            if k.ctrl || k.z {
+                self.eject(world);
             }
-            self.doll.set_grab(world, k.space);
-        }
-        if k.ctrl || k.z {
-            self.eject(world);
         }
         self.doll.apply_pose(world);
     }
@@ -5324,11 +5357,7 @@ impl Kid {
             if !hits.contains(&part) {
                 continue;
             }
-            match part {
-                Part::Head => self.doll.smash_head(world),
-                Part::Chest => self.doll.smash_chest(world),
-                _ => self.doll.smash_pelvis(world),
-            }
+            smash_part(self, world, part, |p| &mut p.doll, Self::limbs_broken);
             if part != Part::Head {
                 self.eject(world);
             }
@@ -5499,23 +5528,26 @@ impl Girl {
         if self.legs_free_pending {
             self.legs_free(world);
         }
-        if self.ejected {
-            match (k.left, k.right) {
-                (true, false) => self.doll.set_pose(1),
-                (false, true) => self.doll.set_pose(2),
-                _ if self.doll.pose == 1 || self.doll.pose == 2 => self.doll.set_pose(0),
-                _ => {}
+        // `checkKeyStates` of a dead character runs none of the key actions
+        if !self.doll.dead {
+            if self.ejected {
+                match (k.left, k.right) {
+                    (true, false) => self.doll.set_pose(1),
+                    (false, true) => self.doll.set_pose(2),
+                    _ if self.doll.pose == 1 || self.doll.pose == 2 => self.doll.set_pose(0),
+                    _ => {}
+                }
+                match (k.up, k.down) {
+                    (true, false) => self.doll.set_pose(3),
+                    (false, true) => self.doll.set_pose(4),
+                    _ if self.doll.pose == 3 || self.doll.pose == 4 => self.doll.set_pose(0),
+                    _ => {}
+                }
+                self.doll.set_grab(world, k.space);
             }
-            match (k.up, k.down) {
-                (true, false) => self.doll.set_pose(3),
-                (false, true) => self.doll.set_pose(4),
-                _ if self.doll.pose == 3 || self.doll.pose == 4 => self.doll.set_pose(0),
-                _ => {}
+            if k.shift {
+                self.eject(world);
             }
-            self.doll.set_grab(world, k.space);
-        }
-        if k.shift {
-            self.eject(world);
         }
         self.doll.apply_pose(world);
     }
@@ -5571,11 +5603,7 @@ impl Girl {
             if !hits.contains(&part) {
                 continue;
             }
-            match part {
-                Part::Head => self.doll.smash_head(world),
-                Part::Chest => self.doll.smash_chest(world),
-                _ => self.doll.smash_pelvis(world),
-            }
+            smash_part(self, world, part, |p| &mut p.doll, Self::limbs_broken);
             self.eject(world);
         }
     }
@@ -5872,50 +5900,53 @@ impl Elf {
 
     fn keys(&mut self, world: &mut World, k: Keys) {
         let ejected = self.ejected;
-        match (k.left, k.right) {
-            (true, false) if ejected => self.doll.set_pose(1),
-            (false, true) if ejected => self.doll.set_pose(2),
-            (true, true) | (false, false) if ejected && (self.doll.pose == 1 || self.doll.pose == 2) => self.doll.set_pose(0),
-            _ => {}
-        }
-        match (k.up, k.down) {
-            (true, false) | (false, true) => {
-                let up = k.up;
-                if ejected {
-                    self.doll.set_pose(if up { 3 } else { 4 });
-                } else if self.legs_ok {
-                    if let Some(id) = self.stem_wheel {
-                        let speed = joint_speed(world, id);
-                        let new = if up {
-                            if speed < self.wheel_max_speed { speed + self.accel_step } else { speed }
-                        } else if speed > -self.wheel_max_speed {
-                            speed - self.accel_step
-                        } else {
-                            speed
-                        };
-                        if let Some(r) = revolute_mut(world, id) {
-                            r.enable_motor = true;
-                            r.motor_speed = new;
-                        }
-                    }
-                    self.doll.set_pose(if up { 5 } else { 6 });
-                }
+        // `checkKeyStates` of a dead character runs none of the key actions
+        if !self.doll.dead {
+            match (k.left, k.right) {
+                (true, false) if ejected => self.doll.set_pose(1),
+                (false, true) if ejected => self.doll.set_pose(2),
+                (true, true) | (false, false) if ejected && (self.doll.pose == 1 || self.doll.pose == 2) => self.doll.set_pose(0),
+                _ => {}
             }
-            _ => {
-                if ejected {
-                    if self.doll.pose == 3 || self.doll.pose == 4 {
+            match (k.up, k.down) {
+                (true, false) | (false, true) => {
+                    let up = k.up;
+                    if ejected {
+                        self.doll.set_pose(if up { 3 } else { 4 });
+                    } else if self.legs_ok {
+                        if let Some(id) = self.stem_wheel {
+                            let speed = joint_speed(world, id);
+                            let new = if up {
+                                if speed < self.wheel_max_speed { speed + self.accel_step } else { speed }
+                            } else if speed > -self.wheel_max_speed {
+                                speed - self.accel_step
+                            } else {
+                                speed
+                            };
+                            if let Some(r) = revolute_mut(world, id) {
+                                r.enable_motor = true;
+                                r.motor_speed = new;
+                            }
+                        }
+                        self.doll.set_pose(if up { 5 } else { 6 });
+                    }
+                }
+                _ => {
+                    if ejected {
+                        if self.doll.pose == 3 || self.doll.pose == 4 {
+                            self.doll.set_pose(0);
+                        }
+                    } else if self.legs_ok {
+                        if let Some(r) = self.stem_wheel.and_then(|id| revolute_mut(world, id)) {
+                            r.enable_motor = false;
+                        }
                         self.doll.set_pose(0);
                     }
-                } else if self.legs_ok {
-                    if let Some(r) = self.stem_wheel.and_then(|id| revolute_mut(world, id)) {
-                        r.enable_motor = false;
-                    }
-                    self.doll.set_pose(0);
                 }
             }
-        }
-        if ejected {
-            self.doll.set_grab(world, k.space);
+            if ejected {
+                self.doll.set_grab(world, k.space);
+            }
         }
         self.apply_pose(world);
     }
@@ -6011,6 +6042,43 @@ impl Elf {
         self.doll.set_pose(0);
         self.doll.apply_pose(world);
     }
+}
+
+/// A passenger's `headSmash1` / `chestSmash` / `pelvisSmash`: the class's break overrides run in the middle of the smash,
+/// before the chunks are made, so the doll steps out of its owner and back for every reaction.
+fn smash_part<T>(owner: &mut T, world: &mut World, part: Part, doll: fn(&mut T) -> &mut Ragdoll, react: fn(&mut T, &mut World, &[Limb])) {
+    let mut smashing = doll(owner).clone();
+    let mut on_break = |world: &mut World, current: &mut Ragdoll, limb: Limb| {
+        std::mem::swap(doll(owner), current);
+        react(owner, world, &[limb]);
+        std::mem::swap(doll(owner), current);
+    };
+    match part {
+        Part::Head => smashing.smash_head(world),
+        Part::Chest => smashing.smash_chest_with(world, &mut on_break),
+        _ => smashing.smash_pelvis_with(world, &mut on_break),
+    }
+    *doll(owner) = smashing;
+}
+
+struct HeadLinks {
+    at: Vec2,
+    velocity: Vec2,
+    idx: usize,
+    old: usize,
+    j1: BodyId,
+    pos1: Vec2,
+    length: f64,
+    next: Option<(usize, BodyId, Vec2)>,
+}
+
+struct ChestLink {
+    at: Vec2,
+    velocity: Vec2,
+    old: usize,
+    j1: BodyId,
+    a1: Vec2,
+    length: f64,
 }
 
 /// Santa's sleigh (class at deobfuscated.js:27862; guide `c8`, shapeRefScale 50, group −1).
@@ -6325,131 +6393,134 @@ impl Santa {
 
     pub fn keys(&mut self, world: &mut World, doll: &mut Ragdoll, k: Keys) {
         let ejected = self.ejected;
-        // left / right
-        match (k.left, k.right) {
-            (true, false) => {
-                if ejected {
-                    doll.set_pose(1);
-                } else {
-                    self.lean(world, true);
-                }
-            }
-            (false, true) => {
-                if ejected {
-                    doll.set_pose(2);
-                } else {
-                    self.lean(world, false);
-                }
-            }
-            _ => {
-                if ejected && (doll.pose == 1 || doll.pose == 2) {
-                    doll.set_pose(0);
-                }
-            }
-        }
-        // up / down
-        match (k.up, k.down) {
-            (true, false) | (false, true) => {
-                let up = k.up;
-                if ejected {
-                    doll.set_pose(if up { 3 } else { 4 });
-                } else {
-                    let first = !revolute_mut(world, self.wheel_joints[0]).is_some_and(|r| r.enable_motor);
-                    if first {
-                        self.motors(world, true);
-                        if self.sleigh_reigns.is_some() {
-                            self.set_reigns_motor(world, Some(true), None);
-                            self.pump = 0.0;
-                        }
-                    }
-                    let cur = joint_speed(world, self.wheel_joints[if up { 1 } else { 2 }]);
-                    let new = if up {
-                        if cur < 0.0 { 0.0 } else if cur < Self::WHEEL_MAX_SPEED { cur + Self::ACCEL } else { cur }
-                    } else if cur > 0.0 {
-                        0.0
-                    } else if cur > -Self::WHEEL_MAX_SPEED {
-                        cur - Self::ACCEL
+        // `checkKeyStates` of a dead character runs none of the key actions
+        if !doll.dead {
+            // left / right
+            match (k.left, k.right) {
+                (true, false) => {
+                    if ejected {
+                        doll.set_pose(1);
                     } else {
-                        cur
-                    };
-                    self.wheel_speed(world, new);
-                    if self.sleigh_reigns.is_some() {
-                        self.set_reigns_motor(world, None, Some(box2d::fdlibm::sin(self.pump) * 6.0));
-                        self.pump += 0.6;
+                        self.lean(world, true);
                     }
                 }
-            }
-            _ => {
-                if ejected {
-                    if doll.pose == 3 || doll.pose == 4 {
+                (false, true) => {
+                    if ejected {
+                        doll.set_pose(2);
+                    } else {
+                        self.lean(world, false);
+                    }
+                }
+                _ => {
+                    if ejected && (doll.pose == 1 || doll.pose == 2) {
                         doll.set_pose(0);
                     }
-                } else if revolute_mut(world, self.wheel_joints[0]).is_some_and(|r| r.enable_motor) {
-                    self.motors(world, false);
-                    self.set_reigns_motor(world, Some(false), None);
                 }
             }
-        }
-        // space
-        self.bell = false;
-        if k.space {
-            if ejected {
-                doll.set_grab(world, true);
-            } else {
-                self.boost = (self.boost + Self::BOOST_STEP_UP).min(Self::BOOST_MAX);
-                self.bell = self.boost < Self::BOOST_MAX;
-                if self.boost < Self::BOOST_MAX {
-                    let mut all = self.anti_grav.clone();
-                    all.extend(&self.elf1.anti_grav);
-                    all.extend(&self.elf2.anti_grav);
-                    // upper arms and thighs torn off Santa or an elf float like the rest of them
-                    all.extend(doll.sev.iter().chain(&self.elf1.doll.sev).chain(&self.elf2.doll.sev));
-                    let b = world.b2_mut();
-                    for id in all {
-                        let body = b.body_mut(id);
-                        if body.alive && !body.is_sleeping() {
-                            body.linear_velocity.y += Self::GRAVITY_DISPLACEMENT;
+            // up / down
+            match (k.up, k.down) {
+                (true, false) | (false, true) => {
+                    let up = k.up;
+                    if ejected {
+                        doll.set_pose(if up { 3 } else { 4 });
+                    } else {
+                        let first = !revolute_mut(world, self.wheel_joints[0]).is_some_and(|r| r.enable_motor);
+                        if first {
+                            self.motors(world, true);
+                            if self.sleigh_reigns.is_some() {
+                                self.set_reigns_motor(world, Some(true), None);
+                                self.pump = 0.0;
+                            }
+                        }
+                        let cur = joint_speed(world, self.wheel_joints[if up { 1 } else { 2 }]);
+                        let new = if up {
+                            if cur < 0.0 { 0.0 } else if cur < Self::WHEEL_MAX_SPEED { cur + Self::ACCEL } else { cur }
+                        } else if cur > 0.0 {
+                            0.0
+                        } else if cur > -Self::WHEEL_MAX_SPEED {
+                            cur - Self::ACCEL
+                        } else {
+                            cur
+                        };
+                        self.wheel_speed(world, new);
+                        if self.sleigh_reigns.is_some() {
+                            self.set_reigns_motor(world, None, Some(box2d::fdlibm::sin(self.pump) * 6.0));
+                            self.pump += 0.6;
                         }
                     }
                 }
+                _ => {
+                    if ejected {
+                        if doll.pose == 3 || doll.pose == 4 {
+                            doll.set_pose(0);
+                        }
+                    } else if revolute_mut(world, self.wheel_joints[0]).is_some_and(|r| r.enable_motor) {
+                        self.motors(world, false);
+                        self.set_reigns_motor(world, Some(false), None);
+                    }
+                }
             }
-        } else {
-            if ejected {
-                doll.set_grab(world, false);
-            }
-            self.boost = (self.boost - Self::BOOST_STEP_DOWN).max(0.0);
-        }
-        // shift
-        if k.shift {
-            if ejected {
-                doll.set_pose(6);
+            // space
+            self.bell = false;
+            if k.space {
+                if ejected {
+                    doll.set_grab(world, true);
+                } else {
+                    self.boost = (self.boost + Self::BOOST_STEP_UP).min(Self::BOOST_MAX);
+                    self.bell = self.boost < Self::BOOST_MAX;
+                    if self.boost < Self::BOOST_MAX {
+                        let mut all = self.anti_grav.clone();
+                        all.extend(&self.elf1.anti_grav);
+                        all.extend(&self.elf2.anti_grav);
+                        // upper arms and thighs torn off Santa or an elf float like the rest of them
+                        all.extend(doll.sev.iter().chain(&self.elf1.doll.sev).chain(&self.elf2.doll.sev));
+                        let b = world.b2_mut();
+                        for id in all {
+                            let body = b.body_mut(id);
+                            if body.alive && !body.is_sleeping() {
+                                body.linear_velocity.y += Self::GRAVITY_DISPLACEMENT;
+                            }
+                        }
+                    }
+                }
             } else {
-                if !self.elf1.legs_ok {
+                if ejected {
+                    doll.set_grab(world, false);
+                }
+                self.boost = (self.boost - Self::BOOST_STEP_DOWN).max(0.0);
+            }
+            // shift
+            if k.shift {
+                if ejected {
+                    doll.set_pose(6);
+                } else {
+                    if !self.elf1.legs_ok {
+                        self.eject_elf(world, 1);
+                    }
+                    if !self.elf2.legs_ok {
+                        self.eject_elf(world, 2);
+                    }
+                }
+            } else if doll.pose == 6 {
+                doll.set_pose(0);
+            }
+            // ctrl
+            if k.ctrl {
+                if ejected {
+                    doll.set_pose(7);
+                }
+            } else if doll.pose == 7 {
+                doll.set_pose(0);
+            }
+            // z
+            if k.z {
+                if ejected {
                     self.eject_elf(world, 1);
-                }
-                if !self.elf2.legs_ok {
                     self.eject_elf(world, 2);
+                } else {
+                    self.eject_impulse = 5.0;
+                    self.eject(world, doll);
                 }
-            }
-        } else if doll.pose == 6 {
-            doll.set_pose(0);
-        }
-        // ctrl
-        if k.ctrl {
-            if ejected {
-                doll.set_pose(7);
-            }
-        } else if doll.pose == 7 {
-            doll.set_pose(0);
-        }
-        // z
-        if k.z {
-            if ejected {
-                self.eject_elf(world, 1);
-                self.eject_elf(world, 2);
-            } else {
-                self.eject_impulse = 5.0;
-                self.eject(world, doll);
             }
         }
         doll.apply_pose(world);
@@ -6457,18 +6528,26 @@ impl Santa {
         for n in [1, 2] {
             let elf = if n == 1 { &mut self.elf1 } else { &mut self.elf2 };
             elf.keys(world, k);
+            // `checkElfKeys` goes on after Santa dies; the elf's `zPressedActions` then lets go
+            if k.z && doll.dead && !elf.doll.dead {
+                self.eject_elf(world, n);
+            }
         }
     }
 
-    /// Elf `zPressedActions` needs `santa.dead`, so keys never eject elves directly; Santa's shift/z do.
+    /// `eject` of an elf: from Santa's shift/z, or from the elf's own z once Santa is dead.
     fn eject_elf(&mut self, world: &mut World, n: u8) {
         let elf = if n == 1 { &mut self.elf1 } else { &mut self.elf2 };
         if elf.ejected {
             return;
         }
         elf.eject(world);
-        self.elf_head_remove(world, n, false);
-        self.elf_chest_remove(world, n, false);
+        if let Some(l) = self.head_links(world, n) {
+            self.hang_head(world, n, l, false);
+        }
+        if let Some(l) = self.chest_link(world, n) {
+            self.hang_chest(world, n, l, false);
+        }
     }
 
     /// `leftPressedActions` / `rightPressedActions` while seated: a pair of opposing impulses at ±1 m from the centre.
@@ -6733,76 +6812,120 @@ impl Santa {
         self.check_eject(world, doll);
     }
 
-    /// `elfHeadRemove`: the strap's head link is re-hung on a ball at the head's back.
-    fn elf_head_remove(&mut self, world: &mut World, n: u8, keep: bool) {
-        let head = if n == 1 { self.elf1.doll.bodies[&Part::Head] } else { self.elf2.doll.bodies[&Part::Head] };
-        {
-            let elf = if n == 1 { &mut self.elf1 } else { &mut self.elf2 };
-            if !elf.head_attached {
-                return;
-            }
-            elf.head_attached = false;
+    /// What `elfHeadRemove` reads from the head and the strap, captured first: a smashed head takes its joints with it.
+    fn head_links(&self, world: &World, n: u8) -> Option<HeadLinks> {
+        let elf = if n == 1 { &self.elf1 } else { &self.elf2 };
+        if !elf.head_attached {
+            return None;
         }
-        let p = world.b2().body(head).world_point(Vec2::new(-0.288, 0.064));
-        let ball = strap_ball(world, p);
-        let b = world.b2_mut();
-        b.body_mut(ball).linear_velocity = b.body(head).linear_velocity;
-        self.anti_grav.push(ball);
-        let new_link = |b: &mut box2d::world::World, b1: BodyId, b2: BodyId, a1: Vec2, a2: Vec2, len: f64| {
-            let mut d = DistanceJointDef::initialize(b.body(b1), b1, b.body(b2), b2, a1, a2);
-            d.length = len;
-            b.create_distance_joint(&d)
-        };
-        if n == 1 {
-            let idx = 7;
-            let old = self.strap_head[idx];
-            let (j1, len) = (b.joint(old).body1, b.distance_anchor1(old).map_or(0.0, |x| x.1));
-            let pos1 = b.body(j1).xf.position;
-            self.strap_head[idx] = new_link(b, j1, ball, pos1, p, len);
+        let head = elf.doll.bodies[&Part::Head];
+        let b = world.b2();
+        let end = |j: usize| (b.joint(j).body1, b.distance_anchor1(j).map_or(0.0, |x| x.1));
+        let idx = if n == 1 { 7 } else { self.strap_head.len() - 1 };
+        let old = self.strap_head[idx];
+        let (j1, length) = end(old);
+        let next = (n == 1).then(|| {
             let next = self.strap_head[idx + 1];
             let j2 = b.joint(next).body2;
-            let pos2 = b.body(j2).xf.position;
-            self.strap_head[idx + 1] = new_link(b, ball, j2, p, pos2, len);
+            (next, j2, b.body(j2).xf.position)
+        });
+        Some(HeadLinks { at: b.body(head).world_point(Vec2::new(-0.288, 0.064)), velocity: b.body(head).linear_velocity, idx, old, j1, pos1: b.body(j1).xf.position, length, next })
+    }
+
+    /// `elfHeadRemove`: the strap's head link is re-hung on a ball at the head's back. With `keep` the old links stay
+    /// (a smashed head has already taken them).
+    fn hang_head(&mut self, world: &mut World, n: u8, l: HeadLinks, keep: bool) {
+        let elf = if n == 1 { &mut self.elf1 } else { &mut self.elf2 };
+        elf.head_attached = false;
+        let ball = strap_ball(world, l.at);
+        let b = world.b2_mut();
+        b.body_mut(ball).linear_velocity = l.velocity;
+        self.anti_grav.push(ball);
+        let new_link = |b: &mut box2d::world::World, b1: BodyId, b2: BodyId, a1: Vec2, a2: Vec2| {
+            let mut d = DistanceJointDef::initialize(b.body(b1), b1, b.body(b2), b2, a1, a2);
+            d.length = l.length;
+            b.create_distance_joint(&d)
+        };
+        self.strap_head[l.idx] = new_link(b, l.j1, ball, l.pos1, l.at);
+        if let Some((next, j2, pos2)) = l.next {
+            self.strap_head[l.idx + 1] = new_link(b, ball, j2, l.at, pos2);
             if !keep {
-                b.destroy_joint(old);
                 b.destroy_joint(next);
             }
-        } else {
-            let idx = self.strap_head.len() - 1;
-            let old = self.strap_head[idx];
-            let (j1, len) = (b.joint(old).body1, b.distance_anchor1(old).map_or(0.0, |x| x.1));
-            let pos1 = b.body(j1).xf.position;
-            self.strap_head[idx] = new_link(b, j1, ball, pos1, p, len);
-            if !keep {
-                b.destroy_joint(old);
-            }
+        }
+        if !keep {
+            b.destroy_joint(l.old);
         }
     }
 
-    /// `elfChestRemove`: the last chest-strap link is re-hung on a ball at the chest.
-    fn elf_chest_remove(&mut self, world: &mut World, n: u8, _keep: bool) {
-        let chest = if n == 1 { self.elf1.doll.bodies[&Part::Chest] } else { self.elf2.doll.bodies[&Part::Chest] };
-        {
-            let elf = if n == 1 { &mut self.elf1 } else { &mut self.elf2 };
-            if !elf.chest_attached {
-                return;
-            }
-            elf.chest_attached = false;
+    fn chest_link(&self, world: &World, n: u8) -> Option<ChestLink> {
+        let elf = if n == 1 { &self.elf1 } else { &self.elf2 };
+        if !elf.chest_attached {
+            return None;
         }
-        let p = world.b2().body(chest).world_point(Vec2::new(0.0, 0.16));
-        let ball = strap_ball(world, p);
+        let chest = elf.doll.bodies[&Part::Chest];
+        let b = world.b2();
+        let chain = if n == 1 { &self.strap_chest1 } else { &self.strap_chest2 };
+        let old = chain[chain.len() - 1];
+        let j1 = b.joint(old).body1;
+        Some(ChestLink { at: b.body(chest).world_point(Vec2::new(0.0, 0.16)), velocity: b.body(chest).linear_velocity, old, j1, a1: b.body(j1).world_point(Vec2::new(0.0, -0.016)), length: b.distance_anchor1(old).map_or(0.0, |x| x.1) })
+    }
+
+    /// `elfChestRemove`: the same for the last link of the elf's chest strap.
+    fn hang_chest(&mut self, world: &mut World, n: u8, l: ChestLink, gone: bool) {
+        let elf = if n == 1 { &mut self.elf1 } else { &mut self.elf2 };
+        elf.chest_attached = false;
+        let ball = strap_ball(world, l.at);
         let b = world.b2_mut();
-        b.body_mut(ball).linear_velocity = b.body(chest).linear_velocity;
+        b.body_mut(ball).linear_velocity = l.velocity;
         self.anti_grav.push(ball);
         let chain = if n == 1 { &mut self.strap_chest1 } else { &mut self.strap_chest2 };
         let idx = chain.len() - 1;
-        let old = chain[idx];
-        let (j1, len) = (b.joint(old).body1, b.distance_anchor1(old).map_or(0.0, |x| x.1));
-        let a1 = b.body(j1).world_point(Vec2::new(0.0, -0.016));
-        let mut d = DistanceJointDef::initialize(b.body(j1), j1, b.body(ball), ball, a1, p);
-        d.length = len;
+        let mut d = DistanceJointDef::initialize(b.body(l.j1), l.j1, b.body(ball), ball, l.a1, l.at);
+        d.length = l.length;
         chain[idx] = b.create_distance_joint(&d);
-        b.destroy_joint(old); // `!headSmashed` (head smash is not modelled)
+        if !gone {
+            b.destroy_joint(l.old);
+        }
+    }
+
+    /// The elves' `handleContactResults`: their parts smash like anybody's; the debris floats like the rest of the sleigh team, and a
+    /// strapped-in elf's strap is re-hung.
+    pub fn elf_smashed(&mut self, world: &mut World, events: &[box2d::world::ContactEvent]) {
+        for n in [1, 2] {
+            let elf = if n == 1 { &self.elf1 } else { &self.elf2 };
+            let hits = world.doll_smash_hits(&elf.doll, events);
+            for part in [Part::Head, Part::Chest, Part::Pelvis, Part::LowerLeg1, Part::LowerLeg2] {
+                if !hits.contains(&part) {
+                    continue;
+                }
+                let head = if part == Part::Head { self.head_links(world, n) } else { None };
+                let chest = if part == Part::Chest { self.chest_link(world, n) } else { None };
+                let elf = if n == 1 { &mut self.elf1 } else { &mut self.elf2 };
+                let (chunks, brain, heart) = (elf.doll.chunks.len(), elf.doll.brain, elf.doll.heart);
+                // the `dead` setter at the head of `headSmash1` / `chestSmash` stops the running
+                if matches!(part, Part::Head | Part::Chest) && elf.feet.iter().any(Option::is_some) {
+                    elf.disable_running(world);
+                }
+                match part {
+                    Part::LowerLeg1 => elf.doll.smash_foot(world, 0),
+                    Part::LowerLeg2 => elf.doll.smash_foot(world, 1),
+                    _ => smash_part(elf, world, part, |e| &mut e.doll, Elf::limbs_broken),
+                }
+                let mut made: Vec<BodyId> = elf.doll.chunks[chunks..].to_vec();
+                made.extend(elf.doll.brain.filter(|_| brain.is_none()));
+                made.extend(elf.doll.heart.filter(|_| heart.is_none()));
+                elf.anti_grav.extend(made);
+                if !elf.ejected {
+                    if let Some(l) = head {
+                        self.hang_head(world, n, l, true);
+                    }
+                    if let Some(l) = chest {
+                        self.hang_chest(world, n, l, true);
+                    }
+                }
+            }
+        }
     }
 
     /// `breakStrap`: a chest strap whose first link carries |impulse| > 0.4 is cut at the sleigh end.
@@ -6929,6 +7052,10 @@ impl Santa {
             }
         }
         for elf in [&mut self.elf1, &mut self.elf2] {
+            // the `dead` setter runs at the head of `neckBreak` / `torsoBreak`, before they touch the body
+            if elf.doll.about_to_die(world) && elf.feet.iter().any(Option::is_some) {
+                elf.disable_running(world);
+            }
             let broken = elf.doll.check_joints(world);
             elf.limbs_broken(world, &broken);
             // the `dead` setter runs `disableRunning` (also for a death by smash earlier in this step)

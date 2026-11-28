@@ -2611,6 +2611,33 @@ impl World {
         self.camera().map(|c| c.center().map(|v| v as f32))
     }
 
+    /// `handleContactBuffer` of the passengers: it runs for everybody before anybody's `checkJoints`.
+    fn passenger_contacts(&mut self, events: &[box2d::world::ContactEvent]) {
+        use crate::vehicle::Vehicle;
+        let Some(mut vehicle) = self.bike.take() else { return };
+        match &mut vehicle {
+            Vehicle::Dirt(d) => {
+                if let Some(g) = d.girl.as_mut() {
+                    g.contact_events(self, events);
+                    if self.joints_break {
+                        g.smashed(self, events);
+                    }
+                }
+            }
+            Vehicle::Bike(b) if self.joints_break => {
+                if let Some(kid) = b.kid.as_mut() {
+                    kid.smashed(self, events);
+                }
+            }
+            Vehicle::Family(f) if self.joints_break => {
+                f.daughter.smashed(self, events);
+                f.son.smashed(self, events);
+            }
+            _ => {}
+        }
+        self.bike = Some(vehicle);
+    }
+
     fn step_physics(&mut self) {
         if let Some(mut doll) = self.character.take() {
             doll.check_vocals(self);
@@ -2658,12 +2685,11 @@ impl World {
                     if !hits.contains(&part) {
                         continue;
                     }
-                    // (Santa reacts to his own breaks in `check_joints`)
-                    let mut vehicle = self.bike.take_if(|v| !matches!(v, crate::vehicle::Vehicle::Santa(_)));
-                    let mut react = |world: &mut World, doll: &mut crate::character::Ragdoll, limb| {
-                        if let Some(v) = vehicle.as_mut() {
-                            v.rider_hurt(world, doll, false, &[limb]);
-                        }
+                    let mut vehicle = self.bike.take();
+                    let mut react = |world: &mut World, doll: &mut crate::character::Ragdoll, limb| match vehicle.as_mut() {
+                        Some(crate::vehicle::Vehicle::Santa(s)) => s.limbs_broken(world, doll, &[limb]),
+                        Some(v) => v.rider_hurt(world, doll, false, &[limb]),
+                        None => {}
                     };
                     match part {
                         crate::character::Part::Head => doll.smash_head(self),
@@ -2678,9 +2704,14 @@ impl World {
                     // the vehicle classes' `headSmash1/chestSmash/pelvisSmash` overrides: the smash, then `eject()` (Santa has its own handler)
                     let torso = matches!(part, crate::character::Part::Head | crate::character::Part::Chest | crate::character::Part::Pelvis);
                     let kept = part == crate::character::Part::Head && self.bike.as_ref().is_some_and(|v| !v.head_smash_ejects());
-                    if torso && !kept && !matches!(self.bike, Some(crate::vehicle::Vehicle::Santa(_))) {
+                    // Santa's class ejects on a smashed head only
+                    if torso && !kept {
                         if let Some(mut v) = self.bike.take() {
-                            v.rider_hurt(self, &mut doll, true, &[]);
+                            match &mut v {
+                                crate::vehicle::Vehicle::Santa(s) if part == crate::character::Part::Head => s.eject(self, &mut doll),
+                                crate::vehicle::Vehicle::Santa(_) => {}
+                                v => v.rider_hurt(self, &mut doll, true, &[]),
+                            }
                             self.bike = Some(v);
                         }
                     }
@@ -2924,11 +2955,13 @@ impl World {
         }
         self.can_events(&events);
         self.hit_sound_events(&events);
+        self.passenger_contacts(&events);
         if let Some(mut doll) = self.character.take() {
             if self.joints_break {
                 if matches!(self.bike, Some(crate::vehicle::Vehicle::Santa(_))) {
                     if let Some(crate::vehicle::Vehicle::Santa(mut s)) = self.bike.take() {
                         s.smashed(self, &mut doll, &events);
+                        s.elf_smashed(self, &events);
                         s.check_joints(self, &mut doll);
                         self.bike = Some(crate::vehicle::Vehicle::Santa(s));
                     }
@@ -2963,10 +2996,6 @@ impl World {
         if matches!(self.bike, Some(crate::vehicle::Vehicle::Dirt(ref d)) if d.girl.is_some()) {
             if let Some(crate::vehicle::Vehicle::Dirt(mut d)) = self.bike.take() {
                 if let Some(mut g) = d.girl.take() {
-                    g.contact_events(self, &events);
-                    if self.joints_break {
-                        g.smashed(self, &events);
-                    }
                     if self.joints_break {
                         g.check_joints(self);
                     }
@@ -2979,7 +3008,6 @@ impl World {
             if let Some(crate::vehicle::Vehicle::Bike(mut b)) = self.bike.take() {
                 if let Some(mut kid) = b.kid.take() {
                     kid.check_joints(self);
-                    kid.smashed(self, &events);
                     b.kid = Some(kid);
                 }
                 self.bike = Some(crate::vehicle::Vehicle::Bike(b));
@@ -2988,8 +3016,6 @@ impl World {
         if self.joints_break && matches!(self.bike, Some(crate::vehicle::Vehicle::Family(_))) {
             if let Some(crate::vehicle::Vehicle::Family(mut f)) = self.bike.take() {
                 // contact buffers in the original's order: daughter, then son (body parts before the basket)
-                f.daughter.smashed(self, &events);
-                f.son.smashed(self, &events);
                 f.son.smash_basket(self, &events);
                 f.check_joints(self);
                 self.bike = Some(crate::vehicle::Vehicle::Family(f));
@@ -5723,8 +5749,11 @@ impl World {
     /// Full key state for the rider: vehicle controls while seated, poses/grab once ejected.
     pub fn set_rider_keys(&mut self, k: crate::vehicle::Keys) {
         let (Some(mut doll), Some(mut vehicle)) = (self.character.take(), self.bike.take()) else {
-            self.set_character_keys(k.left, k.right, k.up, k.down);
-            self.set_character_grab(k.space);
+            // a dead character's keys do nothing
+            if self.character.as_ref().is_some_and(|d| !d.dead) {
+                self.set_character_keys(k.left, k.right, k.up, k.down);
+                self.set_character_grab(k.space);
+            }
             return;
         };
         vehicle.keys(self, &mut doll, k);

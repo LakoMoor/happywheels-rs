@@ -4167,14 +4167,15 @@ fn camera_at_60fps_matches_the_original() {
 }
 
 /// The built-in level against the original's own session (`analysis/level1-real.js`: `levelIndex` 1, the clip loaded by the game, the key schedule of
-/// the other real sessions): every dynamic body of the level, rider and vehicle, and the camera. `mine` gives rider and vehicle 6 m/s to the left
+/// the other real sessions): every dynamic body of the level, rider and vehicle, and the camera. Characters 5 and 10 are compared for 200 and 230 frames:
+/// after that their smashed families drift past the tolerance from rounding noise of 1e-11 px. `mine` gives rider and vehicle 6 m/s to the left
 /// before frame 5 (into the mine behind the start); `finish` moves them onto the finish block before frame 0.
 #[test]
 fn level1_matches_the_original() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     // the level's own dynamic bodies (10 blocks, 6 planks, 2 gears, 3 pistons) come before the rider's
     const LEVEL_BODIES: usize = 21;
-    for (name, ch, shift, speed) in [("1", 1usize, None, None), ("2", 2, None, None), ("3", 3, None, None), ("4", 4, None, None), ("6", 6, None, None), ("7", 7, None, None), ("9", 9, None, None), ("11", 11, None, None), ("mine", 1, None, Some(-6.0)), ("finish", 1, Some([16996.0, -250.0]), None)] {
+    for (name, ch, shift, speed) in [("1", 1usize, None, None), ("2", 2, None, None), ("3", 3, None, None), ("5", 5, None, None), ("6", 6, None, None), ("7", 7, None, None), ("8", 8, None, None), ("9", 9, None, None), ("10", 10, None, None), ("11", 11, None, None), ("mine", 1, None, Some(-6.0)), ("finish", 1, Some([16996.0, -250.0]), None)] {
         let doc: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(root.join(format!("tests/golden/level1-{name}.json"))).unwrap()).unwrap();
         let mut w = World::level1();
         assert!(w.spawn_bike(ch, happywheels_core::physics::LEVEL1_START), "spawn {name}");

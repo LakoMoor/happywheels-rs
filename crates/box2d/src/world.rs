@@ -344,6 +344,16 @@ impl Core {
     }
 
     fn destroy_contact(&mut self, id: ContactId) {
+        // `b2ContactManager::Destroy`: a contact that still touches tells the listener its points are gone
+        let (manifold, touching) = {
+            let c = self.contact(id);
+            (c.manifold, c.manifold_count > 0)
+        };
+        if touching {
+            for point in &manifold.points[..manifold.point_count] {
+                self.emit(ContactEventKind::Remove, id, &manifold, point);
+            }
+        }
         let c = self.contacts[id].take().unwrap();
         let (b1, b2) = (self.shapes[c.shape1].body, self.shapes[c.shape2].body);
         if c.manifold_count > 0 {
