@@ -834,3 +834,12 @@ Asset distribution: original art/audio is not shipped; screenshots that show ori
   3. Red strokes for the spinal cord and elbow/knee ligaments; chain balls are no longer drawn with artwork.
   4. Hands open (`hand` frame 2) on `releaseGrip` and on the eject of the vehicles that do so (not the bikes).
   Screenshot `screenshots/gore_chains.png`. The "ligament/spine/intestine strokes still dots" limitation above is resolved. Not compared: head/chest/pelvis smashes, vehicle breakage, NPC and special-element frames after the redump (only their data was corrected), knee ligament, blood (random).
+
+- 2026-11-28 — SMASHES. `headSmash1` / `chestSmash` / `pelvisSmash` compared with the original's display list for all 11 characters at frame 10 (also frame 1 for characters 2 and 6; `tests/golden/smash-*.json`, test `smashed_riders_are_drawn_like_the_original`). Fixed:
+  1. Joints broken inside a chest/pelvis smash now reach the vehicle's break override before the chunks are born (`smash_chest_with` / `smash_pelvis_with`).
+  2. A head smash no longer ejects from the wheelchair or the helicopter; a broken neck alone no longer ejects from the wheelchair, helicopter or moped (override list read from the running classes).
+  3. The heart was never drawn (its atlas `character-shared` was not loaded, also in the web build).
+  4. The chest's `neck` node stayed visible after a pelvis smash (alternate frames ignored the hidden-at-start list).
+  5. The pogo stick's spring is squeezed with the joint; the moped's front rim turns with the frame.
+  6. Family bike: heart, brain and head chunks sit right after the pelvis.
+  Screenshot `screenshots/smashes.png`. Still allowed: ~1 px on the family bike. Not compared: blood (random), passengers' smashes, smashes caused by real contacts in this draw test (smashes are called directly), vehicle breakage, knee ligament.

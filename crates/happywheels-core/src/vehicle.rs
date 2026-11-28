@@ -489,22 +489,30 @@ impl Vehicle {
         }
     }
 
-    /// Every single-rider class overrides `headSmash1/chestSmash/pelvisSmash/neckBreak/torsoBreak` to call `eject()`; the bike
-    /// also reacts to elbow/knee breaks (`Bike::rider_hurt`). The other classes' limb-break reactions are not ported yet.
+    /// Whether `headSmash1` is overridden to call `eject()` (all but the chair and the helicopter; `chestSmash` and
+    /// `pelvisSmash` eject everywhere).
+    pub fn head_smash_ejects(&self) -> bool {
+        !matches!(self, Vehicle::Chair(_) | Vehicle::Heli(_))
+    }
+
+    /// A smash (`smashed`) or the joints broken this frame: eject, or the vehicle's limb-break reaction.
     pub fn rider_hurt(&mut self, world: &mut World, doll: &mut Ragdoll, smashed: bool, broken: &[Limb]) {
+        // `neckBreak` / `torsoBreak` overrides that call `eject()`: the chair, the helicopter and the moped keep the rider on a broken neck
+        let neck = !matches!(self, Vehicle::Chair(_) | Vehicle::Heli(_) | Vehicle::Dirt(_));
+        let torso = broken.iter().any(|&l| l == Limb::Waist || l == Limb::Neck && neck);
         match self {
             Vehicle::Bike(b) => b.rider_hurt(world, doll, smashed, broken),
             Vehicle::Family(f) => f.dad.rider_hurt(world, doll, smashed, broken),
-            Vehicle::Mower(c) if !smashed && !broken.iter().any(|l| matches!(l, Limb::Neck | Limb::Waist)) => c.limbs_broken(world, doll, broken),
-            Vehicle::Heli(c) if !smashed && !broken.iter().any(|l| matches!(l, Limb::Neck | Limb::Waist)) => c.limbs_broken(world, doll, broken),
-            Vehicle::Pogo(c) if !smashed && !broken.iter().any(|l| matches!(l, Limb::Neck | Limb::Waist)) => c.limbs_broken(world, doll, broken),
-            Vehicle::Cart(c) if !smashed && !broken.iter().any(|l| matches!(l, Limb::Neck | Limb::Waist)) => c.limbs_broken(world, doll, broken),
-            Vehicle::Segway(c) if !smashed && !broken.iter().any(|l| matches!(l, Limb::Neck | Limb::Waist)) => c.limbs_broken(world, doll, broken),
-            Vehicle::Dirt(c) if !smashed && !broken.iter().any(|l| matches!(l, Limb::Neck | Limb::Waist)) => c.limbs_broken(world, doll, broken),
-            Vehicle::Chair(c) if !smashed && !broken.iter().any(|l| matches!(l, Limb::Neck | Limb::Waist)) => c.limbs_broken(world, broken),
-            Vehicle::Grinder(c) if !smashed && !broken.iter().any(|l| matches!(l, Limb::Neck | Limb::Waist)) => c.limbs_broken(world, doll, broken),
+            Vehicle::Mower(c) if !smashed && !torso => c.limbs_broken(world, doll, broken),
+            Vehicle::Heli(c) if !smashed && !torso => c.limbs_broken(world, doll, broken),
+            Vehicle::Pogo(c) if !smashed && !torso => c.limbs_broken(world, doll, broken),
+            Vehicle::Cart(c) if !smashed && !torso => c.limbs_broken(world, doll, broken),
+            Vehicle::Segway(c) if !smashed && !torso => c.limbs_broken(world, doll, broken),
+            Vehicle::Dirt(c) if !smashed && !torso => c.limbs_broken(world, doll, broken),
+            Vehicle::Chair(c) if !smashed && !torso => c.limbs_broken(world, broken),
+            Vehicle::Grinder(c) if !smashed && !torso => c.limbs_broken(world, doll, broken),
             _ => {
-                if smashed || broken.iter().any(|l| matches!(l, Limb::Neck | Limb::Waist)) {
+                if smashed || torso {
                     match self {
                         Vehicle::Segway(v) => v.eject(world, doll),
                         Vehicle::Chair(v) => v.eject(world, doll),
@@ -2731,6 +2739,12 @@ impl Pogo {
             m += body.mass;
         }
         Vec2::new(x * (1.0 / m), y * (1.0 / m))
+    }
+
+    /// `paint`: the frame clip's spring is squeezed to 0.45 of its length as the stick compresses by 20 px.
+    pub fn spring_scale(&self, world: &World) -> f64 {
+        let squeeze = (world.b2().prismatic_translation(self.pogo).unwrap_or(0.0) * 62.5 / -20.0).clamp(0.0, 1.0);
+        (1.0 - squeeze) * 0.55 + 0.45
     }
 
     fn pogo_mut(world: &mut World, id: usize) -> Option<&mut box2d::joints::Prismatic> {

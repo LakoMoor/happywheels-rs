@@ -241,6 +241,9 @@ pub struct Ragdoll {
     spine_anchor: [f64; 2],
 }
 
+/// Called after each joint a smash breaks.
+pub type BreakHook<'a> = dyn FnMut(&mut World, &mut Ragdoll, Limb) + 'a;
+
 /// A string of fixed-rotation balls joined by rigid distance joints between two bodies (original classes `h` and `e1`): `joints[0]` ties the
 /// first end, `joints.last()` the second; only those two can tear (impulse above 1.5).
 #[derive(Debug, Clone)]
@@ -463,6 +466,14 @@ impl Ragdoll {
         self.break_joint(world, limb, force);
     }
 
+    fn break_then(&mut self, world: &mut World, limb: Limb, force: f64, on_break: &mut BreakHook) {
+        let before = self.broken.len();
+        self.break_joint(world, limb, force);
+        if self.broken.len() > before {
+            on_break(world, self, limb);
+        }
+    }
+
     fn break_joint(&mut self, world: &mut World, limb: Limb, force: f64) {
         if self.broken.contains(&limb) {
             return;
@@ -512,6 +523,12 @@ impl Ragdoll {
     /// `chestSmash`: dead; neck, both shoulders and the waist are torn off (filters only), four chunk balls (ring 5 px,
     /// starting 45° from the chest angle) + a heart ball (head-chunk radius), the chest body is stopped and destroyed.
     pub fn smash_chest(&mut self, world: &mut World) {
+        self.smash_chest_with(world, &mut |_, _, _| {});
+    }
+
+    /// [`smash_chest`](Self::smash_chest) with the vehicle's break overrides: the original's `chestSmash` breaks joints through the
+    /// virtual `neckBreak` / `shoulderBreak` / `torsoBreak`, so the vehicle reacts (and ejects) before the chunks are born.
+    pub fn smash_chest_with(&mut self, world: &mut World, on_break: &mut BreakHook) {
         if self.chest_gone() {
             return;
         }
@@ -525,11 +542,11 @@ impl Ragdoll {
         let ratio = world.b2().body(self.bodies[&Part::UpperArm1]).mass / 0.07019;
         let snap = (ratio * 90.0).round() + 1.0;
         let spine = (world.b2().body(self.bodies[&Part::Head]).mass / 0.05456 * 105.0).round();
-        self.break_joint(world, Limb::Neck, spine);
-        self.break_joint(world, Limb::Shoulder1, snap);
-        self.break_joint(world, Limb::Shoulder2, snap);
+        self.break_then(world, Limb::Neck, spine, on_break);
+        self.break_then(world, Limb::Shoulder1, snap, on_break);
+        self.break_then(world, Limb::Shoulder2, snap, on_break);
         let m = world.b2().body(self.bodies[&Part::Pelvis]).mass / 0.0735;
-        self.break_joint(world, Limb::Waist, (m * 260.0).round() - 1.0);
+        self.break_then(world, Limb::Waist, (m * 260.0).round() - 1.0, on_break);
         self.tear_chain(world, false, 1);
         self.chunk_ring(world, Part::Chest, 4, std::f64::consts::FRAC_PI_4, std::f64::consts::FRAC_PI_2, 5.0 / CHARACTER_SCALE, self.chest_chunk_radius);
         let chest = self.bodies[&Part::Chest];
@@ -601,6 +618,11 @@ impl Ragdoll {
 
     /// `pelvisSmash`: both hips and the waist are torn off, three chunk balls (ring 3 px, 120° apart), pelvis destroyed.
     pub fn smash_pelvis(&mut self, world: &mut World) {
+        self.smash_pelvis_with(world, &mut |_, _, _| {});
+    }
+
+    /// [`smash_pelvis`](Self::smash_pelvis) with the vehicle's `hipBreak` / `torsoBreak` overrides, as for the chest.
+    pub fn smash_pelvis_with(&mut self, world: &mut World, on_break: &mut BreakHook) {
         if !world.b2().body(self.bodies[&Part::Pelvis]).alive {
             return;
         }
@@ -610,13 +632,13 @@ impl Ragdoll {
         self.stop_flows(world, &[5]);
         let ratio = world.b2().body(self.bodies[&Part::UpperLeg1]).mass / 0.14914;
         let snap = (ratio * 110.0).round() + 1.0;
-        self.break_joint(world, Limb::Hip1, snap);
-        self.break_joint(world, Limb::Hip2, snap);
+        self.break_then(world, Limb::Hip1, snap, on_break);
+        self.break_then(world, Limb::Hip2, snap, on_break);
         let m = world.b2().body(self.bodies[&Part::Pelvis]).mass / 0.0735;
         if self.broken.contains(&Limb::Waist) {
             self.tear_chain(world, false, 0);
         }
-        self.break_joint(world, Limb::Waist, (m * 260.0).round());
+        self.break_then(world, Limb::Waist, (m * 260.0).round(), on_break);
         self.chunk_ring(world, Part::Pelvis, 3, 0.0, std::f64::consts::PI * 2.0 / 3.0, 3.0 / CHARACTER_SCALE, self.pelvis_chunk_radius);
         self.vocal("Pelvis", 5);
         world.b2_mut().destroy_body(self.bodies[&Part::Pelvis]);

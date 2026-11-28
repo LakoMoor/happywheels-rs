@@ -57,6 +57,10 @@ fn apply_runtime(nodes: &mut [Node], prefix: &str, runtime: &RuntimeClip) {
             (n.x, n.y) = (x, y);
         }
         apply_runtime(&mut n.k, &path, runtime);
+        // the same instances stay hidden on the clip's other frames (`chest.neck`)
+        for frame in n.alt.values_mut() {
+            apply_runtime(frame, &path, runtime);
+        }
     }
 }
 
@@ -278,6 +282,8 @@ impl Sprites {
         for sub in ["a", "b", "c"] {
             folders.push((dir.join(sub), sub.to_string()));
         }
+        // (the heart's art is shared by all characters)
+        folders.push((assets.join("animate/character-shared"), "character-shared".to_string()));
         let mut pages = Vec::new();
         for (folder, stem) in folders {
             let (Some(json), Some(img)) = (source.string(&folder.join(format!("{stem}{ATLAS}.json"))), source.image(&folder.join(format!("{stem}{ATLAS}.png")))) else { continue };
@@ -2090,6 +2096,18 @@ impl Sprites {
                         }
                         continue;
                     }
+                }
+                match world.bike.as_ref() {
+                    Some(crate::vehicle::Vehicle::Pogo(p)) if node.n == "frame" && child.n == "spring" && !p.frame_smashed => {
+                        self.draw_node_at(img, child, g, None, Some(p.spring_scale(world)));
+                        continue;
+                    }
+                    // the moped's front rim turns with the frame, not with the wheel
+                    Some(crate::vehicle::Vehicle::Dirt(d)) if node.n == "frontWheel" && child.n == "rim" => {
+                        self.draw_node_turned(img, child, g, f64::from(world.body_angle(d.frame)));
+                        continue;
+                    }
+                    _ => {}
                 }
                 match (spin, stretch) {
                     (Some(angle), _) if child.n == "inner" => self.draw_node_turned(img, child, g, angle),

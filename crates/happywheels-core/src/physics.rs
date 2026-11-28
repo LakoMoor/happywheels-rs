@@ -2658,16 +2658,27 @@ impl World {
                     if !hits.contains(&part) {
                         continue;
                     }
+                    // (Santa reacts to his own breaks in `check_joints`)
+                    let mut vehicle = self.bike.take_if(|v| !matches!(v, crate::vehicle::Vehicle::Santa(_)));
+                    let mut react = |world: &mut World, doll: &mut crate::character::Ragdoll, limb| {
+                        if let Some(v) = vehicle.as_mut() {
+                            v.rider_hurt(world, doll, false, &[limb]);
+                        }
+                    };
                     match part {
                         crate::character::Part::Head => doll.smash_head(self),
-                        crate::character::Part::Chest => doll.smash_chest(self),
-                        crate::character::Part::Pelvis => doll.smash_pelvis(self),
+                        crate::character::Part::Chest => doll.smash_chest_with(self, &mut react),
+                        crate::character::Part::Pelvis => doll.smash_pelvis_with(self, &mut react),
                         crate::character::Part::LowerLeg1 => doll.smash_foot(self, 0),
                         _ => doll.smash_foot(self, 1),
                     }
+                    if let Some(v) = vehicle {
+                        self.bike = Some(v);
+                    }
                     // the vehicle classes' `headSmash1/chestSmash/pelvisSmash` overrides: the smash, then `eject()` (Santa has its own handler)
                     let torso = matches!(part, crate::character::Part::Head | crate::character::Part::Chest | crate::character::Part::Pelvis);
-                    if torso && !matches!(self.bike, Some(crate::vehicle::Vehicle::Santa(_))) {
+                    let kept = part == crate::character::Part::Head && self.bike.as_ref().is_some_and(|v| !v.head_smash_ejects());
+                    if torso && !kept && !matches!(self.bike, Some(crate::vehicle::Vehicle::Santa(_))) {
                         if let Some(mut v) = self.bike.take() {
                             v.rider_hurt(self, &mut doll, true, &[]);
                             self.bike = Some(v);

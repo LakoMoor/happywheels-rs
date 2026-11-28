@@ -106,7 +106,7 @@ try {
       const parts = file.webkitRelativePath.split('/');
       const start = parts.findIndex(part => ['animate', 'image', 'fonts'].includes(part));
       return { file, path: start < 0 ? '' : parts.slice(start).join('/') };
-    }).filter(({path}) => /^animate\/(character\d+|game|backgrounds)\/.*@0\.6x\.(json|png)$/.test(path)
+    }).filter(({path}) => /^animate\/(character\d+|character-shared|game|backgrounds)\/.*@0\.6x\.(json|png)$/.test(path)
       || /^animate\/game-ui\/game_ui_atlas_[13]\/game_ui_atlas_[13]\.(json|png)$/.test(path)
       || /^image\/character_images\/character_images\.(json|png)$/.test(path)
       || /^fonts\/(ClarendonLTStd-Bold|HelveticaNeueLTStd-Roman)\.otf$/.test(path));
