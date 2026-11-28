@@ -752,6 +752,37 @@ pub(crate) fn limit_attributes<'a>(special: bool, class: usize, attributes: impl
     }
 }
 
+/// Gives a special's absent (or empty) boolean and numeric parameters the values its constructor starts with: the original's reader
+/// only sets what the level writes (a spike set is immovable unless it says otherwise).
+pub(crate) fn default_attributes(class: usize, attributes: &mut Vec<Option<String>>, written_as_text: impl Fn(usize) -> bool) {
+    let Some(class) = schema().specials.get(class) else { return };
+    for (i, (_, default, _)) in class.props.iter().enumerate() {
+        let text = match default {
+            Value::Bool(b) => if *b { "t" } else { "f" }.to_string(),
+            Value::Num(n) => n.to_string(),
+            Value::Null | Value::Text(_) => continue,
+        };
+        if written_as_text(i) {
+            continue;
+        }
+        if attributes.len() <= i {
+            attributes.resize(i + 1, None);
+        }
+        if attributes[i].as_ref().is_none_or(String::is_empty) {
+            attributes[i] = Some(text);
+        }
+    }
+}
+
+/// A polygon's or artwork's width and height are a scale (0.1 to 10) of the box around its vertices and its own origin.
+pub(crate) fn limit_polygon_size(size: &mut String, vertices: impl Iterator<Item = f64>) {
+    let (lo, hi) = vertices.fold((0.0f64, 0.0f64), |(lo, hi), v| (lo.min(v), hi.max(v)));
+    let (full, read) = (hi - lo, parse_float(size));
+    if full > 0.0 && read != 0.0 && !read.is_nan() && !(0.1..=10.0).contains(&(read / full)) {
+        *size = js_round(full * (read / full).clamp(0.1, 10.0)).to_string();
+    }
+}
+
 fn read_special(n: Node, grouped: bool) -> Result<Item> {
     let class = number(n, "t").context("special without type")? as usize;
     let mut item = Item::new(true, class, grouped).context("unknown special type")?;

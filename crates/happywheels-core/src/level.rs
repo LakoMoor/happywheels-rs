@@ -312,6 +312,11 @@ fn parse_shape(sh: roxmltree::Node, vert_cache: &mut VertCache) -> Result<Shape>
         }
     }
     let (verts, handles, complete_fill) = data;
+    if !verts.is_empty() {
+        for (axis, size) in props.iter_mut().skip(2).take(2).enumerate() {
+            crate::editor::limit_polygon_size(size, verts.iter().map(|v| f64::from(v[axis])));
+        }
+    }
     Ok(Shape { kind, interactive, props, verts, handles, complete_fill })
 }
 
@@ -334,6 +339,7 @@ fn parse_special(sp: roxmltree::Node) -> Result<Special> {
         i += 1;
     }
     crate::editor::limit_attributes(true, kind, props.iter_mut().enumerate().filter_map(|(i, p)| Some((i, p.as_mut()?))));
+    crate::editor::default_attributes(kind, &mut props, |i| texts.contains_key(&i));
     Ok(Special { kind, props, texts })
 }
 
@@ -580,6 +586,28 @@ mod limit_tests {
         assert_eq!(level.specials[0].num("x"), Some(1000.0));
         // width and height of a circle follow the last one set (5 px at least); density 0.1, collision 7
         let props = &level.shapes[0].props;
+        // a bare spike set is 20 spikes, immovable, awake
+        let bare = super::parse("<levelXML><info v='1.99'/><specials><sp t='6' p0='1' p1='2'/></specials></levelXML>").unwrap();
+        let spikes = &bare.specials[0];
+        assert_eq!((spikes.num("numSpikes"), spikes.flag("immovable2"), spikes.flag("sleeping")), (Some(20.0), Some(true), Some(false)));
+        // a polygon 100 px square asked to be 2000 by 2 is held to 10 and 0.1 of that
+        let poly = super::parse(
+            "<levelXML><info v='1.99'/><shapes><sh t='3' p0='100' p1='100' p2='2000' p3='2' p4='0' p5='t' p6='f' p7='1' p8='0' p9='-1' p10='100' p11='1'><v f='t' id='0' n='3' v0='0_-50' v1='50_50' v2='-50_50'/></sh></shapes></levelXML>",
+        )
+        .unwrap();
+        assert_eq!((poly.shapes[0].props[2].as_str(), poly.shapes[0].props[3].as_str()), ("1000", "10"));
         assert_eq!((props[2].as_str(), props[3].as_str(), props[7].as_str(), props[11].as_str()), ("300", "300", "0.1", "7"));
+    }
+}
+
+#[cfg(test)]
+mod name_tests {
+    /// The loader's limits and defaults are applied by index, so both property tables must list a special's attributes in one order.
+    #[test]
+    fn property_tables_agree() {
+        for (kind, class) in crate::editor::schema().specials.iter().enumerate() {
+            let names = super::special_property_names(kind);
+            assert_eq!(class.props.iter().map(|p| p.0.as_str()).collect::<Vec<_>>(), names, "{}", class.name);
+        }
     }
 }
