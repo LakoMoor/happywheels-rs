@@ -13,9 +13,9 @@ struct Case {
     snaps: BTreeMap<usize, Vec<[f64; 3]>>,
 }
 
-/// Still different: the harpoon gun's anchor rope is not made (15); the homing mine and arrow gun lack the original's invisible
-/// aiming-line body (25, 29).
-const KNOWN: [usize; 3] = [15, 25, 29];
+/// Still different, with the first frame that is: the harpoon gun's anchor rope is not made (15); the arrow gun lacks the original's
+/// invisible aiming-line body (29); once the homing mine has torn the rider apart (frame 46) the pieces drift from frame 48 (25).
+const KNOWN: [(usize, usize); 3] = [(15, 1), (25, 60), (29, 1)];
 
 #[test]
 fn specials_move_like_the_original() {
@@ -54,7 +54,7 @@ fn specials_move_like_the_original() {
                 println!("{} here only: {:?}", case.kind, here.iter().filter(|h| !original.iter().any(|o| near(h, o))).collect::<Vec<_>>());
             }
             if here.len() != original.len() || worst > 0.01 {
-                differing.push(case.kind);
+                differing.push((case.kind, at));
                 report.push(format!("{} {} frame {at}: {} bodies there, {} here, worst {worst:.3}", case.kind, case.name, original.len(), here.len()));
                 break;
             }

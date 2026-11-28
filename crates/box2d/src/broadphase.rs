@@ -115,25 +115,39 @@ impl BroadPhase {
         dx.max(dy) < 0.0
     }
 
-    /// `QueryAABB`: user data of every proxy whose quantized box overlaps `a` (proxy-id order; the original
-    /// reports them in sorted-bound order, which callers must not depend on).
+    /// `QueryAABB`: user data of every proxy whose quantized box overlaps `a`, in the original's order.
     pub fn query_aabb(&self, a: &Aabb) -> Vec<usize> {
+        // `QueryAABB` walks the x axis, then the y axis, and lists a proxy when the second walk meets it again: the order matters to
+        // callers that take only the first few
         let q = self.compute_bounds(a);
-        let mut out = Vec::new();
-        for p in &self.proxies {
-            let Some(ud) = p.user_data else { continue };
-            if p.overlap_count == INVALID {
-                continue;
+        let count = 2 * self.proxy_count;
+        let walk = |axis: usize| {
+            let bounds = &self.bounds[axis];
+            let li = Self::binary_search(bounds, count, q.lower[axis]);
+            let ui = Self::binary_search(bounds, count, q.upper[axis]);
+            let mut met: Vec<u16> = bounds[li..ui].iter().filter(|b| b.is_lower()).map(|b| b.proxy_id).collect();
+            if li > 0 {
+                let mut i = li - 1;
+                let mut stabbing = bounds[i].stabbing;
+                while stabbing != 0 {
+                    let b = bounds[i];
+                    if b.is_lower() && li <= self.proxies[b.proxy_id as usize].upper[axis] {
+                        met.push(b.proxy_id);
+                        stabbing -= 1;
+                    }
+                    if i == 0 {
+                        break;
+                    }
+                    i -= 1;
+                }
             }
-            let hit = (0..2).all(|k| {
-                let (lo, hi) = (self.bounds[k][p.lower[k]].value, self.bounds[k][p.upper[k]].value);
-                lo <= q.upper[k] && hi >= q.lower[k]
-            });
-            if hit {
-                out.push(ud);
-            }
+            met
+        };
+        let mut on_x = vec![false; self.proxies.len()];
+        for id in walk(0) {
+            on_x[id as usize] = true;
         }
-        out
+        walk(1).into_iter().filter(|&id| on_x[id as usize]).filter_map(|id| self.proxies[id as usize].user_data).collect()
     }
 
     fn compute_bounds(&self, a: &Aabb) -> BoundValues {

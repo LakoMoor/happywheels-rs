@@ -23,6 +23,8 @@ fn max_particles() -> usize {
 pub const BLOOD: u8 = 8;
 /// The `Food` index of the smashed van's glass (`van_glass_shards`).
 pub const VAN_GLASS: u8 = 10;
+/// The `Food` index of an exploded mine's or jet's metal (`metal_pieces_MC`).
+pub const METAL_PIECES: u8 = 11;
 /// `ShardKind::Food` index of the 13-frame `WaterMC` clip (toilet water sprays).
 pub const WATER: u8 = 9;
 
@@ -124,7 +126,7 @@ impl ShardKind {
             Self::Metal => ("metalShards", None, 12),
             Self::Cola => ("cola", None, 13),
             Self::Snow => ("snowflakes", None, 7),
-            Self::Food(ty) => ("", None, [15, 9, 8, 6, 9, 11, 5, 13, 13, 13, 13][ty as usize % 11]),
+            Self::Food(ty) => ("", None, [15, 9, 8, 6, 9, 11, 5, 13, 13, 13, 13, 12][ty as usize % 12]),
         }
     }
 }

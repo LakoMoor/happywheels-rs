@@ -34,8 +34,8 @@ fn drawn(assets: &std::path::Path, xml: &str, steps: usize) -> Vec<Drawn> {
     list.into_iter().filter(|d| !d.0.starts_with("line ")).map(|(n, q)| (n, q.map(|p| [p[0] + f64::from(camera[0]) - 450.0, p[1] + f64::from(camera[1]) - 250.0]))).collect()
 }
 
-/// Still different: the finish line's posts are drawn once, not twice (9); the homing mine's jets and light are not animated (25).
-const KNOWN: [usize; 2] = [9, 25];
+/// Specials still drawn differently.
+const KNOWN: [usize; 0] = [];
 
 #[test]
 fn specials_are_drawn_like_the_original() {
@@ -77,7 +77,13 @@ fn specials_are_drawn_like_the_original() {
                 Some(j) => {
                     used[j] = true;
                     // the jet's flame length is random there (.95·accel + .1·random of 63 px)
-                    if off(&port[j].1, quad) > if name == "jet-flame.png" { 4.0 } else { 1.0 } {
+                    let slack = match name.as_str() {
+                        "jet-flame.png" => 4.0,
+                        // the homing mine shakes its jets' sizes by a random ±¼ as well
+                        "homing-mine-jet.png" => 5.0,
+                        _ => 1.0,
+                    };
+                    if off(&port[j].1, quad) > slack {
                         wrong.push(format!("{name} {:.1} px off", off(&port[j].1, quad)));
                     }
                     if previous.is_some_and(|p| p > j) {

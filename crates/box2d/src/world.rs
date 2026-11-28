@@ -238,6 +238,13 @@ pub struct ContactEvent {
     pub normal_impulse: f64,
 }
 
+impl ContactEvent {
+    /// A `Result` of `impulse` on `shape` alone, for handlers to be told of a blow that no contact dealt.
+    pub fn blow(shape: ShapeId, impulse: f64) -> Self {
+        Self { kind: ContactEventKind::Result, shape1: shape, shape2: shape, position: Vec2::default(), velocity: Vec2::default(), normal: Vec2::default(), separation: 0.0, friction: 0.0, restitution: 0.0, id: Default::default(), contact: usize::MAX, normal_impulse: impulse }
+    }
+}
+
 pub type ContactId2 = crate::collision::ContactId;
 
 pub struct StepParams {

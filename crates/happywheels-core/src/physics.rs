@@ -598,6 +598,12 @@ struct Mine {
     target: Option<BodyId>,
     targets: Vec<(BodyId, i32)>,
     done: bool,
+    /// The aiming line towards the target (on the targeting body) and whether nothing was found across it.
+    aim: Option<ShapeId>,
+    path_clear: bool,
+    /// `light` frame and `totalImpulseVector`, for the drawing
+    light: u8,
+    impulse: Vec2,
 }
 
 /// WreckingBall (`actions`): a motor on the pin keeps the swing going.
@@ -2709,54 +2715,8 @@ impl World {
         self.camera().map(|c| c.center().map(|v| v as f32))
     }
 
-    /// `handleContactBuffer` of the passengers: it runs for everybody before anybody's `checkJoints`.
-    fn passenger_contacts(&mut self, events: &[box2d::world::ContactEvent]) {
-        use crate::vehicle::Vehicle;
-        let Some(mut vehicle) = self.bike.take() else { return };
-        match &mut vehicle {
-            Vehicle::Dirt(d) => {
-                if let Some(g) = d.girl.as_mut() {
-                    g.contact_events(self, events);
-                    if self.joints_break {
-                        g.smashed(self, events);
-                    }
-                }
-            }
-            Vehicle::Bike(b) if self.joints_break => {
-                if let Some(kid) = b.kid.as_mut() {
-                    kid.smashed(self, events);
-                }
-            }
-            Vehicle::Family(f) if self.joints_break => {
-                f.daughter.smashed(self, events);
-                f.son.smashed(self, events);
-            }
-            _ => {}
-        }
-        self.bike = Some(vehicle);
-    }
-
-    fn step_physics(&mut self) {
-        if let Some(mut doll) = self.character.take() {
-            doll.check_vocals(self);
-            self.character = Some(doll);
-        }
-        self.frame += 1;
-        if matches!(self.bike, Some(crate::vehicle::Vehicle::Santa(_))) {
-            if let Some(crate::vehicle::Vehicle::Santa(mut s)) = self.bike.take() {
-                s.elf_steps(self);
-                self.bike = Some(crate::vehicle::Vehicle::Santa(s));
-            }
-        }
-        self.update_loops();
-        self.check_npc_joints();
-        self.check_npc_vocals();
-        self.b.step(TIME_STEP, ITERATIONS);
-        let events: Vec<_> = self.b.c.events.drain(..).collect();
-        self.collect_smashes(&events);
-        self.collect_thuds(&events);
-        self.collect_vehicle_sounds(&events);
-        self.collect_shape_hits(&events);
+    /// `contactResultHandler` of the player's ragdoll: the helmet first, then the parts collected by [`Self::collect_smashes`].
+    fn rider_smashes(&mut self, events: &[box2d::world::ContactEvent]) {
         if self.joints_break && self.character.as_ref().is_some_and(|d| d.helmet_on) {
             // the head shape doubles as the helmet shape: a Result above 2 loses the helmet (and the head cannot smash that frame)
             let head = self.character.as_ref().map(|d| d.bodies[&crate::character::Part::Head]);
@@ -2811,6 +2771,87 @@ impl World {
                 self.character = Some(doll);
             }
         }
+    }
+
+    /// `explodeShape` of every character an explosion reached: `reached` holds the shapes with `1 − distance/reach` of their bodies. A
+    /// helmet or head goes above .85, chest and pelvis above `max(1 − .15·mass/usual, .7)`.
+    fn explode_shapes(&mut self, reached: &[(ShapeId, f64)]) {
+        use crate::character::Part;
+        let mut blows = Vec::new();
+        {
+            let dolls = self.character.iter().chain(self.passengers());
+            let parts = dolls.flat_map(|d| [(Part::Head, 0), (Part::Chest, 1), (Part::Pelvis, 2)].into_iter().filter_map(|(p, k)| d.bodies.get(&p).map(|&b| (b, k))));
+            let parts: Vec<(BodyId, usize)> = parts.chain(self.npcs.iter().flat_map(|n| [(n.bodies[1], 0), (n.bodies[0], 1), (n.bodies[2], 2)])).collect();
+            for &(shape, ratio) in reached {
+                let body = self.b.c.shapes[shape].body;
+                let Some(&(_, k)) = parts.iter().find(|p| p.0 == body && self.b.body(body).shapes.first() == Some(&shape)) else { continue };
+                let usual = [0.0, 0.171_71, 0.0735][k];
+                let limit = if k == 0 { 0.85 } else { (1.0 - 0.15 * self.b.body(body).mass / usual).max(0.7) };
+                if ratio > limit {
+                    blows.push(box2d::world::ContactEvent::blow(shape, f64::MAX));
+                }
+            }
+        }
+        if blows.is_empty() {
+            return;
+        }
+        let pending = std::mem::take(&mut self.smashes);
+        self.collect_smashes(&blows);
+        self.rider_smashes(&blows);
+        self.smashes = pending;
+        self.npc_smashes(&blows);
+        self.passenger_contacts(&blows);
+    }
+
+    /// `handleContactBuffer` of the passengers: it runs for everybody before anybody's `checkJoints`.
+    fn passenger_contacts(&mut self, events: &[box2d::world::ContactEvent]) {
+        use crate::vehicle::Vehicle;
+        let Some(mut vehicle) = self.bike.take() else { return };
+        match &mut vehicle {
+            Vehicle::Dirt(d) => {
+                if let Some(g) = d.girl.as_mut() {
+                    g.contact_events(self, events);
+                    if self.joints_break {
+                        g.smashed(self, events);
+                    }
+                }
+            }
+            Vehicle::Bike(b) if self.joints_break => {
+                if let Some(kid) = b.kid.as_mut() {
+                    kid.smashed(self, events);
+                }
+            }
+            Vehicle::Family(f) if self.joints_break => {
+                f.daughter.smashed(self, events);
+                f.son.smashed(self, events);
+            }
+            _ => {}
+        }
+        self.bike = Some(vehicle);
+    }
+
+    fn step_physics(&mut self) {
+        if let Some(mut doll) = self.character.take() {
+            doll.check_vocals(self);
+            self.character = Some(doll);
+        }
+        self.frame += 1;
+        if matches!(self.bike, Some(crate::vehicle::Vehicle::Santa(_))) {
+            if let Some(crate::vehicle::Vehicle::Santa(mut s)) = self.bike.take() {
+                s.elf_steps(self);
+                self.bike = Some(crate::vehicle::Vehicle::Santa(s));
+            }
+        }
+        self.update_loops();
+        self.check_npc_joints();
+        self.check_npc_vocals();
+        self.b.step(TIME_STEP, ITERATIONS);
+        let events: Vec<_> = self.b.c.events.drain(..).collect();
+        self.collect_smashes(&events);
+        self.collect_thuds(&events);
+        self.collect_vehicle_sounds(&events);
+        self.collect_shape_hits(&events);
+        self.rider_smashes(&events);
         self.collect_magnet(&events);
         if self.joints_break && matches!(self.bike, Some(crate::vehicle::Vehicle::Pogo(ref p)) if !p.frame_smashed) {
             // `contactResultHandler` on frameShape: impulse above 40 smashes the frame
@@ -3506,6 +3547,18 @@ impl World {
     }
 
     /// Jet engine state for drawing: (`accelScaler`, still burning) of the jet owning `body`.
+    /// The homing mine on `body` for drawing: its light's frame and the scales of `jet1..jet4` from the push it last gave itself (the
+    /// original shakes these by a random ±¼).
+    pub fn mine_drawn(&self, body: BodyId) -> Option<(u8, [f64; 4])> {
+        let m = self.mines.iter().find(|m| m.body == body)?;
+        let a = self.b.body(body).sweep.a;
+        let (sin, cos) = (box2d::fdlibm::sin(a), box2d::fdlibm::cos(a));
+        let r = m.impulse.x * cos + m.impulse.y * sin;
+        let i = m.impulse.x * sin - m.impulse.y * cos;
+        let scale = |v: f64| if v > 0.0 { (v / m.seek).min(2.0) } else { 0.0 };
+        Some((m.light, [scale(-i), scale(-r), scale(i), scale(r)]))
+    }
+
     pub fn jet_state(&self, body: BodyId) -> Option<(f64, bool)> {
         self.jets.iter().find(|j| j.body == body).map(|j| (j.accel, !j.done && j.fired < j.spec.fire_total))
     }
@@ -4677,8 +4730,7 @@ impl World {
     }
 
     /// HomingMine (transcribed createBodies/actions/mineResult/explode; constants SENSOR_RADIUS 600 px, SMASH_IMPULSE 3, EXPLOSION_DISTANCE 0.2304 (squared m),
-    /// SLOWING_FACTOR .05, GRAVITY_DISPLACEMENT −1/3 read from the oracle). The line-of-sight sensor box on the targeting body is replaced by a direct
-    /// segment test mine→target against static / density ≥ 10 shapes at action time (the original gets it from sensor contacts one step later).
+    /// SLOWING_FACTOR .05, GRAVITY_DISPLACEMENT −1/3 read from the oracle). The line of sight is the sensor strip on the targeting body, whose contacts are seen one step later.
     fn mine(&mut self, sp: &crate::level::Special) -> Option<BodyId> {
         let (x, y) = (f64::from(sp.num("x")?), f64::from(sp.num("y")?));
         let pos = Vec2::new(x / PS, y / PS);
@@ -4712,8 +4764,25 @@ impl World {
             target: None,
             targets: Vec::new(),
             done: false,
+            aim: None,
+            path_clear: false,
+            light: 1,
+            impulse: Vec2::default(),
         });
+        // the targeting body takes its mass from the aiming line and keeps it when the line is taken off again
+        let line = self.b.create_shape(targeting, &Self::aim_line(600.0));
+        self.b.set_mass_from_shapes(targeting);
+        self.b.destroy_shape(line);
         Some(body)
+    }
+
+    /// The sensor strip of `createTargetSensor`: 4 px wide, reaching `length` px up from its body.
+    fn aim_line(length: f64) -> ShapeDef {
+        let mut sd = ShapeDef::oriented_box(2.0 / PS, 0.5 * length / PS, Vec2::new(0.0, -0.5 * length / PS), 0.0);
+        sd.density = 1.0;
+        sd.is_sensor = true;
+        sd.filter = Filter { category_bits: 8, mask_bits: 0xFFFF, group_index: -20 };
+        sd
     }
 
     /// `Shape.TestSegment` reduced to a yes/no: does segment p1→p2 (world) touch the shape?
@@ -4772,7 +4841,7 @@ impl World {
     }
 
     /// Radial explosion shared by Jet and HomingMine: every non-static body whose broad-phase box lies in ±2.6 m of `c` gets `5·(1 − d/2.6)`.
-    fn explosion_burst(&mut self, c: Vec2) {
+    fn explosion_burst(&mut self, c: Vec2, velocity: Vec2) {
         self.play("MineExplosion", 1, c);
         let l = 2.6;
         let found = self.b.query(&box2d::collision::Aabb { lower: Vec2::new(c.x - l, c.y - l), upper: Vec2::new(c.x + l, c.y + l) }, 30);
@@ -4786,16 +4855,23 @@ impl World {
             let w = 1.0 - dx.hypot(dy).min(l) / l;
             let a = dy.atan2(dx);
             self.b.body_mut(other).apply_impulse(Vec2::new(box2d::fdlibm::cos(a) * w * 5.0, box2d::fdlibm::sin(a) * w * 5.0), v);
+            // (at once: what a smash makes takes its speed from bodies the blast may not have pushed yet)
+            self.explode_shapes(&[(s, w)]);
         }
+        // its own metal, thrown from where it was
+        self.blood.body_burst(crate::blood::ShardKind::Food(crate::blood::METAL_PIECES), [c.x * PS, c.y * PS], velocity, 10.0, 50.0, 25);
     }
 
     fn explode_mine(&mut self, mi: usize) {
-        let c = self.b.body(self.mines[mi].body).sweep.c;
+        let (c, velocity) = {
+            let b = self.b.body(self.mines[mi].body);
+            (b.sweep.c, b.linear_velocity_from_local_point(b.sweep.local_center))
+        };
         let (b, t) = (self.mines[mi].body, self.mines[mi].targeting);
         self.mines[mi].done = true;
         self.b.destroy_body(b);
         self.b.destroy_body(t);
-        self.explosion_burst(c);
+        self.explosion_burst(c, velocity);
     }
 
     /// `HomingMine.actions` (before the world step).
@@ -4822,16 +4898,10 @@ impl World {
                 self.mines[mi].target = None;
             }
             if self.mines[mi].target.is_none() {
-                self.mines[mi].retarget = 0;
-                let mut best = 1e6;
-                for &(t, _) in &self.mines[mi].targets.clone() {
-                    let c = self.b.body(t).sweep.c;
-                    let d = (c.x - e.x).powi(2) + (c.y - e.y).powi(2);
-                    if d < best {
-                        best = d;
-                        self.mines[mi].target = Some(t);
-                    }
+                if let Some(line) = self.mines[mi].aim.take() {
+                    self.b.destroy_shape(line);
                 }
+                self.mine_retarget(mi, e);
             }
             let (cx, cy);
             let mut hovering = false;
@@ -4845,10 +4915,17 @@ impl World {
                         continue;
                     }
                     self.mines[mi].counting_down = true;
+                    self.mines[mi].light = 5;
+                }
+                if self.mines[mi].counting_down && (h < 0.2304 || self.mines[mi].in_contact) {
+                    self.mines[mi].light = if self.mines[mi].light == 5 { 6 } else { 5 };
                 }
                 let d = a.y.atan2(a.x) + 0.5 * std::f64::consts::PI;
                 self.b.set_xform(tid, e, d);
-                if self.path_clear(e, s, t) {
+                if !self.mines[mi].counting_down {
+                    self.mines[mi].light = if self.mines[mi].path_clear { 3 } else { 2 };
+                }
+                if self.mines[mi].path_clear {
                     hovering = true;
                     let p = Vec2::new(n.x / 30.0, n.y / 30.0);
                     let len = h.sqrt();
@@ -4867,7 +4944,7 @@ impl World {
                 }
                 self.mines[mi].retarget += 1;
                 if self.mines[mi].retarget == 5 {
-                    self.mines[mi].target = None;
+                    self.mine_retarget(mi, e);
                 }
             } else {
                 (cx, cy) = (-n.x * sf / inv_m, -n.y * sf / inv_m);
@@ -4876,6 +4953,8 @@ impl World {
                 self.play(if hovering { "HomingMineFind" } else { "HomingMineLose" }, 1, e);
                 self.mines[mi].hovering = hovering;
             }
+            self.mines[mi].path_clear = true;
+            self.mines[mi].impulse = Vec2::new(cx, cy - 0.5 * seek);
             let bi = -i * sf / inv_i;
             let b = self.b.body_mut(bid);
             b.linear_velocity.x += inv_m * cx;
@@ -4883,6 +4962,41 @@ impl World {
             b.angular_velocity += inv_i * bi;
             b.linear_velocity.y += -1.0 / 3.0;
             self.b.body_mut(tid).linear_velocity.y += -1.0 / 3.0;
+        }
+    }
+
+    /// `findClosestTarget`: the nearest body in range, if any, and the aiming line to it (which starts out as not yet looked along).
+    fn mine_retarget(&mut self, mi: usize, from: Vec2) {
+        self.mines[mi].retarget = 0;
+        let mut best = 1e6;
+        for &(t, _) in &self.mines[mi].targets.clone() {
+            let c = self.b.body(t).sweep.c;
+            let d = (c.x - from.x).powi(2) + (c.y - from.y).powi(2);
+            if d < best {
+                best = d;
+                self.mines[mi].target = Some(t);
+            }
+        }
+        if self.mines[mi].target.is_some() && self.mines[mi].aim.is_none() {
+            self.mines[mi].aim = Some(self.b.create_shape(self.mines[mi].targeting, &Self::aim_line(600.0)));
+            self.mines[mi].path_clear = false;
+        }
+    }
+
+    /// `checkAdd` / `checkPersist` of the aiming line: anything static or heavy enough lying across the way to the target blocks it.
+    fn mine_look(&mut self, mi: usize, other: ShapeId) {
+        let Some(target) = self.mines[mi].target.filter(|&t| self.b.c.bodies[t].alive) else {
+            self.mines[mi].path_clear = false;
+            return;
+        };
+        let record = &self.b.c.shapes[other];
+        let mass = self.b.body(record.body).mass;
+        if record.shape.is_sensor || (mass > 0.0 && record.shape.density < 10.0) {
+            return;
+        }
+        let from = self.b.body(self.mines[mi].targeting).xf.position;
+        if self.segment_hits_shape(other, from, self.b.body(target).sweep.c) {
+            self.mines[mi].path_clear = false;
         }
     }
 
@@ -4895,6 +5009,11 @@ impl World {
                 }
                 let (range, shape) = (self.mines[mi].range, self.mines[mi].shape);
                 let other = |a: ShapeId, b: ShapeId, mine: ShapeId| if a == mine { Some(b) } else if b == mine { Some(a) } else { None };
+                if matches!(ev.kind, ContactEventKind::Add | ContactEventKind::Persist) {
+                    if let Some(o) = self.mines[mi].aim.and_then(|line| other(ev.shape1, ev.shape2, line)) {
+                        self.mine_look(mi, o);
+                    }
+                }
                 if let Some(o) = other(ev.shape1, ev.shape2, range) {
                     if self.b.shape_material(o) & 2 == 0 {
                         continue;
@@ -5954,7 +6073,7 @@ impl World {
     }
 
     /// `Jet.actions` (thrust impulse while awake and burning) and `checkContact`/`explode` (a contact impulse above `round(100·mass)` blows the
-    /// jet up: its body goes and every non-static body within 2.6 m gets a radial impulse `5·(1 − d/2.6)`). Sounds/particles/`explodeShape` not ported.
+    /// jet up: its body goes and every non-static body within 2.6 m gets a radial impulse `5·(1 − d/2.6)`). 
     fn run_jets(&mut self, events: &[box2d::world::ContactEvent]) {
         for ji in 0..self.jets.len() {
             if self.jets[ji].done {
@@ -5964,22 +6083,12 @@ impl World {
             let hit = events.iter().any(|e| e.kind == ContactEventKind::Result && (e.shape1 == shape || e.shape2 == shape) && e.normal_impulse > smash);
             if hit {
                 self.jets[ji].done = true;
-                let c = self.b.body(body).sweep.c;
-                self.play("MineExplosion", 1, c);
-                let l = 2.6;
-                let found = self.b.query(&box2d::collision::Aabb { lower: Vec2::new(c.x - l, c.y - l), upper: Vec2::new(c.x + l, c.y + l) }, 30);
+                let (c, velocity) = {
+                    let b = self.b.body(body);
+                    (b.sweep.c, b.linear_velocity_from_local_point(b.sweep.local_center))
+                };
                 self.b.destroy_body(body);
-                for s in found {
-                    let other = self.b.c.shapes[s].body;
-                    if other == body || !self.b.c.bodies[other].alive || self.b.body(other).is_static {
-                        continue;
-                    }
-                    let v = self.b.body(other).sweep.c;
-                    let (dx, dy) = (v.x - c.x, v.y - c.y);
-                    let w = 1.0 - dx.hypot(dy).min(l) / l;
-                    let a = dy.atan2(dx);
-                    self.b.body_mut(other).apply_impulse(Vec2::new(box2d::fdlibm::cos(a) * w * 5.0, box2d::fdlibm::sin(a) * w * 5.0), v);
-                }
+                self.explosion_burst(c, velocity);
                 continue;
             }
         }
@@ -6967,6 +7076,8 @@ mod tests {
         w.b.create_shape(target, &shape);
         w.b.set_mass_from_shapes(target);
         w.mines[0].target = Some(target);
+        // the first look along a new aiming line finds nothing yet
+        w.run_mines();
         w.run_mines();
         w.update_loops();
         assert!(w.take_sounds().iter().any(|s| s.0 == "HomingMineFind"), "done={} hovering={} target={:?} mine={:?} target_pos={:?}", w.mines[0].done, w.mines[0].hovering, w.mines[0].target, w.b.body(w.mines[0].body).sweep.c, w.b.body(target).sweep.c);

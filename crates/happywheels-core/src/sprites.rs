@@ -1182,6 +1182,20 @@ impl Sprites {
                         self.draw_node(img, n, m);
                     }
                 }
+                if sp.kind == 9 {
+                    // `finishline_flag`, playing at (x − 200, y − 220) over the foreground
+                    #[derive(Deserialize)]
+                    struct Frames {
+                        frames: Vec<Vec<Node>>,
+                    }
+                    static FLAG: std::sync::OnceLock<Vec<Vec<Node>>> = std::sync::OnceLock::new();
+                    let flag = FLAG.get_or_init(|| serde_json::from_str::<Frames>(include_str!("../data/game-finishline_flag.json")).map(|f| f.frames).unwrap_or_default());
+                    let (x, y) = (f64::from(sp.num("x").unwrap_or(0.0)), f64::from(sp.num("y").unwrap_or(0.0)));
+                    let fm = mul(cam, local(x - 200.0, y - 220.0, 0.0, 1.0, 1.0));
+                    for k in flag.get((world.frame() as usize).saturating_sub(1) % flag.len().max(1)).into_iter().flatten() {
+                        self.draw_node(img, k, fm);
+                    }
+                }
                 continue;
             }
             // BladeWeapon: `BladeWeaponMC.gotoAndStop(bladeWeaponType)` (one texture per frame) at the weapon body's origin with its angle (`paint`
@@ -1314,8 +1328,22 @@ impl Sprites {
                         }
                     }
                 } else {
-                    for n in clips[1].iter().filter(|n| !n.n.starts_with("jet")) {
-                        self.draw_node(img, n, pose);
+                    let (light, jets) = world.mine_drawn(body).unwrap_or((1, [0.0; 4]));
+                    for n in &clips[1] {
+                        if let Some(k) = n.n.strip_prefix("jet").and_then(|k| k.parse::<usize>().ok()) {
+                            let s = jets[(k - 1).min(3)];
+                            let m = mul(pose, n.matrix_with(n.x, n.y, n.r, s, s));
+                            for part in &n.k {
+                                self.draw_node(img, part, m);
+                            }
+                        } else if n.n == "light" {
+                            let lm = mul(pose, n.matrix());
+                            for part in n.alt.get(&light.to_string()).unwrap_or(&n.k) {
+                                self.draw_node(img, part, lm);
+                            }
+                        } else {
+                            self.draw_node(img, n, pose);
+                        }
                     }
                 }
                 continue;
@@ -2075,12 +2103,12 @@ impl Sprites {
                 struct Frames {
                     frames: Vec<Vec<Node>>,
                 }
-                static FRAMES: std::sync::OnceLock<[Vec<Vec<Node>>; 11]> = std::sync::OnceLock::new();
+                static FRAMES: std::sync::OnceLock<[Vec<Vec<Node>>; 12]> = std::sync::OnceLock::new();
                 let frames = FRAMES.get_or_init(|| {
                     let f = |s: &str| serde_json::from_str::<Frames>(s).map(|f| f.frames).unwrap_or_default();
-                    [f(include_str!("../data/game-WatermelonParticlesMC.json")), f(include_str!("../data/game-PumpkinParticlesMC.json")), f(include_str!("../data/game-PineappleParticlesMC.json")), f(include_str!("../data/game-BoomboxShardsMC.json")), f(include_str!("../data/game-TVShardsMC.json")), f(include_str!("../data/game-GlassShardsMC.json")), f(include_str!("../data/game-ToiletParticlesMC.json")), f(include_str!("../data/game-WoodChipsMC.json")), f(include_str!("../data/game-Blood.json")), f(include_str!("../data/game-WaterMC.json")), f(include_str!("../data/game-van_glass_shards.json"))]
+                    [f(include_str!("../data/game-WatermelonParticlesMC.json")), f(include_str!("../data/game-PumpkinParticlesMC.json")), f(include_str!("../data/game-PineappleParticlesMC.json")), f(include_str!("../data/game-BoomboxShardsMC.json")), f(include_str!("../data/game-TVShardsMC.json")), f(include_str!("../data/game-GlassShardsMC.json")), f(include_str!("../data/game-ToiletParticlesMC.json")), f(include_str!("../data/game-WoodChipsMC.json")), f(include_str!("../data/game-Blood.json")), f(include_str!("../data/game-WaterMC.json")), f(include_str!("../data/game-van_glass_shards.json")), f(include_str!("../data/game-metal_pieces_MC.json"))]
                 });
-                let Some(children) = frames[usize::from(ty) % 11].get(p.frame) else { continue };
+                let Some(children) = frames[usize::from(ty) % 12].get(p.frame) else { continue };
                 let mut ext = (0.0, 0.0);
                 for c in children {
                     self.extent(c, local(0.0, 0.0, 0.0, 1.0, 1.0), &mut ext);
