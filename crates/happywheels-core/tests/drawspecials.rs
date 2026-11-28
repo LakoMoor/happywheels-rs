@@ -34,9 +34,8 @@ fn drawn(assets: &std::path::Path, xml: &str, steps: usize) -> Vec<Drawn> {
     list.into_iter().filter(|d| !d.0.starts_with("line ")).map(|(n, q)| (n, q.map(|p| [p[0] + f64::from(camera[0]) - 450.0, p[1] + f64::from(camera[1]) - 250.0]))).collect()
 }
 
-/// Still different: the finish line's posts are drawn once, not twice (9); the homing mine's jets and light are not animated (25); chain links are layered
-/// otherwise (30).
-const KNOWN: [usize; 3] = [9, 25, 30];
+/// Still different: the finish line's posts are drawn once, not twice (9); the homing mine's jets and light are not animated (25).
+const KNOWN: [usize; 2] = [9, 25];
 
 #[test]
 fn specials_are_drawn_like_the_original() {

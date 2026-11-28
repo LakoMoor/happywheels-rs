@@ -1110,7 +1110,17 @@ impl Sprites {
             if world.body_center_px(b).is_none() {
                 continue;
             }
-            for k in &clips[usize::from(harpoon)] {
+            // an arrow that has been in flesh shows one of the bloody frames of its clip
+            static BLOODY: std::sync::OnceLock<Vec<Vec<Node>>> = std::sync::OnceLock::new();
+            let bloody = BLOODY.get_or_init(|| {
+                #[derive(Deserialize)]
+                struct Frames {
+                    frames: Vec<Vec<Node>>,
+                }
+                serde_json::from_str::<Frames>(include_str!("../data/game-ArrowMC.frames.json")).map(|f| f.frames).unwrap_or_default()
+            });
+            let frame = world.harpoon_blood(b).last().filter(|_| !harpoon).and_then(|l| bloody.get(l.0 as usize + 1));
+            for k in frame.unwrap_or(&clips[usize::from(harpoon)]) {
                 self.draw_node(img, k, mul(cam, body_matrix(world, b)));
             }
             if harpoon {
@@ -1391,12 +1401,31 @@ impl Sprites {
                 });
                 if sp.kind == 30 {
                     let s = 1.0 + (f64::from(sp.num("linkScale").unwrap_or(1.0)) - 1.0) / 9.0 * 2.0;
-                    for (k, &b) in world.special_parts.get(i).into_iter().flatten().enumerate() {
+                    // the original puts every even link just under the one before it and every odd one just over it
+                    let links = world.special_parts.get(i).map_or(&[][..], Vec::as_slice);
+                    let mut order: Vec<usize> = Vec::with_capacity(links.len());
+                    let mut previous = 0;
+                    for k in 0..links.len() {
+                        previous = (previous + k % 2).min(order.len());
+                        order.insert(previous, k);
+                    }
+                    for (k, b) in order.into_iter().map(|k| (k, links[k])) {
                         if world.body_center_px(b).is_none() {
                             continue;
                         }
-                        let m = mul(cam, mul(body_matrix(world, b), local(0.0, 0.0, 0.0, s, s)));
-                        for n in &clips[k % 2] {
+                        let (frame, mirrored) = world.chain_link_look(b);
+                        let m = mul(cam, mul(body_matrix(world, b), local(0.0, 0.0, 0.0, s, if mirrored { -s } else { s })));
+                        static BROKEN: std::sync::OnceLock<[Vec<Vec<Node>>; 2]> = std::sync::OnceLock::new();
+                        let broken = BROKEN.get_or_init(|| {
+                            #[derive(Deserialize)]
+                            struct Frames {
+                                frames: Vec<Vec<Node>>,
+                            }
+                            let f = |s: &str| serde_json::from_str::<Frames>(s).map(|f| f.frames).unwrap_or_default();
+                            [f(include_str!("../data/game-link0MC.frames.json")), f(include_str!("../data/game-link1MC.frames.json"))]
+                        });
+                        let nodes = broken[k % 2].get(frame).filter(|_| frame > 0).unwrap_or(&clips[k % 2]);
+                        for n in nodes {
                             self.draw_node(img, n, m);
                         }
                     }
@@ -1700,13 +1729,23 @@ impl Sprites {
             let f = |s: &str| serde_json::from_str::<File>(s).map(|f| f.k).unwrap_or_default();
             [f(include_str!("../data/game-VanBodyMC.json")), f(include_str!("../data/game-VanTireMC.json"))]
         });
+        #[derive(Deserialize)]
+        struct Frames {
+            frames: Vec<Vec<Node>>,
+        }
+        static BODY: OnceLock<Vec<Vec<Node>>> = OnceLock::new();
+        let frames = BODY.get_or_init(|| serde_json::from_str::<Frames>(include_str!("../data/game-VanBodyMC.frames.json")).map(|f| f.frames).unwrap_or_default());
         let draw = |s: &Self, img: &mut RgbaImage, clip: &[Node], m: M| {
             for n in clip {
                 s.draw_node(img, n, m);
             }
         };
         if parts.len() == 3 && parts.iter().all(|&b| world.body_center_px(b).is_some()) {
-            for (&b, clip) in parts[1..].iter().zip([&clips[1], &clips[1]]).chain([(&parts[0], &clips[0])]) {
+            let body_clip: &[Node] = match frames.get(2) {
+                Some(smashed) if world.van_smashed(parts[0]) => smashed,
+                _ => &clips[0],
+            };
+            for (&b, clip) in parts[1..].iter().zip([&clips[1][..], &clips[1][..]]).chain([(&parts[0], body_clip)]) {
                 draw(self, img, clip, mul(cam, body_matrix(world, b)));
             }
         } else {
@@ -1775,6 +1814,37 @@ impl Sprites {
                 }
             }
             return;
+        }
+        if let (1, Some(b)) = (sp.kind, body) {
+            if let Some((stage, pieces)) = world.broken_table(b) {
+                static PIECES: OnceLock<[Vec<Node>; 3]> = OnceLock::new();
+                let parts = PIECES.get_or_init(|| {
+                    let f = |s: &str| serde_json::from_str::<File>(s).map(|f| f.k).unwrap_or_default();
+                    [f(include_str!("../data/game-table_leg.json")), f(include_str!("../data/game-table_top_broken_1.json")), f(include_str!("../data/game-table_top_broken_2.json"))]
+                });
+                let piece = |s: &Self, img: &mut RgbaImage, kind: u8| {
+                    let Some(&(p, _)) = pieces.iter().find(|p| p.1 == kind) else { return };
+                    if world.body_center_px(p).is_some() {
+                        for n in &parts[usize::from(kind.saturating_sub(1))] {
+                            s.draw_node(img, n, mul(cam, body_matrix(world, p)));
+                        }
+                    }
+                };
+                piece(self, img, 1);
+                piece(self, img, 0);
+                if stage == 1 {
+                    // what is left of `inner`: everything but the legs, back at the centre of mass
+                    for n in clip {
+                        for k in n.k.iter().filter(|k| !k.n.starts_with("leg")) {
+                            self.draw_node(img, k, mul(cam, mul(pose, n.matrix_with(n.x, 0.0, n.r, n.sx, n.sy))));
+                        }
+                    }
+                } else {
+                    piece(self, img, 2);
+                    piece(self, img, 3);
+                }
+                return;
+            }
         }
         if sp.kind == 1 && live.is_some() {
             // a table with a body lowers `inner` to the centre of mass
@@ -2005,12 +2075,12 @@ impl Sprites {
                 struct Frames {
                     frames: Vec<Vec<Node>>,
                 }
-                static FRAMES: std::sync::OnceLock<[Vec<Vec<Node>>; 10]> = std::sync::OnceLock::new();
+                static FRAMES: std::sync::OnceLock<[Vec<Vec<Node>>; 11]> = std::sync::OnceLock::new();
                 let frames = FRAMES.get_or_init(|| {
                     let f = |s: &str| serde_json::from_str::<Frames>(s).map(|f| f.frames).unwrap_or_default();
-                    [f(include_str!("../data/game-WatermelonParticlesMC.json")), f(include_str!("../data/game-PumpkinParticlesMC.json")), f(include_str!("../data/game-PineappleParticlesMC.json")), f(include_str!("../data/game-BoomboxShardsMC.json")), f(include_str!("../data/game-TVShardsMC.json")), f(include_str!("../data/game-GlassShardsMC.json")), f(include_str!("../data/game-ToiletParticlesMC.json")), f(include_str!("../data/game-WoodChipsMC.json")), f(include_str!("../data/game-Blood.json")), f(include_str!("../data/game-WaterMC.json"))]
+                    [f(include_str!("../data/game-WatermelonParticlesMC.json")), f(include_str!("../data/game-PumpkinParticlesMC.json")), f(include_str!("../data/game-PineappleParticlesMC.json")), f(include_str!("../data/game-BoomboxShardsMC.json")), f(include_str!("../data/game-TVShardsMC.json")), f(include_str!("../data/game-GlassShardsMC.json")), f(include_str!("../data/game-ToiletParticlesMC.json")), f(include_str!("../data/game-WoodChipsMC.json")), f(include_str!("../data/game-Blood.json")), f(include_str!("../data/game-WaterMC.json")), f(include_str!("../data/game-van_glass_shards.json"))]
                 });
-                let Some(children) = frames[usize::from(ty) % 10].get(p.frame) else { continue };
+                let Some(children) = frames[usize::from(ty) % 11].get(p.frame) else { continue };
                 let mut ext = (0.0, 0.0);
                 for c in children {
                     self.extent(c, local(0.0, 0.0, 0.0, 1.0, 1.0), &mut ext);

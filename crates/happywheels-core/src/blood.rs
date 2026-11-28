@@ -21,6 +21,8 @@ fn max_particles() -> usize {
 }
 /// `ShardKind::Food` index of the 13-frame `Blood` clip (bloodSetting 1 particles).
 pub const BLOOD: u8 = 8;
+/// The `Food` index of the smashed van's glass (`van_glass_shards`).
+pub const VAN_GLASS: u8 = 10;
 /// `ShardKind::Food` index of the 13-frame `WaterMC` clip (toilet water sprays).
 pub const WATER: u8 = 9;
 
@@ -122,7 +124,7 @@ impl ShardKind {
             Self::Metal => ("metalShards", None, 12),
             Self::Cola => ("cola", None, 13),
             Self::Snow => ("snowflakes", None, 7),
-            Self::Food(ty) => ("", None, [15, 9, 8, 6, 9, 11, 5, 13, 13, 13][ty as usize % 10]),
+            Self::Food(ty) => ("", None, [15, 9, 8, 6, 9, 11, 5, 13, 13, 13, 13][ty as usize % 11]),
         }
     }
 }
@@ -291,6 +293,22 @@ impl Blood {
             let k = 62.5 / 30.0;
             self.sprites.push(SpriteParticle { kind, frame: frame.min(frames - 1), pos: [x, y], vel: [vx * k, vy * k] });
         }
+    }
+
+    /// `createBurst`: `total` sprite particles within `range` px of a body's centre, moving at the body's `vel` (m/s) plus the spread of a point burst.
+    pub fn body_burst(&mut self, kind: ShardKind, at: [f64; 2], vel: Vec2, range: f64, speed: f64, total: u32) {
+        for _ in 0..total {
+            let vx = vel.x + self.rand() * (self.rand() * speed - speed / 2.0);
+            let vy = vel.y + self.rand() * (self.rand() * speed - speed * 0.75);
+            let x = at[0] + self.rand() * range - range / 2.0;
+            let y = at[1] + self.rand() * range - range / 2.0;
+            self.spawn_sprite(kind, [x, y], [vx, vy]);
+        }
+    }
+
+    /// A whole number below `n`.
+    pub fn pick(&mut self, n: usize) -> usize {
+        ((self.rand() * n as f64).floor() as usize).min(n - 1)
     }
 
     /// One particle of a sprite flow (`Mk.createParticle`): velocity in m/s, centred on `at` (px).

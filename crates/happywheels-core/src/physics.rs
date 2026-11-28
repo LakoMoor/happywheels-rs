@@ -200,6 +200,8 @@ struct Boost {
     sin: f64,
     cos: f64,
     bodies: Vec<BodyId>,
+    /// The body its `BoostLoop` follows.
+    sound: Option<BodyId>,
 }
 
 /// Cannon special state machine (`Cannon.actions`): WAITING → (a body enters the sensor) LOADING → AIMING → FIRING → RETURNING → WAITING.
@@ -323,6 +325,39 @@ struct BreakChair {
     done: bool,
     /// (body, 0 leg / 1 back / 2 seat, mirror sign)
     pieces: Vec<(BodyId, u8, f64)>,
+}
+
+/// Table special: a Result above `limit` takes the legs off, the next one breaks the top in two.
+struct BreakTable {
+    body: BodyId,
+    /// top, left leg, right leg
+    shapes: [ShapeId; 3],
+    limit: f64,
+    /// 0 whole, 1 without legs, 2 gone
+    stage: u8,
+    hit: bool,
+    /// (body, 0 left leg / 1 right leg / 2 left half / 3 right half)
+    pieces: Vec<(BodyId, u8)>,
+}
+
+/// Van special: a Result above 150 on its box smashes it (smaller box, the wheels come off).
+struct BreakVan {
+    body: BodyId,
+    shape: ShapeId,
+    tires: [BodyId; 2],
+    hit: bool,
+    smashed: bool,
+}
+
+/// Interactive chain: every 11th step the first joint pulled harder than `limit` (squared force) breaks.
+struct BreakChain {
+    links: Vec<BodyId>,
+    joints: Vec<usize>,
+    broken: Vec<bool>,
+    limit: f64,
+    counter: i32,
+    /// per link: (broken frame of its clip, mirrored)
+    looks: Vec<(usize, bool)>,
 }
 
 /// Glass pane (`Glass`): a Result above `round(mass·shatterStrength)` shatters it into triangles fanned from the impact point.
@@ -527,7 +562,9 @@ struct Arrow {
     flesh_sounds: u32,
     /// BladeWeapon: the body impaled last (it bleeds once) and the frame at which its flesh sound ends.
     previous: Option<BodyId>,
+    /// frames at which the flesh and the solid sound end
     squelch_until: u32,
+    clink_until: u32,
 }
 
 /// ArrowGun special, static-base variant (`immovable2` true): turret aims at the closest material-2 body in range and fires 10 arrows.
@@ -635,6 +672,9 @@ pub struct World {
     food_chunks: Vec<(BodyId, u8, u8)>,
     boomboxes: Vec<Boombox>,
     wreckers: Vec<Wrecker>,
+    tables: Vec<BreakTable>,
+    vans: Vec<BreakVan>,
+    chains: Vec<BreakChain>,
     spring_boxes: Vec<SpringBox>,
     paddles: Vec<Paddle>,
     plain_mines: Vec<PlainMine>,
@@ -762,7 +802,7 @@ impl World {
             foods: Vec::new(),
             food_chunks: Vec::new(),
             boomboxes: Vec::new(),
-            wreckers: Vec::new(), spring_boxes: Vec::new(),
+            wreckers: Vec::new(), tables: Vec::new(), vans: Vec::new(), chains: Vec::new(), spring_boxes: Vec::new(),
             paddles: Vec::new(),
             plain_mines: Vec::new(),
             chairs: Vec::new(),
@@ -1106,6 +1146,7 @@ impl World {
         let mut point = [0.0f64, 0.0];
         let mut points = vec![point];
         let mut links: Vec<BodyId> = Vec::new();
+        let mut joints = Vec::new();
         let mut first_mass = 0.0;
         for i in 0..count {
             let h = 90.0 / deg + ((i + 1) as f64 * f - 0.5 * f);
@@ -1136,9 +1177,14 @@ impl World {
             let s = self.b.body(reference).world_point(Vec2::new(points[t][0] / PS, points[t][1] / PS));
             let mut jd = RevoluteJointDef::initialize(self.b.body(a), a, self.b.body(b), b, s);
             jd.reference_angle = 0.0;
-            self.b.create_revolute_joint(&jd);
+            joints.push(self.b.create_revolute_joint(&jd));
         }
         self.b.destroy_body(reference);
+        if !links.is_empty() {
+            let m = first_mass / 0.587_519_999_999_999_9;
+            let counter = (x + y + 0.5).floor() as i32 % 10;
+            self.chains.push(BreakChain { links: links.clone(), broken: vec![false; joints.len()], joints, limit: 1e5 * m * m, counter, looks: vec![(0, false); links.len()] });
+        }
         let first = links.first().copied();
         self.special_parts.push(links);
         first
@@ -1186,7 +1232,7 @@ impl World {
                 d.filter = Filter { category_bits: 8, mask_bits: 0xFFFF, group_index: st.filter.group_index };
                 let id = self.b.create_shape(self.level_body, &d);
                 if let (true, Some(bs)) = (d.is_sensor, sb.boost) {
-                    self.boosts.push(Boost { sensor: id, power: bs.power, sin: box2d::fdlibm::sin(bs.angle), cos: box2d::fdlibm::cos(bs.angle), bodies: Vec::new() });
+                    self.boosts.push(Boost { sensor: id, power: bs.power, sin: box2d::fdlibm::sin(bs.angle), cos: box2d::fdlibm::cos(bs.angle), bodies: Vec::new(), sound: None });
                 }
                 if let (true, Some(f)) = (d.is_sensor, sb.fan) {
                     self.fans.push(Fan { sensor: id, center: Vec2::new(f.center[0], f.center[1]), sin: box2d::fdlibm::sin(f.angle), cos: box2d::fdlibm::cos(f.angle), bodies: Vec::new() });
@@ -1222,8 +1268,15 @@ impl World {
             18 => Some(("GlassImpact", 2, 4.0, 0)),
             _ => None,
         };
+        let hit = hit.or(match sp.kind {
+            0 => Some(("VanHit", 1, 4.0, 0)),
+            6 => Some(("SpikeBaseHit", 2, 4.0, 0)),
+            7 => Some(("BallHit", 1, 4.0, 0)),
+            _ => None,
+        });
         if let Some((name, variants, threshold, lock_frames)) = hit {
-            let first = self.b.body(body).shapes[0];
+            // the wrecking ball sounds from its ball (the second shape), the others from their first
+            let first = self.b.body(body).shapes[usize::from(sp.kind == 7)];
             self.hit_sounds.push(HitSound { body, shapes: vec![first], name, variants, threshold, lock_frames, free_at: 0 });
         }
         if sp.kind == 4 {
@@ -1355,6 +1408,23 @@ impl World {
             self.b.c.report_results = true;
             let trigger = self.b.body(body).shapes[1];
             self.plain_mines.push(PlainMine { body, trigger, done: false });
+        }
+        if sp.kind == 1 && sp.flag("interactive") != Some(false) {
+            self.b.c.report_results = true;
+            let s = &self.b.body(body).shapes;
+            let limit = if self.level_version < 1.67 { 50.0 } else { 15.0 };
+            self.tables.push(BreakTable { body, shapes: [s[0], s[1], s[2]], limit, stage: 0, hit: false, pieces: Vec::new() });
+        }
+        if sp.kind == 0 && sp.flag("interactive") != Some(false) {
+            if let Some(&[_, left, right]) = self.special_parts.last().map(Vec::as_slice) {
+                self.b.c.report_results = true;
+                let shape = self.b.body(body).shapes[0];
+                self.vans.push(BreakVan { body, shape, tires: [left, right], hit: false, smashed: false });
+                for tire in [left, right] {
+                    let first = self.b.body(tire).shapes[0];
+                    self.hit_sounds.push(HitSound { body: tire, shapes: vec![first], name: "CarTire1", variants: 1, threshold: 4.0, lock_frames: 0, free_at: 0 });
+                }
+            }
         }
         if sp.kind == 7 {
             if let Some(joint) = (0..self.b.c.joints.len()).find(|&j| self.b.c.joints[j].body2 == body && matches!(self.b.c.joints[j].kind, box2d::joints::JointKind::Revolute(_))) {
@@ -2965,6 +3035,9 @@ impl World {
         self.blade_shard_events(&events);
         self.plain_mine_events(&events);
         self.chair_events(&events);
+        self.break_events(&events);
+        // (collision sounds are heard during the step, before anything acts on it)
+        self.hit_sound_events(&events);
         self.glass_events(&events);
         self.toilet_events(&events);
         self.log_events(&events);
@@ -2980,11 +3053,13 @@ impl World {
         self.run_spring_boxes();
         self.run_paddles();
         self.run_wreckers();
+        self.run_tables();
+        self.run_vans();
+        self.run_chains();
         if !self.external_particles {
             self.step_blood(1.0);
         }
         self.can_events(&events);
-        self.hit_sound_events(&events);
         self.passenger_contacts(&events);
         if let Some(mut doll) = self.character.take() {
             if self.joints_break {
@@ -3059,6 +3134,9 @@ impl World {
         for bi in 0..self.boosts.len() {
             let bodies = std::mem::take(&mut self.boosts[bi].bodies);
             let (power, sin, cos) = (self.boosts[bi].power, self.boosts[bi].sin, self.boosts[bi].cos);
+            // the loop stays with its body while that is on the pad, else moves to the first one there
+            let on = self.boosts[bi].sound.filter(|b| bodies.contains(b)).or(bodies.first().copied());
+            self.boosts[bi].sound = on;
             for body in bodies {
                 let b = self.b.body_mut(body);
                 if b.inv_mass == 0.0 {
@@ -3110,7 +3188,7 @@ impl World {
 
     /// NPCharacter (bodies/joints/limits/break limits taken from the original class run in the oracle on a stand-in session, `analysis/npc-dump.js`;
     /// the 12 `charIndex` guides, mirrored for `reverse`). Rotated/translated as a rigid group. Joint breaking follows `checkJoints` (reaction² > limit or anchor gap > .5 m
-    /// destroys the joint and frees the limb's filter). Pose angles and the old-level `holdPose` motors are ported (`analysis/npc-pose.js`). NOT ported here: impulse/wake/hold-pose triggers, sounds, sprites.
+    /// destroys the joint and frees the limb's filter). Pose angles and `holdPose` (motors before 1.75, locked limits after) are ported (`analysis/npc-pose.js`). NOT ported here: impulse/wake/hold-pose triggers, sounds, sprites.
     fn npc(&mut self, sp: &crate::level::Special) -> Option<BodyId> {
         if sp.flag("interactive") == Some(false) {
             return None;
@@ -3231,6 +3309,9 @@ impl World {
             let id = self.b.create_revolute_joint(&d);
             joints.push((id, child, f(&g["limits"][limit]), false));
         }
+        if sp.flag("holdPose").unwrap_or(false) && self.level_version >= 1.75 {
+            self.lock_pose(joints.iter().map(|j| j.0));
+        }
         self.b.c.report_results = true;
         let chest = bodies[0];
         let lim = |k: &str| f(&g["limits"][k]);
@@ -3238,6 +3319,18 @@ impl World {
         let chunk = [f(&g["chunk"][0]), f(&g["chunk"][1]), f(&g["chunk"][2])];
         self.npcs.push(Npc { bodies, joints, smash_shapes, smash_limits: [lim("head"), lim("chest"), lim("pelvis")], chunk, smashed: [false; 3], reversed: reverse, destroy_on_death: sp.flag("destroyJointsUponDeath").unwrap_or(false), tag: npc_tag(sp.num("charIndex").unwrap_or(1.0) as i32), voices: [None; 6], voice_until: 0, voice_prio: -1, dead: false, pieces: Vec::new() });
         Some(chest)
+    }
+
+    /// `NPCharacter.lockPose`: every joint is limited to the angle it is at.
+    fn lock_pose(&mut self, joints: impl Iterator<Item = usize>) {
+        for id in joints {
+            if let Some(angle) = self.b.revolute_angle(id) {
+                if let box2d::joints::JointKind::Revolute(r) = &mut self.b.joint_mut(id).kind {
+                    r.lower_angle = angle;
+                    r.upper_angle = angle;
+                }
+            }
+        }
     }
 
     /// `NPCharacter.triggerSingleActivation`: action list wake from sleep / apply impulse (x, y, spin) / hold pose / release pose (index or name in the XML).
@@ -3277,16 +3370,7 @@ impl World {
                     self.b.body_mut(chest).angular_velocity += 10.0 * param(2);
                 }
             }
-            2 => {
-                for (id, _, _, _) in &joints {
-                    if let Some(angle) = self.b.revolute_angle(*id) {
-                        if let box2d::joints::JointKind::Revolute(r) = &mut self.b.joint_mut(*id).kind {
-                            r.lower_angle = angle;
-                            r.upper_angle = angle;
-                        }
-                    }
-                }
-            }
+            2 => self.lock_pose(joints.iter().map(|j| j.0)),
             _ => {
                 let d = if self.npcs[ni].reversed { 1.0 } else { 0.0 };
                 // (lower, upper) in degrees per joint, mirrored for `reverse`
@@ -3328,6 +3412,17 @@ impl World {
             let at = [(c.x * PS) as f32, (c.y * PS) as f32];
             if mine.hovering { self.loops.push(("MineHover".into(), at, 1.0, mine.body)); }
             if mine.counting_down { self.loops.push(("HomingMineBeep".into(), at, 1.0, mine.body)); }
+        }
+        // fans hum where their wind is (a key of their own: they have no body), boost pads at the body they push
+        for f in &self.fans {
+            let at = [(f.center.x * PS) as f32, (f.center.y * PS) as f32];
+            self.loops.push(("SwooshFan".into(), at, 1.0, usize::MAX - f.sensor));
+        }
+        for f in &self.boosts {
+            if let Some(body) = f.sound.filter(|&b| self.b.c.bodies[b].alive) {
+                let c = self.b.body(body).sweep.c;
+                self.loops.push(("BoostLoop".into(), [(c.x * PS) as f32, (c.y * PS) as f32], 1.0, body));
+            }
         }
         use crate::vehicle::Vehicle;
         let wheels: Option<(Vec<BodyId>, BodyId, [f64; 3])> = match self.bike.as_ref() {
@@ -3962,6 +4057,7 @@ impl World {
     /// Whether `h` is a broken-special piece (chair, glass, toilet, log, boombox/TV, food chunk) that the sprite renderer draws with its own art.
     pub fn is_piece_with_art(&self, h: BodyId) -> bool {
         self.chair_pieces().any(|p| p.0 == h)
+            || self.tables.iter().any(|t| t.pieces.iter().any(|p| p.0 == h))
             || self.glass_pieces().any(|p| p.0 == h)
             || self.toilet_pieces().any(|p| p.0 == h)
             || self.log_halves().any(|p| p.0 == h)
@@ -4220,7 +4316,7 @@ impl World {
         hs.filter = Filter { category_bits: 8, mask_bits: 0xFFFF, group_index: 0 };
         self.b.create_shape(body, &hs);
         self.b.set_mass_from_shapes(body);
-        self.arrows.push(Arrow { body, sensor, solid, pinned: Vec::new(), queue_add: Vec::new(), queue_remove: Vec::new(), armed: false, done: false, harpoon: true, blade: Some(r + blade_rot), blood: Vec::new(), reverse: m < 0.0, flesh_sounds: 0, previous: None, squelch_until: 0 });
+        self.arrows.push(Arrow { body, sensor, solid, pinned: Vec::new(), queue_add: Vec::new(), queue_remove: Vec::new(), armed: false, done: false, harpoon: true, blade: Some(r + blade_rot), blood: Vec::new(), reverse: m < 0.0, flesh_sounds: 0, previous: None, squelch_until: 0, clink_until: 0 });
         Some(body)
     }
 
@@ -4239,7 +4335,7 @@ impl World {
         self.b.set_mass_from_shapes(body);
         self.b.body_mut(body).linear_velocity = vel;
         self.b.c.report_results = true;
-        self.arrows.push(Arrow { body, sensor, solid, pinned: Vec::new(), queue_add: Vec::new(), queue_remove: Vec::new(), armed: false, done: false, harpoon, blade: None, blood: Vec::new(), reverse: false, flesh_sounds: 0, previous: None, squelch_until: 0 });
+        self.arrows.push(Arrow { body, sensor, solid, pinned: Vec::new(), queue_add: Vec::new(), queue_remove: Vec::new(), armed: false, done: false, harpoon, blade: None, blood: Vec::new(), reverse: false, flesh_sounds: 0, previous: None, squelch_until: 0, clink_until: 0 });
     }
 
     /// `ArrowGun.actions` + `fireArrow` (before the world step) and the arrows' own `actions` (pin / unpin queued bodies).
@@ -4391,6 +4487,10 @@ impl World {
                         self.play("HarpoonSolid", 2, tip);
                     }
                 }
+                if !self.arrows[ai].harpoon && self.arrows[ai].blade.is_none() && self.arrows[ai].previous != Some(other) {
+                    self.arrows[ai].previous = Some(other);
+                    self.arrow_hit(ai, body, other);
+                }
                 if self.arrows[ai].blade.is_some() && self.arrows[ai].previous != Some(other) {
                     self.arrows[ai].previous = Some(other);
                     self.blade_cut(ai, body, other);
@@ -4404,6 +4504,30 @@ impl World {
                         self.b.destroy_joint(j);
                     }
                 }
+            }
+        }
+    }
+
+    /// `Arrow.createPrisJoint` on a body it was not in last: flesh is impaled at the tip, bleeds and bloodies the arrow; a hard hit on
+    /// anything else clinks. Each sound starts again only once it has ended.
+    fn arrow_hit(&mut self, ai: usize, arrow: BodyId, other: BodyId) {
+        let tip = self.b.body(arrow).world_point(Vec2::new(13.25 / PS, 0.0));
+        if self.b.shape_material(self.b.body(other).shapes[0]) & 6 != 0 {
+            self.shape_impale(other, true, Some(tip), 0.01);
+            self.blood.burst([tip.x * PS, tip.y * PS], Vec2::default(), 5.0, 15.0, 20);
+            if !self.blood.off {
+                let frame = (self.blood.rand() * 5.0).floor().min(4.0);
+                self.arrows[ai].blood.push((frame, 0.0, 0.0, 1.0));
+            }
+            if self.frame >= self.arrows[ai].squelch_until {
+                self.arrows[ai].squelch_until = self.frame + sound_frames("ArrowFlesh1");
+                self.play("ArrowFlesh", 3, tip);
+            }
+        } else {
+            let v = self.b.body(arrow).linear_velocity;
+            if self.frame >= self.arrows[ai].clink_until && v.x * v.x + v.y * v.y > 9.0 {
+                self.arrows[ai].clink_until = self.frame + sound_frames("ArrowSolid1");
+                self.play("ArrowSolid", 2, tip);
             }
         }
     }
@@ -5181,6 +5305,160 @@ impl World {
             self.b.destroy_body(body);
             self.play("TableBreak1", 1, c);
         }
+    }
+
+    /// `checkContact` of the table and the van.
+    fn break_events(&mut self, events: &[box2d::world::ContactEvent]) {
+        let hit = |shapes: &[ShapeId], limit: f64| events.iter().any(|e| e.kind == ContactEventKind::Result && (shapes.contains(&e.shape1) || shapes.contains(&e.shape2)) && e.normal_impulse > limit);
+        for t in &mut self.tables {
+            // once the legs are off only the top is listened to
+            let watched = if t.stage == 0 { &t.shapes[..] } else { &t.shapes[..1] };
+            if t.stage < 2 && hit(watched, t.limit) {
+                t.hit = true;
+            }
+        }
+        for v in &mut self.vans {
+            if !v.smashed && hit(&[v.shape], 150.0) {
+                v.hit = true;
+            }
+        }
+    }
+
+    /// A debris body of `half` size (px) at `offset` (px) from `at`, moving as `source`.
+    fn debris(&mut self, at: Vec2, angle: f64, half: [f64; 2], offset: [f64; 2], velocity: (Vec2, f64)) -> BodyId {
+        let body = self.b.create_body(&BodyDef { position: at, angle, ..Default::default() });
+        let mut sd = ShapeDef::oriented_box(half[0] / PS, half[1] / PS, Vec2::new(offset[0] / PS, offset[1] / PS), 0.0);
+        sd.density = 5.0;
+        sd.friction = 0.1;
+        sd.restitution = 0.2;
+        sd.filter = Filter { category_bits: 8, mask_bits: 0xFFFF, group_index: 0 };
+        self.b.create_shape(body, &sd);
+        self.b.set_mass_from_shapes(body);
+        self.b.body_mut(body).linear_velocity = velocity.0;
+        self.b.body_mut(body).angular_velocity = velocity.1;
+        self.loose.push(body);
+        body
+    }
+
+    /// `Table.actions`.
+    fn run_tables(&mut self) {
+        for k in 0..self.tables.len() {
+            if !std::mem::take(&mut self.tables[k].hit) {
+                continue;
+            }
+            let (body, [_, left, right], stage) = (self.tables[k].body, self.tables[k].shapes, self.tables[k].stage);
+            if !self.b.c.bodies[body].alive {
+                continue;
+            }
+            if stage == 0 {
+                self.b.destroy_shape(left);
+                self.b.destroy_shape(right);
+                self.b.set_mass_from_shapes(body);
+            }
+            // (`GetWorldCenter` hands out the live vector there: the centre is the one of what is left)
+            let src = self.b.body(body);
+            let (c, angle, velocity) = (src.sweep.c, src.sweep.a, (src.linear_velocity, src.angular_velocity));
+            if stage == 0 {
+                for (kind, x) in [(0u8, -48.0), (1, 48.0)] {
+                    let piece = self.debris(c, angle, [3.0, 25.0], [x, 25.0], velocity);
+                    self.tables[k].pieces.push((piece, kind));
+                }
+                self.tables[k].stage = 1;
+                self.tables[k].limit = if self.level_version < 1.67 { 25.0 } else { 7.0 };
+                self.play("TableBreak2", 1, c);
+            } else {
+                self.b.destroy_body(body);
+                for (kind, x) in [(2u8, -39.0), (3, 39.0)] {
+                    let piece = self.debris(c, angle, [39.0, 3.0], [x, -3.0], velocity);
+                    self.tables[k].pieces.push((piece, kind));
+                }
+                self.tables[k].stage = 2;
+                self.play("TableBreak1", 1, c);
+            }
+        }
+    }
+
+    /// `Van.actions`.
+    fn run_vans(&mut self) {
+        for k in 0..self.vans.len() {
+            if !std::mem::take(&mut self.vans[k].hit) {
+                continue;
+            }
+            let BreakVan { body, shape, tires, .. } = self.vans[k];
+            if !self.b.c.bodies[body].alive {
+                continue;
+            }
+            self.vans[k].smashed = true;
+            // the impact sound was registered on the box that goes
+            self.hit_sounds.retain(|h| h.body != body);
+            self.b.destroy_shape(shape);
+            let mut sd = ShapeDef::boxed(66.0 / PS, 52.5 / PS);
+            sd.density = 10.0;
+            sd.friction = 0.3;
+            sd.restitution = 0.1;
+            sd.filter = Filter { category_bits: 8, mask_bits: 0xFFFF, group_index: 0 };
+            self.b.create_shape(body, &sd);
+            self.b.set_mass_from_shapes(body);
+            let joints: Vec<usize> = (0..self.b.c.joints.len()).filter(|&j| self.b.c.joints[j].body1 == body && tires.contains(&self.b.c.joints[j].body2)).collect();
+            for j in joints {
+                self.b.destroy_joint(j);
+            }
+            let src = self.b.body(body);
+            let (c, velocity) = (src.sweep.c, src.linear_velocity_from_local_point(src.sweep.local_center));
+            self.blood.body_burst(crate::blood::ShardKind::Food(crate::blood::VAN_GLASS), [c.x * PS, c.y * PS], velocity, 50.0, 30.0, 20);
+            self.play("VanSmash", 1, c);
+        }
+    }
+
+    /// `Chain.actions` and `breakJoint`.
+    fn run_chains(&mut self) {
+        for k in 0..self.chains.len() {
+            self.chains[k].counter += 1;
+            if self.chains[k].counter <= 10 {
+                continue;
+            }
+            self.chains[k].counter = 0;
+            for j in 0..self.chains[k].joints.len() {
+                let id = self.chains[k].joints[j];
+                if self.chains[k].broken[j] {
+                    continue;
+                }
+                let Some((force, gap)) = self.b.revolute_reaction(id) else { continue };
+                let torn = force * force > self.chains[k].limit;
+                if !torn && gap * gap <= 0.15 {
+                    continue;
+                }
+                let joint = &self.b.c.joints[id];
+                let box2d::joints::JointKind::Revolute(r) = &joint.kind else { continue };
+                let ends = [(j, r.local_anchor1), (j + 1, r.local_anchor2)];
+                for (link, anchor) in ends {
+                    let frame = 1 + self.blood.pick(3);
+                    let look = &mut self.chains[k].looks[link];
+                    *look = (frame, look.1 ^ (anchor.y > 0.0));
+                }
+                self.chains[k].broken[j] = true;
+                self.b.destroy_joint(id);
+                let at = self.b.body(self.chains[k].links[j]).sweep.c;
+                self.play("ChainBreak", 3, at);
+                if torn {
+                    break;
+                }
+            }
+        }
+    }
+
+    /// The table on `body`, if it has broken: its stage and the pieces `(body, 0 left leg / 1 right leg / 2 left half / 3 right half)`.
+    pub fn broken_table(&self, body: BodyId) -> Option<(u8, &[(BodyId, u8)])> {
+        self.tables.iter().find(|t| t.body == body && t.stage > 0).map(|t| (t.stage, t.pieces.as_slice()))
+    }
+
+    pub fn van_smashed(&self, body: BodyId) -> bool {
+        self.vans.iter().any(|v| v.body == body && v.smashed)
+    }
+
+    /// Clip frame (0 = whole) and mirroring of a chain link.
+    pub fn chain_link_look(&self, body: BodyId) -> (usize, bool) {
+        self.chains.iter().find_map(|c| c.links.iter().position(|&l| l == body).map(|i| c.looks[i])).unwrap_or_default()
     }
 
     /// `Glass.checkContact` / `shatter`: the contact point (in the pane's frame) is clamped to an edge when within 5 cm of it (that side then has no
@@ -6246,7 +6524,7 @@ mod tests {
     fn van_rests_on_its_tires() {
         // Tire bottoms are 48 + 22.5 = 70.5 px below the van origin → rests at 490 - 70.5 = 419.5.
         let level = crate::level::parse(&format!(
-            "<levelXML><info v='1.99'/><shapes>{FLOOR}</shapes><specials><sp t='0' p0='500' p1='200' p2='0' p3='f' p4='t'/></specials></levelXML>"
+            "<levelXML><info v='1.99'/><shapes>{FLOOR}</shapes><specials><sp t='0' p0='500' p1='400' p2='0' p3='f' p4='t'/></specials></levelXML>"
         )).unwrap();
         let mut w = World::from_level(&level);
         for _ in 0..150 {
