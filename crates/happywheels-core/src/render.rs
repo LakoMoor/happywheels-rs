@@ -239,7 +239,7 @@ fn draw_shape(img: &mut RgbaImage, s: &crate::level::Shape, (px, py): (f32, f32)
             [(0.0, -200.0), (50.0, 100.0), (-50.0, 100.0)].iter().map(|&(x, y)| rot(x * sx, y * sy)).collect()
         }
         ShapeKind::Art if !s.verts.is_empty() => {
-            let (sx, sy) = (s.num("shapeWidth").unwrap_or(100.0) / 100.0, s.num("shapeHeight").unwrap_or(100.0) / 100.0);
+            let [sx, sy] = s.vertex_scale();
             let path = art_path(&s.verts, &s.handles, s.complete_fill);
             let pts: Vec<(f32, f32)> = path.iter().map(|v| rot(v[0] * sx, v[1] * sy)).collect();
             // `ArtShape.getFlatSprite`: only a closed path (`completeFill`) is filled; an open one is a stroke, black when no outline colour is set.
@@ -248,7 +248,7 @@ fn draw_shape(img: &mut RgbaImage, s: &crate::level::Shape, (px, py): (f32, f32)
             return;
         }
         ShapeKind::Polygon | ShapeKind::Art => {
-            let (sx, sy) = (s.num("shapeWidth").unwrap_or(100.0) / 100.0, s.num("shapeHeight").unwrap_or(100.0) / 100.0);
+            let [sx, sy] = s.vertex_scale();
             s.verts.iter().map(|v| rot(v[0] * sx, v[1] * sy)).collect()
         }
     };

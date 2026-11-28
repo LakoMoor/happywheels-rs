@@ -89,6 +89,18 @@ impl Shape {
     pub fn num(&self, name: &str) -> Option<f32> {
         self.props.get(self.index_of(name)?)?.parse().ok()
     }
+
+    /// Factor on a polygon's or art shape's vertices: `shapeWidth` / `shapeHeight` are pixel sizes of the box around the
+    /// vertices *and the origin* (the original's `setDefaultDimensions`), the factor limited to 0.1..10 like its setters.
+    pub fn vertex_scale(&self) -> [f32; 2] {
+        [("shapeWidth", 0), ("shapeHeight", 1)].map(|(name, axis)| {
+            let (lo, hi) = self.verts.iter().fold((0.0f32, 0.0f32), |(lo, hi), v| (lo.min(v[axis]), hi.max(v[axis])));
+            match self.num(name) {
+                Some(size) if size != 0.0 && hi > lo => (size / (hi - lo)).clamp(0.1, 10.0),
+                _ => 1.0,
+            }
+        })
+    }
     pub fn flag(&self, name: &str) -> Option<bool> {
         match self.props.get(self.index_of(name)?)?.as_str() {
             "t" => Some(true),

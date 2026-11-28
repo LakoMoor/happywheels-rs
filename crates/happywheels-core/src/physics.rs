@@ -67,7 +67,7 @@ fn geometry_of(s: &Shape, center: [f64; 2], angle: f64) -> Option<Geometry> {
             place(vec![Vec2::new(0.0, h * -2.0), Vec2::new(w, h), Vec2::new(-w, h)])
         }
         ShapeKind::Polygon if s.verts.len() >= 3 => {
-            let (sx, sy) = (num(s, "shapeWidth").unwrap_or(100.0) / 100.0, num(s, "shapeHeight").unwrap_or(100.0) / 100.0);
+            let [sx, sy] = s.vertex_scale().map(f64::from);
             place(s.verts.iter().map(|v| Vec2::new(sx * f64::from(v[0]) / PS, sy * f64::from(v[1]) / PS)).collect())
         }
         _ => None,
@@ -6021,10 +6021,24 @@ mod tests {
         assert!(!w.events.iter().any(|e| e.trigger == 1));
     }
 
+    /// Vertices of the level body as the running original builds them for this polygon.
+    #[test]
+    fn polygon_sizes_scale_the_box_around_vertices_and_origin() {
+        let level = crate::level::parse("<levelXML><info v='1.99'/><shapes>\
+            <sh t='3' p0='500' p1='500' p2='240' p3='70' p4='0' p5='t' p6='f' p7='1' p8='0' p9='-1' p10='100' p11='1'><v f='t' id='0' n='3' v0='20_20' v1='120_20' v2='120_70'/></sh>\
+            </shapes></levelXML>").unwrap();
+        let w = World::from_level(&level);
+        let found = w.body_draw_shapes(w.level_body()).into_iter().any(|s| match s {
+            DrawShape::Poly(p) => [[540.0f32, 520.0], [740.0, 520.0], [740.0, 570.0]].iter().all(|a| p.iter().any(|b| (a[0] - b[0]).abs() < 0.01 && (a[1] - b[1]).abs() < 0.01)),
+            DrawShape::Circle { .. } => false,
+        });
+        assert!(found);
+    }
+
     #[test]
     fn degenerate_polygons_are_skipped_not_fatal() {
         let level = crate::level::parse("<levelXML><info v='1'/><shapes>\
-            <sh t='3' p0='0' p1='0' p2='0' p3='0'><v f='t' id='1' n='3' v0='0_0' v1='10_0' v2='0_10'/></sh>\
+            <sh t='3' p0='0' p1='0' p2='100' p3='100'><v f='t' id='1' n='3' v0='0_0' v1='0_10' v2='0_20'/></sh>\
             <sh t='3' p0='0' p1='0' p2='100' p3='100'><v f='t' id='2' n='3' v0='0_0' v1='10_0' v2='20_0'/></sh>\
             </shapes></levelXML>").unwrap();
         let w = World::from_level(&level); // must not panic
