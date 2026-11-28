@@ -936,7 +936,7 @@ impl World {
 
     pub fn destroy_joint(&mut self, id: usize) {
         let (b1, b2, collide) = (self.c.joints[id].body1, self.c.joints[id].body2, self.c.joints[id].collide_connected);
-        if !self.c.bodies[b2].joints.iter().any(|j| j.0 == id) {
+        if !self.c.bodies[b2].joints.iter().any(|j| j.0 == id) && !self.c.bodies[b1].joints.iter().any(|j| j.0 == id) {
             return;
         }
         if self.c.bodies[b1].joints.iter().any(|j| j.0 == id) {
@@ -992,6 +992,17 @@ impl World {
     pub fn flip_gear_ratio(&mut self, id: usize) {
         if let JointKind::Gear(g) = &mut self.c.joints[id].kind {
             g.ratio = -g.ratio;
+        }
+    }
+
+    /// Ties the far end of a distance joint to another body, as code poking `m_body2`/`m_localAnchor2` does: only the solver
+    /// follows, the bodies' joint lists (islands, collision filtering) keep the old pair.
+    pub fn redirect_distance_joint(&mut self, id: usize, body2: BodyId, local_anchor2: Vec2) {
+        if let Some(j) = self.c.joints.get_mut(id) {
+            if let JointKind::Distance(d) = &mut j.kind {
+                d.local_anchor2 = local_anchor2;
+                j.body2 = body2;
+            }
         }
     }
 

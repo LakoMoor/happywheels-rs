@@ -1127,6 +1127,10 @@ impl Ragdoll {
     /// `checkVocals` (once per frame): the highest-priority queued vocal plays from the head (`tag + name`); while one is sounding only a higher
     /// priority interrupts it (the old one keeps playing here, the mixer cannot cut a voice). The queue is cleared afterwards.
     pub fn check_vocals(&mut self, world: &mut World) {
+        // the dead are quiet (the queue is only played from `actions` of the living)
+        if self.dead {
+            return;
+        }
         let top = self.voices.iter().rposition(Option::is_some).map(|i| i as i32).unwrap_or(-1);
         let busy = world.frame() < self.voice_until;
         if top >= 0 && (!busy || top > self.voice_prio) {

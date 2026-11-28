@@ -1096,7 +1096,7 @@ impl Sprites {
     }
 
     /// Arrows (`ArrowMC`) and harpoons (`HarpoonMC`) of the guns at their body's centre of mass and angle.
-    fn draw_arrows(&self, img: &mut RgbaImage, world: &World, cam: M) {
+    fn draw_arrows(&self, img: &mut RgbaImage, world: &World, cam: M, harpoons: bool) {
         #[derive(Deserialize)]
         struct File {
             k: Vec<Node>,
@@ -1106,7 +1106,7 @@ impl Sprites {
             let f = |s: &str| serde_json::from_str::<File>(s).map(|f| f.k).unwrap_or_default();
             [f(include_str!("../data/game-ArrowMC.json")), f(include_str!("../data/game-HarpoonMC.json"))]
         });
-        for (b, harpoon) in world.arrow_bodies() {
+        for (b, harpoon) in world.arrow_bodies().filter(|a| a.1 == harpoons) {
             if world.body_center_px(b).is_none() {
                 continue;
             }
@@ -1124,20 +1124,27 @@ impl Sprites {
                 self.draw_node(img, k, mul(cam, body_matrix(world, b)));
             }
             if harpoon {
-                // blood left on the shaft by impaled flesh (`HarpoonBloodMC` frames, drawn in the harpoon's local px)
+                // blood left on the shaft by impaled flesh (`HarpoonBloodMC` frames, drawn on a bitmap over the harpoon)
                 static BLOOD: std::sync::OnceLock<Vec<Vec<Node>>> = std::sync::OnceLock::new();
                 #[derive(Deserialize)]
                 struct Frames {
                     frames: Vec<Vec<Node>>,
                 }
                 let frames = BLOOD.get_or_init(|| serde_json::from_str::<Frames>(include_str!("../data/game-HarpoonBloodMC.json")).map(|f| f.frames).unwrap_or_default());
+                // the 106×16 bitmap sits centred on the shaft
+                let sheet = mul(mul(cam, body_matrix(world, b)), local(-53.0, -8.0, 0.0, 1.0, 1.0));
                 for &(frame, ..) in world.harpoon_blood(b) {
                     for k in frames.get(frame as usize).into_iter().flatten() {
-                        self.draw_node(img, k, mul(cam, body_matrix(world, b)));
+                        self.draw_node(img, k, sheet);
                     }
                 }
             }
         }
+    }
+
+    /// Fired harpoons go over everybody: the original adds them on top of its layer (arrows go in beside their gun).
+    pub fn draw_harpoons(&self, img: &mut RgbaImage, world: &World, camera_offset: (f32, f32)) {
+        self.draw_arrows(img, world, self.camera(camera_offset), true);
     }
 
     pub fn draw_specials(&self, img: &mut RgbaImage, level: &crate::level::Level, world: &World, camera_offset: (f32, f32)) {
@@ -1148,7 +1155,7 @@ impl Sprites {
         self.draw_glass_pieces(img, world, cam);
         self.draw_toilet_pieces(img, world, cam);
         self.draw_log_halves(img, world, cam);
-        self.draw_arrows(img, world, cam);
+        self.draw_arrows(img, world, cam, false);
         for (i, sp) in level.specials.iter().enumerate() {
             if sp.kind == 0 {
                 self.draw_van(img, sp, world.special_parts.get(i).map(Vec::as_slice).unwrap_or(&[]), world, cam);
@@ -1258,8 +1265,8 @@ impl Sprites {
                 }
                 continue;
             }
-            // HarpoonGun / ArrowGun: static base clip at the level position/angle; `turret` is rotated by (aim angle − base angle) (`paint`). Firing frames,
-            // the harpoon gun's light and the loaded harpoon's disappearance are not drawn.
+            // HarpoonGun / ArrowGun: static base clip at the level position/angle; `turret` is rotated by (aim angle − base angle) (`paint`). The arrow
+            // gun's firing frames are not drawn.
             if matches!(sp.kind, 15 | 29) {
                 static GUNS: std::sync::OnceLock<[Vec<Node>; 2]> = std::sync::OnceLock::new();
                 #[derive(Deserialize)]
@@ -1274,10 +1281,17 @@ impl Sprites {
                 let (x, y, a) = (f64::from(sp.num("x").unwrap_or(0.0)), f64::from(sp.num("y").unwrap_or(0.0)), f64::from(sp.num("angle").unwrap_or(0.0)).to_radians());
                 let turret = world.gun_turret_angle(x, y, a, harpoon).map_or(0.0, |t| t - a);
                 let m = mul(cam, local(x, y, a, 1.0, 1.0));
+                // the anchor rope, under the gun
+                let points = if harpoon { world.harpoon_rope_points(x, y, a) } else { Vec::new() };
+                if !points.is_empty() {
+                    let rope = crate::vehicle::Stroke { points, width: 1.0, color: 0, layer: "".into(), above: false };
+                    self.draw_stroke(img, camera_offset, &rope);
+                }
                 for n in &guns[usize::from(!harpoon)] {
                     if n.n == "turret" {
                         let tm = mul(m, n.matrix_with(n.x, n.y, turret, n.sx, n.sy));
-                        for k in &n.k {
+                        let fired = harpoon && world.harpoon_fired(x, y, a);
+                        for k in n.k.iter().filter(|k| !(fired && k.n == "harpoon")) {
                             if k.n != "light" {
                                 self.draw_node(img, k, tm);
                                 continue;

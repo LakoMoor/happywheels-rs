@@ -581,6 +581,16 @@ struct ArrowGun {
     arrows_left: i32,
     done: bool,
     harpoon: bool,
+    /// The turret, pinned to the level; static until it first carries its aiming line.
+    turret: BodyId,
+    joint: usize,
+    /// How far the aiming line reaches (m), the line while there is a target, and whether nothing was found across it.
+    reach: f64,
+    aim: Option<ShapeId>,
+    path_clear: bool,
+    /// `useAnchor`: the harpoon's rope (8 distance joints from the level to the turret, later to the harpoon) and the harpoon.
+    rope: Vec<usize>,
+    shot: Option<BodyId>,
 }
 
 /// HomingMine special (`HomingMine.actions`): hovers toward the closest ragdoll body within 600 px.
@@ -3210,8 +3220,27 @@ impl World {
         r.is_sensor = true;
         r.filter = d.filter;
         let range = self.b.create_shape(self.level_body, &r);
+        let pos = Vec2::new((x + off * box2d::fdlibm::sin(t)) / PS, (y - off * box2d::fdlibm::cos(t)) / PS);
+        let turret = self.b.create_body(&BodyDef { position: pos, angle: t, ..Default::default() });
+        // from the turret to the range sensor's first corner, and half a metre more
+        let (c, sn) = (box2d::fdlibm::cos(t), box2d::fdlibm::sin(t));
+        let centre = Vec2::new((x + 200.0 * sn) / PS, (y - 200.0 * c) / PS);
+        let (hw, hh) = (400.0 / PS, 200.0 / PS);
+        let corner = Vec2::new(centre.x - c * hw + sn * hh, centre.y - sn * hw - c * hh);
+        let mut jd = RevoluteJointDef::initialize(self.b.body(turret), turret, self.b.body(self.level_body), self.level_body, pos);
+        jd.max_motor_torque = 1e4;
+        jd.collide_connected = true;
+        let joint = self.b.create_revolute_joint(&jd);
+        let rope = if harpoon && sp.flag("useAnchor") == Some(true) { self.harpoon_rope(turret) } else { Vec::new() };
         self.arrow_guns.push(ArrowGun {
-            pos: Vec2::new((x + off * box2d::fdlibm::sin(t)) / PS, (y - off * box2d::fdlibm::cos(t)) / PS),
+            turret,
+            joint,
+            reach: (corner.x - pos.x).hypot(corner.y - pos.y) + 0.5,
+            aim: None,
+            path_clear: false,
+            rope,
+            shot: None,
+            pos,
             angle: t,
             range,
             targets: Vec::new(),
@@ -3225,6 +3254,67 @@ impl World {
             harpoon,
         });
         Some(self.level_body)
+    }
+
+    /// `HarpoonGun.createAnchor`: seven small balls and eight distance joints, a quarter longer than the straight line.
+    fn harpoon_rope(&mut self, turret: BodyId) -> Vec<usize> {
+        let end = self.b.body(turret).world_point(Vec2::new(0.0, -50.0 / PS));
+        let mut at = self.b.body(turret).world_point(Vec2::new(-21.5 / PS, 17.0 / PS));
+        let length = 1.25 * (end.x - at.x).hypot(end.y - at.y) / 8.0;
+        let step = Vec2::new((end.x - at.x) / 8.0, (end.y - at.y) / 8.0);
+        let mut link = ShapeDef::circle(2.5 / PS);
+        link.density = 0.25;
+        link.friction = 0.5;
+        link.restitution = 0.1;
+        link.filter = Filter { category_bits: 8, mask_bits: 0xFFFF, group_index: -20 };
+        let (mut last, mut joints) = (self.level_body, Vec::new());
+        for k in 0..8 {
+            let from = last;
+            let from_at = if k == 0 { at } else { self.b.body(from).sweep.c };
+            let to_at = if k < 7 {
+                at = Vec2::new(at.x + step.x, at.y + step.y);
+                last = self.b.create_body(&BodyDef { position: at, ..Default::default() });
+                self.b.create_shape(last, &link);
+                self.b.set_mass_from_shapes(last);
+                at
+            } else {
+                last = turret;
+                end
+            };
+            let mut jd = box2d::joints::DistanceJointDef::initialize(self.b.body(from), from, self.b.body(last), last, from_at, to_at);
+            jd.length = length;
+            joints.push(self.b.create_distance_joint(&jd));
+        }
+        joints
+    }
+
+    /// The harpoon gun placed at special position (`x`, `y`) px with base angle `base` (rad), if it is modelled.
+    fn gun_at(&self, x: f64, y: f64, base: f64, harpoon: bool) -> Option<&ArrowGun> {
+        let off = if harpoon { 35.0 } else { 27.0 };
+        let (px, py) = ((x + off * box2d::fdlibm::sin(base)) / PS, (y - off * box2d::fdlibm::cos(base)) / PS);
+        self.arrow_guns.iter().find(|g| g.harpoon == harpoon && (g.pos.x - px).abs() < 1e-9 && (g.pos.y - py).abs() < 1e-9)
+    }
+
+    /// Whether that gun's harpoon is gone (the loaded one is hidden once fired).
+    pub fn harpoon_fired(&self, x: f64, y: f64, base: f64) -> bool {
+        self.gun_at(x, y, base, true).is_some_and(|g| g.arrows_left <= 0)
+    }
+
+    /// The rope's points for drawing, level pixels.
+    pub fn harpoon_rope_points(&self, x: f64, y: f64, base: f64) -> Vec<[f64; 2]> {
+        let Some(gun) = self.gun_at(x, y, base, true) else { return Vec::new() };
+        let mut out = Vec::new();
+        for (k, &j) in gun.rope.iter().enumerate() {
+            let joint = self.b.joint(j);
+            let box2d::joints::JointKind::Distance(d) = &joint.kind else { continue };
+            if k == 0 {
+                let p = self.b.body(joint.body1).world_point(d.local_anchor1);
+                out.push([p.x * PS, p.y * PS]);
+            }
+            let p = self.b.body(joint.body2).world_point(d.local_anchor2);
+            out.push([p.x * PS, p.y * PS]);
+        }
+        out
     }
 
     /// NPCharacter (bodies/joints/limits/break limits taken from the original class run in the oracle on a stand-in session, `analysis/npc-dump.js`;
@@ -3541,9 +3631,10 @@ impl World {
 
     /// Aim angle (rad) of the arrow gun / harpoon gun placed at special position (`x`, `y`) px with base angle `base` (rad), if it is modelled.
     pub fn gun_turret_angle(&self, x: f64, y: f64, base: f64, harpoon: bool) -> Option<f64> {
-        let off = if harpoon { 35.0 } else { 27.0 };
-        let (px, py) = ((x + off * box2d::fdlibm::sin(base)) / PS, (y - off * box2d::fdlibm::cos(base)) / PS);
-        self.arrow_guns.iter().find(|g| g.harpoon == harpoon && (g.pos.x - px).abs() < 1e-9 && (g.pos.y - py).abs() < 1e-9).map(|g| g.angle)
+        self.gun_at(x, y, base, harpoon).map(|g| {
+            let turret = self.b.body(g.turret);
+            if turret.alive { turret.sweep.a } else { g.angle }
+        })
     }
 
     /// Jet engine state for drawing: (`accelScaler`, still burning) of the jet owning `body`.
@@ -3645,6 +3736,13 @@ impl World {
                 _ => {}
             }
             return;
+        }
+        if let Some(mut vehicle) = self.bike.take() {
+            let passenger = vehicle.impale_passenger(self, body, fatal, point, radius2);
+            self.bike = Some(vehicle);
+            if passenger {
+                return;
+            }
         }
         let Some(mut doll) = self.character.take() else { return };
         if doll.shape_impale(self, body, fatal, point, radius2) {
@@ -4391,36 +4489,80 @@ impl World {
         self.arrows.push(Arrow { body, sensor, solid, pinned: Vec::new(), queue_add: Vec::new(), queue_remove: Vec::new(), armed: false, done: false, harpoon, blade: None, blood: Vec::new(), reverse: false, flesh_sounds: 0, previous: None, squelch_until: 0, clink_until: 0 });
     }
 
+    /// `harpoonHit`: the first thing the harpoon pins makes its rope's balls forty times heavier.
+    fn weigh_harpoon_rope(&mut self, harpoon: BodyId) {
+        let Some(g) = self.arrow_guns.iter_mut().find(|g| g.shot == Some(harpoon)) else { return };
+        g.shot = None;
+        let balls: Vec<BodyId> = g.rope.iter().take(7).map(|&j| self.b.joint(j).body2).collect();
+        for body in balls {
+            for s in self.b.body(body).shapes.clone() {
+                self.b.c.shapes[s].shape.density = 10.0;
+            }
+            self.b.set_mass_from_shapes(body);
+        }
+    }
+
+    /// `findClosestTarget`: takes the nearest body in range (keeping the old target if there is none) and lays the aiming line.
+    fn find_gun_target(&mut self, gi: usize) {
+        let g = &mut self.arrow_guns[gi];
+        g.retarget = 0;
+        let pos = self.b.body(g.turret).xf.position;
+        let mut best = 1e6;
+        for &(t, _) in &g.targets {
+            let c = self.b.body(t).sweep.c;
+            let dd = (c.x - pos.x).powi(2) + (c.y - pos.y).powi(2);
+            if dd < best {
+                best = dd;
+                g.target = Some(t);
+            }
+        }
+        // the harpoon gun lays a new line every time it looks, the arrow gun only if it has none
+        if g.target.is_some() && (g.harpoon || g.aim.is_none()) {
+            let (turret, joint, harpoon) = (g.turret, g.joint, g.harpoon);
+            let mut line = Self::aim_line(g.reach * PS);
+            if !harpoon {
+                line.density = 1e-7;
+            }
+            let shape = self.b.create_shape(turret, &line);
+            self.b.set_mass_from_shapes(turret);
+            self.b.c.report_results = true;
+            let g = &mut self.arrow_guns[gi];
+            g.aim = Some(shape);
+            g.path_clear = false;
+            if let box2d::joints::JointKind::Revolute(r) = &mut self.b.joint_mut(joint).kind {
+                r.enable_motor = false;
+            }
+        }
+    }
+
+    fn remove_gun_aim(&mut self, gi: usize) {
+        let Some(shape) = self.arrow_guns[gi].aim.take() else { return };
+        self.b.destroy_shape(shape);
+        if let box2d::joints::JointKind::Revolute(r) = &mut self.b.joint_mut(self.arrow_guns[gi].joint).kind {
+            r.motor_speed = 0.0;
+            r.enable_motor = true;
+        }
+    }
+
     /// `ArrowGun.actions` + `fireArrow` (before the world step) and the arrows' own `actions` (pin / unpin queued bodies).
     fn run_arrow_guns(&mut self) {
         for gi in 0..self.arrow_guns.len() {
             if self.arrow_guns[gi].done {
                 continue;
             }
-            let pos = self.arrow_guns[gi].pos;
+            let (turret, harpoon) = (self.arrow_guns[gi].turret, self.arrow_guns[gi].harpoon);
+            let pos = self.b.body(turret).xf.position;
             if self.arrow_guns[gi].target.is_some_and(|t| !self.b.c.bodies[t].alive) {
                 self.arrow_guns[gi].target = None;
             }
-            let closest = |w: &Self, gi: usize| {
-                let mut best = 1e6;
-                let mut found = None;
-                for &(t, _) in &w.arrow_guns[gi].targets {
-                    let c = w.b.body(t).sweep.c;
-                    let dd = (c.x - pos.x).powi(2) + (c.y - pos.y).powi(2);
-                    if dd < best {
-                        best = dd;
-                        found = Some(t);
-                    }
-                }
-                found
-            };
             if self.arrow_guns[gi].target.is_none() {
-                self.arrow_guns[gi].retarget = 0;
-                self.arrow_guns[gi].target = closest(self, gi);
+                self.remove_gun_aim(gi);
+                self.find_gun_target(gi);
             }
             if let Some(t) = self.arrow_guns[gi].target {
                 let (tc, tv) = (self.b.body(t).sweep.c, self.b.body(t).linear_velocity);
-                if self.arrow_guns[gi].aligned && self.arrow_guns[gi].frame_count == 0 && self.path_clear(pos, tc, t) {
+                let g = &self.arrow_guns[gi];
+                if g.path_clear && g.aligned && (harpoon || g.frame_count == 0) {
                     // lead the target: solve |v·τ + (c − p)| = speed
                     let e = 2000.0 / PS;
                     let (dx, dy) = (tc.x - pos.x, tc.y - pos.y);
@@ -4439,23 +4581,32 @@ impl World {
                         let m = u.min(v);
                         let (fx, fy) = (m * tv.x + tc.x, m * tv.y + tc.y);
                         let ang = (fy - pos.y).atan2(fx - pos.x);
-                        let harpoon = self.arrow_guns[gi].harpoon;
                         if harpoon {
                             self.play("HarpoonFire", 1, pos);
                         } else {
                             self.play("ArrowFire", 2, pos);
                         }
                         self.spawn_arrow(pos, ang, Vec2::new(e * box2d::fdlibm::cos(ang), e * box2d::fdlibm::sin(ang)), harpoon);
+                        if let (true, Some(&last), Some(shot)) = (harpoon, self.arrow_guns[gi].rope.last(), self.arrows.last().map(|a| a.body)) {
+                            self.b.redirect_distance_joint(last, shot, Vec2::new(-20.0 / PS, 0.0));
+                            self.arrow_guns[gi].shot = Some(shot);
+                        }
                     }
                     self.arrow_guns[gi].arrows_left -= 1;
                     self.arrow_guns[gi].frame_count = self.arrow_guns[gi].frames_per_shot;
                     if self.arrow_guns[gi].arrows_left <= 0 {
                         self.arrow_guns[gi].done = true;
-                        continue;
+                        self.b.destroy_shape(self.arrow_guns[gi].range);
+                        self.remove_gun_aim(gi);
+                        if !harpoon {
+                            // an empty arrow gun loses its turret; the harpoon gun swings after its target once more
+                            self.b.destroy_body(turret);
+                            continue;
+                        }
                     }
                 }
                 let mut s = (tc.y - pos.y).atan2(tc.x - pos.x) + 0.5 * std::f64::consts::PI;
-                let mut a = self.arrow_guns[gi].angle - s;
+                let mut a = self.b.body(turret).sweep.a - s;
                 let two_pi = 2.0 * std::f64::consts::PI;
                 if a > std::f64::consts::PI {
                     a -= two_pi;
@@ -4470,13 +4621,19 @@ impl World {
                     self.arrow_guns[gi].aligned = true;
                 }
                 self.arrow_guns[gi].angle = s;
-                self.arrow_guns[gi].retarget += 1;
-                if self.arrow_guns[gi].retarget == 5 {
-                    self.arrow_guns[gi].retarget = 0;
-                    self.arrow_guns[gi].target = closest(self, gi);
+                self.b.set_xform(turret, pos, s);
+                self.b.body_mut(turret).angular_velocity = 0.0;
+                if harpoon {
+                    self.b.body_mut(turret).linear_velocity = Vec2::default();
+                } else {
+                    self.arrow_guns[gi].retarget += 1;
+                    if self.arrow_guns[gi].retarget == 5 {
+                        self.find_gun_target(gi);
+                    }
                 }
             }
             let g = &mut self.arrow_guns[gi];
+            g.path_clear = true;
             g.frame_count = g.frame_count.saturating_sub(1);
         }
         // arrows: pin / unpin the bodies queued by the tip sensor
@@ -4517,6 +4674,9 @@ impl World {
                 jd.motor_speed = 0.0;
                 let j = self.b.create_prismatic_joint(&jd);
                 self.arrows[ai].pinned.push((other, j, 1));
+                if self.arrows[ai].harpoon && self.arrows[ai].blade.is_none() {
+                    self.weigh_harpoon_rope(self.arrows[ai].body);
+                }
                 self.arrows[ai].armed = true;
                 if self.arrows[ai].harpoon && self.arrows[ai].blade.is_none() {
                     // Harpoon.createPrisJoint on a new body: flesh (material bits 6) → shapeImpale + 50-particle blood burst at the tip + HarpoonFlesh1/2;
@@ -4524,7 +4684,8 @@ impl World {
                     let tip = self.b.body(body).world_point(Vec2::new(26.25 / PS, 0.0));
                     let at = [tip.x * PS, tip.y * PS];
                     if self.b.shape_material(self.b.body(other).shapes[0]) & 6 != 0 {
-                        self.shape_impale(other, true, Some(tip), 0.01);
+                        // (without a point: any harpoon through the head kills)
+                        self.shape_impale(other, true, None, 0.0);
                         self.blood.burst(at, Vec2::default(), 5.0, 15.0, 50);
                         if !self.blood.off {
                             // `HarpoonBloodMC.gotoAndStop(ceil(5·random))` drawn into the harpoon's 106×16 bitmap, once per new body
@@ -4549,6 +4710,7 @@ impl World {
                     self.blade_cut(ai, body, other);
                 }
             }
+            self.arrow_removals_now(ai);
             for other in std::mem::take(&mut self.arrows[ai].queue_remove) {
                 if let Some(k) = self.arrows[ai].pinned.iter().position(|p| p.0 == other) {
                     self.arrows[ai].pinned[k].2 -= 1;
@@ -4672,10 +4834,46 @@ impl World {
         self.spikes.iter().find(|s| s.body == body).map_or(&[], |s| s.blood.as_slice())
     }
 
+    /// Contacts the tip loses while its arrow is pinning (a rider thrown off changes its filters) are heard at once by the
+    /// original, which unpins in the same call.
+    fn arrow_removals_now(&mut self, ai: usize) {
+        let sensor = self.arrows[ai].sensor;
+        let mut lost = Vec::new();
+        self.b.c.events.retain(|ev| {
+            let ours = ev.kind == ContactEventKind::Remove && (ev.shape1 == sensor || ev.shape2 == sensor);
+            if ours {
+                lost.push(if ev.shape1 == sensor { ev.shape2 } else { ev.shape1 });
+            }
+            !ours
+        });
+        for o in lost {
+            let body = self.b.c.shapes[o].body;
+            let flesh_or_static = self.b.shape_material(o) & 6 != 0 || self.b.body(body).mass == 0.0;
+            let a = &mut self.arrows[ai];
+            if flesh_or_static && !self.b.c.shapes[o].shape.is_sensor && body != a.body && (a.pinned.iter().any(|p| p.0 == body) || a.queue_add.contains(&body)) {
+                a.queue_remove.push(body);
+            }
+        }
+    }
+
     /// Arrow tip sensor (`checkAdd`/`checkRemove`), gun range sensors, and `arrowResultHandler` (shaft impulse > 1 on a pinned arrow snaps it).
     fn arrow_events(&mut self, events: &[box2d::world::ContactEvent]) {
         for ev in events {
             for gi in 0..self.arrow_guns.len() {
+                let g = &self.arrow_guns[gi];
+                if let (Some(line), true) = (g.aim, matches!(ev.kind, ContactEventKind::Add | ContactEventKind::Persist)) {
+                    if ev.shape1 == line || ev.shape2 == line {
+                        let other = if ev.shape1 == line { ev.shape2 } else { ev.shape1 };
+                        let (turret, target) = (g.turret, g.target);
+                        let blocked = match target {
+                            Some(t) => self.sight_blocked(other, self.b.body(turret).xf.position, self.b.body(t).sweep.c),
+                            None => true,
+                        };
+                        if blocked {
+                            self.arrow_guns[gi].path_clear = false;
+                        }
+                    }
+                }
                 let range = self.arrow_guns[gi].range;
                 let o = if ev.shape1 == range { ev.shape2 } else if ev.shape2 == range { ev.shape1 } else { continue };
                 if self.b.shape_material(o) & 2 == 0 {
@@ -4829,15 +5027,11 @@ impl World {
     }
 
     /// True when no blocker (non-sensor shape that is static or has density ≥ 10) sits on the segment p1→p2.
-    fn path_clear(&self, p1: Vec2, p2: Vec2, ignore: BodyId) -> bool {
-        let lo = Vec2::new(p1.x.min(p2.x), p1.y.min(p2.y));
-        let hi = Vec2::new(p1.x.max(p2.x), p1.y.max(p2.y));
-        let found = self.b.query(&box2d::collision::Aabb { lower: lo, upper: hi }, 100_000);
-        !found.into_iter().any(|s| {
-            let sh = &self.b.c.shapes[s];
-            let body = self.b.body(sh.body);
-            sh.body != ignore && !sh.shape.is_sensor && !(body.mass > 0.0 && sh.shape.density < 10.0) && self.segment_hits_shape(s, p1, p2)
-        })
+    /// `checkAdd`/`checkPersist` of an aiming line: a solid shape of the level, or a heavy one, across p1→p2.
+    fn sight_blocked(&self, shape: ShapeId, p1: Vec2, p2: Vec2) -> bool {
+        let sh = &self.b.c.shapes[shape];
+        let body = self.b.body(sh.body);
+        !(sh.shape.is_sensor || body.mass > 0.0 && sh.shape.density < 10.0) && self.segment_hits_shape(shape, p1, p2)
     }
 
     /// Radial explosion shared by Jet and HomingMine: every non-static body whose broad-phase box lies in ±2.6 m of `c` gets `5·(1 − d/2.6)`.
@@ -4989,13 +5183,8 @@ impl World {
             self.mines[mi].path_clear = false;
             return;
         };
-        let record = &self.b.c.shapes[other];
-        let mass = self.b.body(record.body).mass;
-        if record.shape.is_sensor || (mass > 0.0 && record.shape.density < 10.0) {
-            return;
-        }
         let from = self.b.body(self.mines[mi].targeting).xf.position;
-        if self.segment_hits_shape(other, from, self.b.body(target).sweep.c) {
+        if self.sight_blocked(other, from, self.b.body(target).sweep.c) {
             self.mines[mi].path_clear = false;
         }
     }
@@ -7125,7 +7314,8 @@ mod tests {
         let mut w = World::from_level(&lvl);
         let b = w.b.create_body(&BodyDef { position: Vec2::new(1000.0 / PS, 200.0 / PS), ..Default::default() });
         let mut sd = ShapeDef::new(Geometry::Circle { local_position: Vec2::default(), radius: 20.0 / PS });
-        sd.density = 50.0;
+        // (a shape of density 10 or more would hide its own centre from the aiming line, as in the original)
+        sd.density = 9.0;
         sd.filter = Filter { category_bits: 8, mask_bits: 0xFFFF, group_index: 0 };
         let s = w.b.create_shape(b, &sd);
         w.b.shape_mut(s).material = 2;
@@ -7145,7 +7335,8 @@ mod tests {
         let mut w = World::from_level(&lvl);
         let b = w.b.create_body(&BodyDef { position: Vec2::new(1000.0 / PS, 200.0 / PS), ..Default::default() });
         let mut sd = ShapeDef::new(Geometry::Circle { local_position: Vec2::default(), radius: 20.0 / PS });
-        sd.density = 50.0;
+        // (a shape of density 10 or more would hide its own centre from the aiming line, as in the original)
+        sd.density = 9.0;
         sd.filter = Filter { category_bits: 8, mask_bits: 0xFFFF, group_index: 0 };
         let sh = w.b.create_shape(b, &sd);
         w.b.shape_mut(sh).material = 2;
@@ -7176,7 +7367,8 @@ mod tests {
         w.blood.off = true;
         let b = w.b.create_body(&BodyDef { position: Vec2::new(1000.0 / PS, 200.0 / PS), ..Default::default() });
         let mut sd = ShapeDef::new(Geometry::Circle { local_position: Vec2::default(), radius: 20.0 / PS });
-        sd.density = 50.0;
+        // (a shape of density 10 or more would hide its own centre from the aiming line, as in the original)
+        sd.density = 9.0;
         sd.filter = Filter { category_bits: 8, mask_bits: 0xFFFF, group_index: 0 };
         let sh = w.b.create_shape(b, &sd);
         w.b.shape_mut(sh).material = 2;

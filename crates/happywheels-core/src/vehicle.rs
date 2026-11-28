@@ -531,6 +531,44 @@ impl Vehicle {
         })
     }
 
+    /// `shapeImpale` on a passenger, who has the rider's own: a lethal head impale throws them off and kills them. Returns
+    /// whether `body` was a passenger's.
+    pub fn impale_passenger(&mut self, world: &mut World, body: BodyId, fatal: bool, point: Option<Vec2>, radius2: f64) -> bool {
+        macro_rules! impale {
+            ($p:expr) => {{
+                let p = $p;
+                if p.doll.bodies.values().any(|&b| b == body) {
+                    if p.doll.shape_impale(world, body, fatal, point, radius2) {
+                        p.eject(world);
+                    }
+                    return true;
+                }
+            }};
+        }
+        match self {
+            Vehicle::Bike(b) => {
+                if let Some(kid) = b.kid.as_mut() {
+                    impale!(kid);
+                }
+            }
+            Vehicle::Dirt(d) => {
+                if let Some(girl) = d.girl.as_mut() {
+                    impale!(girl);
+                }
+            }
+            Vehicle::Family(f) => {
+                impale!(&mut f.daughter);
+                impale!(&mut f.son);
+            }
+            Vehicle::Santa(s) => {
+                impale!(&mut s.elf1);
+                impale!(&mut s.elf2);
+            }
+            _ => {}
+        }
+        false
+    }
+
     /// A smash (`smashed`) or the joints broken this frame: eject, or the vehicle's limb-break reaction.
     pub fn rider_hurt(&mut self, world: &mut World, doll: &mut Ragdoll, smashed: bool, broken: &[Limb]) {
         // `neckBreak` / `torsoBreak` overrides that call `eject()`: the chair, the helicopter and the moped keep the rider on a broken neck

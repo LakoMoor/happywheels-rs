@@ -13,9 +13,9 @@ struct Case {
     snaps: BTreeMap<usize, Vec<[f64; 3]>>,
 }
 
-/// Still different, with the first frame that is: the harpoon gun's anchor rope is not made (15); the arrow gun lacks the original's
-/// invisible aiming-line body (29); once the homing mine has torn the rider apart (frame 46) the pieces drift from frame 48 (25).
-const KNOWN: [(usize, usize); 3] = [(15, 1), (25, 60), (29, 1)];
+/// Still different, with the first frame that is: once the homing mine has torn the rider apart (frame 46) the pieces drift from
+/// frame 48 (25).
+const KNOWN: [(usize, usize); 1] = [(25, 60)];
 
 #[test]
 fn specials_move_like_the_original() {

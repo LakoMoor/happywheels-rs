@@ -165,6 +165,7 @@ pub fn render_level_view(level: &Level, world: &World, width: u32, height: u32, 
         let offset = (width as f32 / (2.0 * zoom) - cx, height as f32 / (2.0 * zoom) - cy);
         sp.draw_specials(&mut img, level, world, offset);
         sp.draw(&mut img, world, offset);
+        sp.draw_harpoons(&mut img, world, offset);
     }
     // Blood: one dark red segment per particle (last → current position), like `BloodParticle.step`.
     if world.blood.setting >= 3 {
