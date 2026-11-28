@@ -93,6 +93,20 @@ const xml = await save();
 writeFileSync(join(out, 'editor-level.xml'), xml ?? '');
 console.log('XML', xml);
 
+// vertex mode: double click the polygon, drag its lower corner, insert a vertex, leave
+const dbl = async (x, y) => { await tap(x, y); await mouse('mousePressed', at(x, y), { clickCount: 2 }); await mouse('mouseReleased', at(x, y), { clickCount: 2 }); await sleep(100); };
+await tap(100, 60);
+await dbl(680, 345);
+await drag([700, 390], [760, 390]);
+await press(13, 'Enter', 'Enter');
+await sleep(300);
+shot = await send('Page.captureScreenshot', { format: 'png' });
+writeFileSync(join(out, 'editor-vertices.png'), Buffer.from(shot.result.data, 'base64'));
+console.log('VERTICES', await evaluate('document.querySelector("#ed-selected").textContent'));
+await dbl(100, 60);
+const edited = await save();
+console.log('EDITED', edited.match(/<v [^>]*>/)?.[0], edited !== xml);
+
 await press(84, 't', 'KeyT');
 await sleep(2500);
 console.log('TEST', await status());
@@ -100,9 +114,9 @@ shot = await send('Page.captureScreenshot', { format: 'png' });
 writeFileSync(join(out, 'editor-test.png'), Buffer.from(shot.result.data, 'base64'));
 await press(84, 't', 'KeyT');
 await sleep(500);
-console.log('BACK', await status(), (await save()) === xml);
+console.log('BACK', await status(), (await save()) === edited);
 await press(90, 'z', 'KeyZ', 2);
-console.log('UNDO changed', (await save()) !== xml);
+console.log('UNDO changed', (await save()) !== edited);
 await click('#editor-toggle');
 await sleep(500);
 console.log('CLOSE', await status());

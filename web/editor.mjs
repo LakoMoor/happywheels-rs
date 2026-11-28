@@ -62,6 +62,7 @@ export class EditorPanel {
     this.canvas.addEventListener('pointermove', event => {
       if (!this.editing() || !this.last) return;
       const p = position(event);
+      game.editor_modifiers(event.shiftKey, event.altKey);
       if (this.panning) game.editor_pan(this.last[0] - p[0], this.last[1] - p[1]);
       else if (this.down) game.editor_pointer(1, ...p, event.shiftKey);
       this.last = p;
@@ -72,6 +73,11 @@ export class EditorPanel {
       this.down = false;
       this.panning = false;
       this.last = null;
+      this.refresh();
+    });
+    this.canvas.addEventListener('dblclick', event => {
+      if (!this.editing()) return;
+      game.editor_double_click(...position(event));
       this.refresh();
     });
     this.canvas.addEventListener('wheel', event => {
@@ -235,7 +241,9 @@ export class EditorPanel {
       return label;
     };
     const set = (name, value) => { this.game.editor_set(name, value); this.refresh(); };
-    this.panel.querySelector('#ed-selected').textContent = state.selected ? `${state.selected} selected` : 'Nothing selected';
+    this.panel.querySelector('#ed-selected').textContent = state.editingVertices !== null
+      ? `Editing vertices (${state.editingVertices} selected): drag to move, Enter inserts, Backspace removes, double-click empty space to finish.`
+      : state.selected ? `${state.selected} selected` : 'Nothing selected';
     this.properties.replaceChildren(...state.properties.map(([name, value]) => field(name, value, v => set(name, v))));
     this.showTargets(state.targets);
     this.info.replaceChildren(...INFO.map(([key, label]) => {

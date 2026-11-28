@@ -59,6 +59,15 @@ impl EditorUi {
         self.dirty = true;
     }
 
+    pub fn double_click(&mut self, x: f64, y: f64) {
+        self.editor.double_click(self.view.canvas([x, y]));
+        self.dirty = true;
+    }
+
+    pub fn modifiers(&mut self, shift: bool, alt: bool) {
+        (self.editor.shift, self.editor.alt) = (shift, alt);
+    }
+
     pub fn pan(&mut self, dx: f64, dy: f64) {
         self.view.camera = [(self.view.camera[0] + dx / self.view.zoom).clamp(0.0, 20_000.0), (self.view.camera[1] + dy / self.view.zoom).clamp(0.0, 10_000.0)];
         self.dirty = true;
@@ -190,6 +199,7 @@ impl EditorUi {
         serde_json::json!({
             "tool": Tool::ALL.iter().position(|&t| t == e.tool),
             "selected": e.selection.len(),
+            "editingVertices": e.vertex_edit.as_ref().map(|v| v.selected.len()),
             "targets": e.trigger_targets().iter().map(|t| serde_json::json!({ "label": t.label, "choices": t.choices, "actions": t.actions })).collect::<Vec<_>>(),
             "properties": e.properties().iter().map(|(n, v)| (n.clone(), value(v))).collect::<Vec<_>>(),
             "info": { "character": info.character, "forceCharacter": info.force_character, "hideVehicle": info.hide_vehicle, "backdrop": info.backdrop, "background": info.background },

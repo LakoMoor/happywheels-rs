@@ -349,6 +349,18 @@ mod browser {
             }
         }
 
+        pub fn editor_double_click(&mut self, x: f64, y: f64) {
+            if let Some(e) = &mut self.editor {
+                e.double_click(x, y);
+            }
+        }
+
+        pub fn editor_modifiers(&mut self, shift: bool, alt: bool) {
+            if let Some(e) = &mut self.editor {
+                e.modifiers(shift, alt);
+            }
+        }
+
         pub fn editor_pan(&mut self, dx: f64, dy: f64) {
             if let Some(e) = &mut self.editor {
                 e.pan(dx, dy);

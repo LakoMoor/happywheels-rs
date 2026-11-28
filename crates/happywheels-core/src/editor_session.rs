@@ -6,7 +6,9 @@
 
 use crate::editor::{Document, Group, Item, Joint, Ref, Target, Trigger, Value, Vertices};
 use image::{Rgba, RgbaImage};
-use imageproc::drawing::{draw_hollow_circle_mut, draw_line_segment_mut};
+use imageproc::drawing::{draw_filled_circle_mut, draw_hollow_circle_mut, draw_line_segment_mut};
+
+pub mod vertices;
 
 /// What a trigger can do to one kind of object: the action's name and its parameters.
 type Actions = Vec<(String, Vec<String>)>;
@@ -287,6 +289,10 @@ pub struct Editor {
     pub drawing: Vec<Point>,
     /// How near the first vertex a click closes an outline, in canvas pixels (5 at the original's 100% zoom).
     pub snap: f64,
+    /// Modifier keys held during pointer movement.
+    pub shift: bool,
+    pub alt: bool,
+    pub vertex_edit: Option<vertices::VertexEdit>,
     undo: Vec<Document>,
     redo: Vec<Document>,
     drag: Option<Drag>,
@@ -303,11 +309,12 @@ impl Default for Editor {
 
 impl Editor {
     pub fn new(doc: Document) -> Editor {
-        Editor { doc, selection: Vec::new(), tool: Tool::Arrow, shape_kind: 0, special_kind: 0, sliding: false, drawing: Vec::new(), snap: SNAP, undo: Vec::new(), redo: Vec::new(), drag: None, clipboard: Vec::new(), series: None }
+        Editor { doc, selection: Vec::new(), tool: Tool::Arrow, shape_kind: 0, special_kind: 0, sliding: false, drawing: Vec::new(), snap: SNAP, shift: false, alt: false, vertex_edit: None, undo: Vec::new(), redo: Vec::new(), drag: None, clipboard: Vec::new(), series: None }
     }
 
     pub fn set_tool(&mut self, tool: Tool) {
         if tool != self.tool {
+            self.vertex_edit = None;
             self.tool = tool;
             self.drawing.clear();
             self.selection.clear();
@@ -339,6 +346,7 @@ impl Editor {
             self.redo.push(std::mem::replace(&mut self.doc, d));
             self.selection.clear();
             self.series = None;
+            self.vertex_edit = None;
         }
     }
 
@@ -347,6 +355,7 @@ impl Editor {
             self.undo.push(std::mem::replace(&mut self.doc, d));
             self.selection.clear();
             self.series = None;
+            self.vertex_edit = None;
         }
     }
 
@@ -405,8 +414,25 @@ impl Editor {
         }
     }
 
+    /// The arrow tool opens a polygon's or art shape's vertices by a double click.
+    pub fn double_click(&mut self, p: Point) {
+        if self.vertex_edit.is_some() {
+            self.vertex_double_click(p);
+        } else if self.tool == Tool::Arrow {
+            if let Some(&Ref::Shape(i)) = self.under(p).first() {
+                if self.doc.shapes[i].vertices.is_some() {
+                    self.open_vertex_edit(i);
+                }
+            }
+        }
+    }
+
     pub fn pointer_down(&mut self, p: Point, shift: bool) {
         self.series = None;
+        self.shift = shift;
+        if self.vertex_edit.is_some() {
+            return self.vertex_pointer_down(p, shift);
+        }
         match self.tool {
             Tool::Arrow => match self.under(p).first() {
                 Some(&r) => {
@@ -440,6 +466,9 @@ impl Editor {
     }
 
     pub fn pointer_move(&mut self, p: Point) {
+        if self.vertex_edit.is_some() {
+            return self.vertex_pointer_move(p);
+        }
         match self.drag {
             Some(Drag::Move { last, moved }) => {
                 let d = [p[0] - last[0], p[1] - last[1]];
@@ -458,6 +487,9 @@ impl Editor {
     }
 
     pub fn pointer_up(&mut self, p: Point) {
+        if self.vertex_edit.is_some() {
+            return self.vertex_pointer_up(p);
+        }
         self.pointer_move(p);
         if let Some(Drag::Box { from, to }) = self.drag {
             let [l, t, r, b] = bounds(&[from, to]);
@@ -478,6 +510,9 @@ impl Editor {
     /// The original editor's keys (JavaScript key codes). Returns false for keys it does not use.
     pub fn key(&mut self, code: u32, shift: bool, ctrl: bool) -> bool {
         let step = if shift { 10.0 } else { 1.0 };
+        if self.vertex_edit.is_some() && self.vertex_key(code, shift, ctrl) {
+            return true;
+        }
         match code {
             49..=56 => self.set_tool(Tool::ALL[(code - 49) as usize]),
             8 | 46 if !self.drawing.is_empty() => {
@@ -1410,6 +1445,23 @@ impl Editor {
             let [l, t, r, b] = bounds(&[from, to]);
             outline(&mut img, &rect(l, t, r - l, b - t), true, blue);
         }
+        let (marks, handles) = self.vertex_marks();
+        for (i, side, at) in handles {
+            let _ = side;
+            outline(&mut img, &[marks[i].0, at], false, red);
+            ring(&mut img, at, 3.0, red);
+        }
+        for (at, selected) in marks {
+            ring(&mut img, at, SNAP, blue);
+            if selected {
+                let (x, y) = view.screen(at);
+                draw_filled_circle_mut(&mut img, (x as i32, y as i32), ((SNAP * view.zoom) as i32 - 2).max(1), blue);
+            }
+        }
+        if let Some([from, to]) = self.vertex_box() {
+            let [l, t, r, b] = bounds(&[from, to]);
+            outline(&mut img, &rect(l, t, r - l, b - t), true, blue);
+        }
         outline(&mut img, &self.drawing, false, blue);
         for &p in &self.drawing {
             ring(&mut img, p, SNAP, blue);
@@ -1559,6 +1611,80 @@ mod tests {
             let counts: Vec<usize> = e.doc.action_counts(r).unwrap().cloned().unwrap_or_default();
             assert_eq!(e.actions_of(r).iter().map(|a| a.1.len()).collect::<Vec<_>>(), counts, "special {class}");
         }
+    }
+
+    #[test]
+    fn vertex_edits_keep_the_scale_and_the_outline_convex() {
+        // the original widens this 200 px shape to 280 when its vertex moves from 50 to 90
+        let xml = "<levelXML><info v='1.99' x='300' y='5100' c='1' f='f' h='f' bg='0' bgc='16777215'/><shapes>\
+            <sh t='3' p0='1000' p1='1000' p2='200' p3='60' p4='0' p5='t' p6='f' p7='1' p8='0' p9='-1' p10='100' p11='1'>\
+            <v f='t' id='4' n='3' v0='-50_-30' v1='50_-30' v2='50_30'/></sh></shapes></levelXML>";
+        let mut e = Editor::new(Document::parse(xml).unwrap());
+        e.double_click([1090.0, 975.0]);
+        assert!(e.vertex_edit.is_some());
+        // vertex 1 is at (50, -30) times the scale (2, 1)
+        e.pointer_down([1100.0, 970.0], false);
+        e.pointer_up([1180.0, 970.0]);
+        let s = &e.doc.shapes[0];
+        assert_eq!((number(s, "shapeWidth"), number(s, "shapeHeight")), (280.0, 60.0));
+        assert_eq!((s.vertices.as_ref().unwrap().id, s.vertices.as_ref().unwrap().points[1][0]), (5, [90.0, -30.0]));
+        // concave: refused
+        e.pointer_down([1180.0, 970.0], false);
+        e.pointer_up([920.0, 1020.0]);
+        assert_eq!(e.doc.shapes[0].vertices.as_ref().unwrap().points[1][0], [90.0, -30.0]);
+        e.key(13, false, false);
+        assert_eq!(e.doc.shapes[0].vertices.as_ref().unwrap().points.len(), 4);
+        e.key(8, false, false);
+        assert_eq!(e.doc.shapes[0].vertices.as_ref().unwrap().points.len(), 3);
+        // the original reports the width rounded: 2 × (70.208 + 50) is 240
+        assert_eq!(number(&e.doc.shapes[0], "shapeWidth"), 240.0);
+        // a double click on nothing leaves the mode with the shape selected
+        e.double_click([500.0, 500.0]);
+        assert_eq!((e.vertex_edit.is_none(), e.selection.clone()), (true, vec![Ref::Shape(0)]));
+        let xml = e.doc.to_xml();
+        assert_eq!(Document::parse(&xml).unwrap().to_xml(), xml);
+    }
+
+    #[test]
+    fn inserting_vertices_matches_the_original_code() {
+        let cases: serde_json::Value = serde_json::from_str(include_str!("../../../tests/golden/vertex-insert.json")).unwrap();
+        let list = |v: &serde_json::Value| -> Vec<vertices::Vertex> {
+            v.as_array().unwrap().iter().map(|p| [0, 1, 2].map(|k| [p[k][0].as_f64().unwrap(), p[k][1].as_f64().unwrap()])).collect()
+        };
+        for (k, case) in cases.as_array().unwrap().iter().enumerate() {
+            let mut points = list(&case["points"]);
+            let mut selected: Vec<usize> = case["selected"].as_array().unwrap().iter().map(|s| s.as_u64().unwrap() as usize).collect();
+            vertices::insert_vertices(&mut points, &mut selected, case["art"].as_bool().unwrap(), case["closed"].as_bool().unwrap());
+            let want = list(&case["out"]);
+            assert_eq!(points.len(), want.len(), "case {k}: {case}");
+            for (a, b) in points.iter().zip(&want) {
+                for i in 0..3 {
+                    assert!((a[i][0] - b[i][0]).abs() < 1e-9 && (a[i][1] - b[i][1]).abs() < 1e-9, "case {k}: {points:?} against {want:?}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn art_vertices_get_handles() {
+        let mut e = Editor::default();
+        e.set_tool(Tool::Art);
+        for p in [[1000.0, 1000.0], [1100.0, 1000.0], [1100.0, 1100.0]] {
+            click(&mut e, p);
+        }
+        e.finish_drawing(false);
+        e.set_tool(Tool::Arrow);
+        e.double_click([1070.0, 1030.0]);
+        click(&mut e, [1100.0, 1000.0]);
+        e.double_click([1100.0, 1000.0]);
+        let v = e.doc.shapes[0].vertices.as_ref().unwrap().points[1];
+        // a quarter of the way along the line between the neighbours
+        assert_eq!((v[1], v[2]), ([-25.0, -25.0], [25.0, 25.0]));
+        // dragging one handle turns the other
+        e.pointer_down([1075.0, 975.0], false);
+        e.pointer_up([1060.0, 1000.0]);
+        let v = e.doc.shapes[0].vertices.as_ref().unwrap().points[1];
+        assert_eq!((v[1], v[2]), ([-40.0, 0.0], [40.0, 0.0]));
     }
 
     #[test]
