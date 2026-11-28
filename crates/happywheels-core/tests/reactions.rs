@@ -78,3 +78,56 @@ fn passengers_limb_breaks_leave_the_same_joints_as_the_original() {
     }
     assert!(wrong.is_empty(), "{} differ:\n{}", wrong.len(), wrong.join("\n"));
 }
+
+#[derive(serde::Deserialize)]
+struct Smashed {
+    seq: Vec<String>,
+    steps: Vec<(usize, bool, usize)>,
+}
+
+/// Zero-filtered (loose gore) shapes on dynamic bodies.
+fn loose(world: &World) -> usize {
+    let c = &world.b2().c;
+    c.bodies.iter().filter(|b| b.alive && b.mass > 0.0).flat_map(|b| &b.shapes).filter(|&&s| {
+        let f = c.shapes[s].shape.filter;
+        (f.category_bits, f.mask_bits, f.group_index) == (260, 0xFFFF, 0)
+    }).count()
+}
+
+/// Chest and pelvis smashes on a rider who already lost limbs take the stumps off too.
+#[test]
+fn smashes_with_stumps_leave_what_the_original_leaves() {
+    let golden: BTreeMap<usize, Vec<Smashed>> = serde_json::from_str(include_str!("../../../tests/golden/stumps.json")).unwrap();
+    let level = happywheels_core::level::parse(LEVEL).unwrap();
+    let mut wrong = Vec::new();
+    for (&c, cases) in &golden {
+        for case in cases {
+            let mut world = World::from_level(&level);
+            assert!(world.spawn_bike(c, level.info.start));
+            let mut doll = world.character.take().unwrap();
+            let mut vehicle = world.bike.take().unwrap();
+            let mut steps = vec![(world.b2().joint_count(), vehicle.ejected(), loose(&world))];
+            for name in &case.seq {
+                if name.ends_with("Smash") {
+                    let mut react = |w: &mut World, d: &mut happywheels_core::character::Ragdoll, limb| vehicle.rider_hurt(w, d, false, &[limb]);
+                    if name == "chestSmash" {
+                        doll.smash_chest_with(&mut world, &mut react);
+                    } else {
+                        doll.smash_pelvis_with(&mut world, &mut react);
+                    }
+                    vehicle.rider_hurt(&mut world, &mut doll, true, &[]);
+                } else {
+                    let l = limb(name);
+                    let force = doll.break_limit(&world, l) + 1.0;
+                    doll.break_limb(&mut world, l, force);
+                    vehicle.rider_hurt(&mut world, &mut doll, false, &[l]);
+                }
+                steps.push((world.b2().joint_count(), vehicle.ejected(), loose(&world)));
+            }
+            if steps != case.steps {
+                wrong.push(format!("c{c} {:?}: original {:?}, here {steps:?}", case.seq, case.steps));
+            }
+        }
+    }
+    assert!(wrong.is_empty(), "{} differ:\n{}", wrong.len(), wrong.join("\n"));
+}

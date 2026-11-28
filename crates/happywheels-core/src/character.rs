@@ -531,6 +531,17 @@ impl Ragdoll {
         self.smash_chest_with(world, &mut |_, _, _| {});
     }
 
+    /// A smash through an already severed shoulder / hip takes the stump off its hinge and turns it into loose gore.
+    fn drop_stump(&mut self, world: &mut World, limb: Limb) {
+        let Some(&stump) = self.sev_limbs.iter().position(|&l| l == limb).and_then(|k| self.sev.get(k)) else { return };
+        let Some(joint) = self.joints.remove(&limb) else { return };
+        let b = world.b2_mut();
+        b.destroy_joint(joint);
+        if let Some(&s) = b.body(stump).shapes.first() {
+            b.set_shape_filter(s, Filter { category_bits: 260, mask_bits: 0xFFFF, group_index: 0 });
+        }
+    }
+
     /// [`smash_chest`](Self::smash_chest) with the vehicle's break overrides: the original's `chestSmash` breaks joints through the
     /// virtual `neckBreak` / `shoulderBreak` / `torsoBreak`, so the vehicle reacts (and ejects) before the chunks are born.
     pub fn smash_chest_with(&mut self, world: &mut World, on_break: &mut BreakHook) {
@@ -548,7 +559,13 @@ impl Ragdoll {
         let snap = (ratio * 90.0).round() + 1.0;
         let spine = (self.limit_mass(world, Part::Head) / 0.05456 * 105.0).round();
         self.break_then(world, Limb::Neck, spine, on_break);
+        if self.broken.contains(&Limb::Shoulder1) {
+            self.drop_stump(world, Limb::Shoulder1);
+        }
         self.break_then(world, Limb::Shoulder1, snap, on_break);
+        if self.broken.contains(&Limb::Shoulder2) {
+            self.drop_stump(world, Limb::Shoulder2);
+        }
         self.break_then(world, Limb::Shoulder2, snap, on_break);
         let m = self.limit_mass(world, Part::Pelvis) / 0.0735;
         self.break_then(world, Limb::Waist, (m * 260.0).round() - 1.0, on_break);
@@ -637,7 +654,13 @@ impl Ragdoll {
         self.stop_flows(world, &[5]);
         let ratio = self.limit_mass(world, Part::UpperLeg1) / 0.14914;
         let snap = (ratio * 110.0).round() + 1.0;
+        if self.broken.contains(&Limb::Hip1) {
+            self.drop_stump(world, Limb::Hip1);
+        }
         self.break_then(world, Limb::Hip1, snap, on_break);
+        if self.broken.contains(&Limb::Hip2) {
+            self.drop_stump(world, Limb::Hip2);
+        }
         self.break_then(world, Limb::Hip2, snap, on_break);
         let m = self.limit_mass(world, Part::Pelvis) / 0.0735;
         if self.broken.contains(&Limb::Waist) {
@@ -1260,10 +1283,11 @@ impl Ragdoll {
         let deg = 180.0 / std::f64::consts::PI;
         let b = world.b2_mut();
         for (k, (_, _, _, lo, hi)) in JOINTS.iter().enumerate() {
-            let id = self.joints[&LIMB_ORDER[k]];
+            // a broken limb's entry may be gone (a dropped stump)
             if self.broken.contains(&LIMB_ORDER[k]) {
                 continue;
             }
+            let id = self.joints[&LIMB_ORDER[k]];
             if let box2d::joints::JointKind::Revolute(r) = &mut b.joint_mut(id).kind {
                 r.lower_angle = lo / deg - r.reference_angle;
                 r.upper_angle = hi / deg - r.reference_angle;
